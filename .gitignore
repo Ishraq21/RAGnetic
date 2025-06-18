@@ -1,0 +1,19 @@
+# Virtual environment
+env/
+__pycache__/
+
+# System
+.DS_Store
+
+# Secrets
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Vector stores
+vectorstore/
