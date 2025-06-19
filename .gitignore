@@ -20,3 +20,4 @@ vectorstore/
 
 # Agents Data
 agents_data/
+memory/

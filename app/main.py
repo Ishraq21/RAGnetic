@@ -6,6 +6,8 @@ from app.agents.base_agent import build_agent
 from typing import Optional, List
 from app.agents.agent_graph import build_langgraph_agent
 from fastapi.responses import StreamingResponse
+from uuid import uuid4
+from langchain_core.messages import HumanMessage
 
 
 import os
@@ -19,7 +21,8 @@ from pydantic import BaseModel
 class AskRequest(BaseModel):
     query: str
     agent: str
-    thread_id: str = "default"
+    user_id: Optional[str] = None
+    thread_id: Optional[str] = None
 
 
 @app.post("/create-agent")
@@ -43,22 +46,28 @@ def create_agent(config: AgentConfig, openai_api_key: Optional[str] = None):
 @app.post("/ask")
 def ask(request: AskRequest):
     try:
-        if request.agent not in agents_cache:
-            agents_cache[request.agent] = build_langgraph_agent(request.agent)
+        user_id = request.user_id or f"user-{uuid4().hex[:8]}"
+        thread_id = request.thread_id or f"thread-{uuid4().hex[:8]}"
 
-        langgraph_agent = agents_cache[request.agent]
-        print(langgraph_agent.input_keys)
+        # Build a fresh agent with unique memory path per user+thread
+        langgraph_agent = build_langgraph_agent(request.agent, user_id, thread_id)
 
         result = langgraph_agent.invoke(
-            {"query": request.query},
-            config={"configurable": {"thread_id": request.thread_id}},
+            input={},
+            config={
+                "configurable": {
+                    "user_id": user_id,
+                    "thread_id": thread_id,
+                    "new_message": HumanMessage(content=request.query),
+                }
+            },
         )
 
-        if isinstance(result, dict) and "output" in result:
-            return {"response": result["output"]}
-        return {"response": result}
+        return {
+            "response": result["messages"][-1].content,
+            "user_id": user_id,
+            "thread_id": thread_id,
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
-
-

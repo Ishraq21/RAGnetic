@@ -21,3 +21,11 @@ def get_retriever_tool(agent_name: str, description: str = None) -> Tool:
         description=description or f"Search the embedded knowledge base for {agent_name}.",
         func=tool_fn,
     )
+
+def get_retriever(agent_name: str):
+    vectordb = FAISS.load_local(
+        f"vectorstore/{agent_name}",
+        OpenAIEmbeddings(),
+        allow_dangerous_deserialization=True,
+    )
+    return vectordb.as_retriever()
