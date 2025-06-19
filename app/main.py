@@ -156,6 +156,10 @@ async def websocket_chat(ws: WebSocket):
             # kick off streaming
             await chain.ainvoke({"query": query})
             # signal end
-            await manager.send({"done": True}, ws)
+            await manager.send({
+                "done": True,
+                "user_id": user_id,
+                "thread_id": thread_id,
+            }, ws)
     except WebSocketDisconnect:
         manager.disconnect(ws)
