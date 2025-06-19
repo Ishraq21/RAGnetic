@@ -17,3 +17,6 @@ __pycache__/
 
 # Vector stores
 vectorstore/
+
+# Agents Data
+agents_data/
