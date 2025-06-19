@@ -1,0 +1,13 @@
+{
+  "name": "HRBot",
+  "description": "Answers questions about company policies",
+  "persona_prompt": "You are a helpful and polite HR assistant.",
+  "sources": [
+    {
+      "type": "url",
+      "path": null,
+      "url": "https://foundation.sdsu.edu/pag_hr_policies.html"
+    }
+  ],
+  "tools": []
+}

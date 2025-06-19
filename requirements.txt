@@ -1,0 +1,26 @@
+# Core Framework
+fastapi
+uvicorn
+
+# LangChain Stuff
+langchain
+openai
+tiktoken
+python-dotenv
+pydantic
+
+# Embedding + Vector DB
+faiss-cpu
+
+# Document Parsing & Loading
+beautifulsoup4
+trafilatura
+pdfminer.six
+unstructured
+
+# Optional Tools
+sqlalchemy
+psycopg2-binary
+
+# For UI
+gradio
