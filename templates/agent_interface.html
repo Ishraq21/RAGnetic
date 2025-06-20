@@ -55,7 +55,12 @@
       word-wrap: break-word;
     }
     .message.user { align-self: flex-end; background: #333; }
-    .message.agent { align-self: flex-start; background: #2a3a3a; }
+    /* --- Refinement: Added position:relative for copy button --- */
+    .message.agent {
+      align-self: flex-start;
+      background: #2a3a3a;
+      position: relative;
+    }
 
     /* Styles for rendered Markdown */
     .message.agent h1, .message.agent h2, .message.agent h3 { margin-top: 0.5em; margin-bottom: 0.25em; line-height: 1.2; }
@@ -66,6 +71,25 @@
     .message.agent pre { background: #121212; padding: 0.5em; border-radius: 4px; overflow-x: auto; }
     .message.agent pre code { padding: 0; }
     .message.agent a { color: #87CEEB; }
+
+    /* --- Refinement: Styles for copy button --- */
+    .copy-btn {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      background: #333;
+      color: #e0e0e0;
+      border: none;
+      border-radius: 4px;
+      padding: 3px 6px;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.2s;
+      font-size: 0.8em;
+    }
+    .message.agent:hover .copy-btn {
+      opacity: 1;
+    }
 
     #input-bar { display: flex; align-items: center; gap: 0.5rem; }
     #query-input {
@@ -92,6 +116,10 @@
 
     <div id="messages"></div>
 
+    <div id="typing-indicator" style="display: none; padding: 0 0.5rem 0.5rem; color: #888;">
+      Agent is typing...
+    </div>
+
     <form id="chat-form" onsubmit="return sendMessage(event)">
       <div id="input-bar">
         <input type="text" name="query" id="query-input" autocomplete="off" placeholder="Type your question…"/>
@@ -110,16 +138,23 @@
     const messagesDiv = document.getElementById('messages');
     const inputField = document.getElementById('query-input');
     const sendButton = document.getElementById('send-btn');
+    const typingIndicator = document.getElementById('typing-indicator');
 
     function openWebSocket() {
       socket = new WebSocket(`ws://${location.host}/ws`);
       socket.onopen = () => { console.log("WebSocket connected"); sendButton.disabled = false; };
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        if (data.token) { appendAgentToken(data.token); }
+
+        // --- Refinement: Hide indicator when first token arrives ---
+        if (data.token) {
+            typingIndicator.style.display = 'none';
+            appendAgentToken(data.token);
+        }
         if (data.done) {
-          user_id = data.user_id;
-          thread_id = data.thread_id;
+            typingIndicator.style.display = 'none';
+            user_id = data.user_id;
+            thread_id = data.thread_id;
         }
       };
       socket.onclose = () => { console.log("WebSocket disconnected"); sendButton.disabled = true; };
@@ -131,6 +166,10 @@
       const query = inputField.value.trim();
       if (!query || socket.readyState !== WebSocket.OPEN) return;
       appendUserMessage(query);
+
+      // --- Refinement: Show indicator on send ---
+      typingIndicator.style.display = 'block';
+
       socket.send(JSON.stringify({ agent: agent, user_id: user_id, thread_id: thread_id, query: query }));
       inputField.value = '';
       inputField.focus();
@@ -144,30 +183,49 @@
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
 
-    // 2. Update this function to render Markdown
     function appendAgentToken(token) {
         let last = messagesDiv.lastElementChild;
 
-        // Create a new agent message bubble if the last one was from the user
+        // Create a new agent message bubble if needed
         if (!last || !last.classList.contains('agent')) {
             const bubble = document.createElement('div');
             bubble.className = 'message agent';
-            // Use a data attribute to store the raw markdown content
             bubble.dataset.rawMarkdown = '';
+
+            // --- Refinement: Create and add the copy button ---
+            const copyBtn = document.createElement('button');
+            copyBtn.textContent = 'Copy';
+            copyBtn.className = 'copy-btn';
+            copyBtn.onclick = (e) => {
+                const contentToCopy = e.target.parentElement.dataset.rawMarkdown;
+                navigator.clipboard.writeText(contentToCopy).then(() => {
+                    e.target.textContent = 'Copied!';
+                    setTimeout(() => { e.target.textContent = 'Copy'; }, 2000);
+                });
+            };
+            bubble.appendChild(copyBtn);
+
+            // Create a container for the markdown content
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'content';
+            bubble.appendChild(contentDiv);
+
             messagesDiv.appendChild(bubble);
             last = bubble;
         }
 
-        // Append the new token to our raw markdown string
+        // Append new token and re-render markdown
         last.dataset.rawMarkdown += token;
-        last.innerHTML = marked.parse(last.dataset.rawMarkdown);
+        const contentDiv = last.querySelector('.content');
+        if (contentDiv) {
+            contentDiv.innerHTML = marked.parse(last.dataset.rawMarkdown);
+        }
 
-        // Scroll to the bottom
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
 
     agentSelect.addEventListener('change', () => {
-      agent = agentSelect.value;
+      agent = agent.value;
       user_id = "";
       thread_id = "";
       messagesDiv.innerHTML = "<div>Switched to agent: <strong>" + agent + "</strong></div>";
