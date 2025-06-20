@@ -3,7 +3,6 @@
 <head>
   <meta charset="UTF-8">
   <title>RAGnetic Chat</title>
-  <script src="https://unpkg.com/htmx.org@1.9.2"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -16,7 +15,6 @@
       flex-direction: column;
       height: 100vh;
     }
-
     #chat-container {
       flex: 1;
       display: flex;
@@ -26,10 +24,7 @@
       margin: auto;
       padding: 1rem;
     }
-
-    header {
-      margin-bottom: 0.5rem;
-    }
+    header { margin-bottom: 0.5rem; }
     #agent-select {
       width: 100%;
       padding: 0.5rem;
@@ -39,7 +34,6 @@
       border-radius: 4px;
       color: #e0e0e0;
     }
-
     #messages {
       flex: 1;
       overflow-y: auto;
@@ -62,23 +56,15 @@
     .message.user {
       align-self: flex-end;
       background: #333;
-      text-align: right;
     }
     .message.agent {
       align-self: flex-start;
       background: #233;
     }
-
     #input-bar {
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      background: #1e1e1e;
-      padding: 0.5rem;
-      border-top: 1px solid #333;
-      position: sticky;
-      bottom: 0;
-      border-radius: 0 0 8px 8px;
     }
     #query-input {
       flex: 1;
@@ -95,7 +81,6 @@
       border-radius: 4px;
       color: white;
       cursor: pointer;
-      font-weight: bold;
     }
     #send-btn:disabled {
       opacity: 0.6;
@@ -124,55 +109,66 @@
           id="query-input"
           autocomplete="off"
           placeholder="Type your question…"
-          onkeydown="if(event.key==='Enter'){ event.preventDefault(); document.getElementById('send-btn').click(); }"
         />
-        <button type="submit" id="send-btn">Send</button>
+        <button type="submit" id="send-btn" disabled>Send</button>
       </div>
     </form>
   </div>
 
   <script>
     let socket = null;
-    let agent     = "{{ agent }}";
-    let user_id   = "{{ user_id }}";
-    let thread_id = "{{ thread_id }}";
+    let agent = document.getElementById('agent-select').value;
+    let user_id = "";   // Will be set by server on first message
+    let thread_id = ""; // Will be set by server on first message
 
     const agentSelect = document.getElementById('agent-select');
     const messagesDiv = document.getElementById('messages');
     const inputField = document.getElementById('query-input');
+    const sendButton = document.getElementById('send-btn');
+    const chatForm = document.getElementById('chat-form');
 
     function openWebSocket() {
       socket = new WebSocket(`ws://${location.host}/ws`);
 
       socket.onopen = () => {
         console.log("WebSocket connected");
-        document.getElementById('send-btn').disabled = false;
+        sendButton.disabled = false;
       };
 
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
+
         if (data.token) {
           appendAgentToken(data.token);
         }
+
+        // When the agent is done, capture the user/thread IDs for the next message
         if (data.done) {
-          appendAgentToken("\n");
+            user_id = data.user_id;
+            thread_id = data.thread_id;
+            console.log(`Conversation IDs set: user=${user_id}, thread=${thread_id}`);
         }
       };
 
       socket.onclose = () => {
         console.log("WebSocket disconnected");
-        document.getElementById('send-btn').disabled = true;
+        sendButton.disabled = true;
+      };
+
+      socket.onerror = (error) => {
+        console.error("WebSocket Error:", error);
+        appendAgentToken("[Error connecting to agent]");
       };
     }
 
     function sendMessage(event) {
       event.preventDefault();
-
       const query = inputField.value.trim();
-      if (!query || socket.readyState !== WebSocket.OPEN) return false;
+      if (!query || socket.readyState !== WebSocket.OPEN) return;
 
       appendUserMessage(query);
 
+      // Send current IDs so server can retrieve history
       socket.send(JSON.stringify({
         agent: agent,
         user_id: user_id,
@@ -182,7 +178,6 @@
 
       inputField.value = '';
       inputField.focus();
-      return false;
     }
 
     function appendUserMessage(text) {
@@ -195,10 +190,9 @@
 
     function appendAgentToken(token) {
       let last = messagesDiv.lastElementChild;
-      if (!last || !last.classList.contains('agent')) {
+      if (!last || last.classList.contains('user')) {
         const bubble = document.createElement('div');
         bubble.className = 'message agent';
-        bubble.textContent = '';
         messagesDiv.appendChild(bubble);
         last = bubble;
       }
@@ -206,15 +200,18 @@
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
 
-    // Switch agent resets state
+    // When switching agents, reset the conversation state
     agentSelect.addEventListener('change', () => {
       agent = agentSelect.value;
       user_id = "";
       thread_id = "";
-      messagesDiv.innerHTML = "";
+      messagesDiv.innerHTML = "<div>Switched to agent: <strong>" + agent + "</strong></div>";
+      console.log("State cleared for new agent.");
     });
 
+    // Initialize
     openWebSocket();
+
   </script>
 </body>
 </html>

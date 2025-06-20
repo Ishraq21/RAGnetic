@@ -1,32 +1,28 @@
-from fastapi import FastAPI, HTTPException
+# app/main.py
+
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
+from typing import Optional, List, Dict
+from uuid import uuid4
+import os
+
 from app.schemas.agent import AgentConfig
 from app.agents.loader import save_agent_config
 from app.pipelines.embed import embed_agent_data
-from app.agents.base_agent import build_agent
-from typing import Optional, List, Dict
-from app.agents.agent_graph import build_langgraph_agent
-from fastapi.responses import StreamingResponse
-from uuid import uuid4
 from langchain_core.messages import HumanMessage
-from fastapi.templating import Jinja2Templates
-from fastapi import Request
-from fastapi import WebSocket, WebSocketDisconnect
-from langchain_community.vectorstores import FAISS
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain.chains import RetrievalQA
-from langchain.callbacks.base import AsyncCallbackHandler
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-import os
+# Updated import
+from app.agents.agent_graph import get_agent_workflow
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
-templates = Jinja2Templates(directory="templates")
-
-
 app = FastAPI()
-agents_cache = {}
+templates = Jinja2Templates(directory=".")
 
-from pydantic import BaseModel
 
 class AskRequest(BaseModel):
     query: str
@@ -49,29 +45,26 @@ class ConnectionManager:
     async def send(self, msg: Dict, ws: WebSocket):
         await ws.send_json(msg)
 
+
 manager = ConnectionManager()
+
 
 @app.get("/")
 async def home(request: Request):
-    import os
-    # discover available agents
-    agents = [
-        f.split(".")[0]
-        for f in os.listdir("agents_data")
-        if f.endswith(".json")
-    ]
-    # pick a default agent if any
+    agents_dir = "agents_data"
+    if not os.path.exists(agents_dir):
+        os.makedirs(agents_dir)
+    agents = [f.split(".")[0] for f in os.listdir(agents_dir) if f.endswith(".json")]
     default_agent = agents[0] if agents else ""
-    # Render template, including agent/user/thread in context
     return templates.TemplateResponse(
-        "agent_interface.html",
+        "templates/agent_interface.html",
         {
-            "request":    request,
-            "agents":     agents,
-            "agent":      default_agent,  # so {{agent}} is never undefined
-            "user_id":    "",             # start blank
-            "thread_id":  "",             # start blank
-        }
+            "request": request,
+            "agents": agents,
+            "agent": default_agent,
+            "user_id": "",
+            "thread_id": "",
+        },
     )
 
 
@@ -81,85 +74,70 @@ def create_agent(config: AgentConfig, openai_api_key: Optional[str] = None):
         api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise HTTPException(status_code=400, detail="OpenAI API key missing.")
-
         save_agent_config(config)
         embed_agent_data(config, openai_api_key=api_key)
-        agents_cache[config.name] = build_agent(config.name)
-
         return {"status": "Agent created", "agent": config.name}
-    except HTTPException:
-        raise  # Let FastAPI handle known HTTPExceptions
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/ask")
-def ask(request: AskRequest):
-    try:
-        user_id = request.user_id or f"user-{uuid4().hex[:8]}"
-        thread_id = request.thread_id or f"thread-{uuid4().hex[:8]}"
-
-        # Build a fresh agent with unique memory path per user+thread
-        langgraph_agent = build_langgraph_agent(request.agent, user_id, thread_id)
-
-        result = langgraph_agent.invoke(
-            input={},
-            config={
-                "configurable": {
-                    "user_id": user_id,
-                    "thread_id": thread_id,
-                    "new_message": HumanMessage(content=request.query),
-                }
-            },
-        )
-
-        return {
-            "response": result["messages"][-1].content,
-            "user_id": user_id,
-            "thread_id": thread_id,
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
 
 
 @app.websocket("/ws")
 async def websocket_chat(ws: WebSocket):
     await manager.connect(ws)
     try:
+        session_user_id = None
+        session_thread_id = None
+
         while True:
             data = await ws.receive_json()
-            agent = data["agent"]
+            agent_name = data["agent"]
             query = data["query"]
-            user_id = data.get("user_id")
-            thread_id = data.get("thread_id")
 
-            # build a streaming RetrievalQA
-            vectordb = FAISS.load_local(
-                f"vectorstore/{agent}",
-                OpenAIEmbeddings(),
-                allow_dangerous_deserialization=True
-            )
-            retriever = vectordb.as_retriever()
-            llm = ChatOpenAI(model="gpt-4o", temperature=0, streaming=True)
+            user_id = data.get("user_id") or session_user_id or f"user-{uuid4().hex[:8]}"
+            thread_id = data.get("thread_id") or session_thread_id or f"thread-{uuid4().hex[:8]}"
 
-            class WSHandler(AsyncCallbackHandler):
-                async def on_llm_new_token(self, token: str, **kwargs):
-                    await manager.send({"token": token}, ws)
+            session_user_id = user_id
+            session_thread_id = thread_id
 
-            llm.callbacks = [WSHandler()]
-            chain = RetrievalQA.from_chain_type(
-                llm=llm,
-                retriever=retriever,
-                return_source_documents=False
-            )
-            # kick off streaming
-            await chain.ainvoke({"query": query})
-            # signal end
-            await manager.send({
-                "done": True,
-                "user_id": user_id,
-                "thread_id": thread_id,
-            }, ws)
+            # Get the uncompiled graph workflow
+            workflow = get_agent_workflow(agent_name)
+
+            memory_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
+            os.makedirs("memory", exist_ok=True)
+
+            # Use async with to correctly manage the checkpointer lifecycle
+            async with AsyncSqliteSaver.from_conn_string(memory_path) as saver:
+                # Compile the graph inside the async context with the checkpointer
+                langgraph_agent = workflow.compile(checkpointer=saver)
+
+                config = {
+                    "configurable": {
+                        "user_id": user_id,
+                        "thread_id": thread_id,
+                        "new_message": HumanMessage(content=query),
+                    }
+                }
+
+                # Stream events using the compiled agent
+                async for event in langgraph_agent.astream_events({}, config=config, version="v2"):
+                    kind = event["event"]
+                    if kind == "on_chat_model_stream":
+                        token = event["data"]["chunk"].content
+                        if token:
+                            await manager.send({"token": token}, ws)
+
+                # Signal completion
+                await manager.send({
+                    "done": True,
+                    "user_id": user_id,
+                    "thread_id": thread_id,
+                }, ws)
+
     except WebSocketDisconnect:
+        print("Client disconnected.")
+        manager.disconnect(ws)
+    except Exception as e:
+        print(f"WebSocket Error: {e}")
+        await manager.send({"error": str(e)}, ws)
+    finally:
         manager.disconnect(ws)
