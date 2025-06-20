@@ -14,6 +14,8 @@ from app.tools.retriever_tool import get_retriever
 class MessagesState(TypedDict):
     messages: List[BaseMessage]
 
+# in app/agents/agent_graph.py
+
 def build_call_model_with_retriever(retriever):
     """
     This function is synchronous, but LangGraph can correctly run it
@@ -32,11 +34,26 @@ def build_call_model_with_retriever(retriever):
         context_docs = retriever.get_relevant_documents(query)
         context_text = "\n\n".join([doc.page_content for doc in context_docs[:3]])
 
+        # This new prompt instructs the LLM to use Markdown for formatting.
         system_prompt = f"""
-        You are a helpful agent. Use the following context to answer the user's query.
-        Context:
-        {context_text}
-        """
+                You are RAGnetic, a helpful and friendly AI assistant.
+                Your goal is to provide clear, well-structured, and conversational answers based on the provided context.
+                
+                **Instructions for Formatting:**
+                - Use Markdown for all your responses.
+                - Use headings (`##`, `###`) to structure main topics.
+                - Use bold text (`**text**`) to highlight key terms, figures, or important information.
+                - Use bullet points (`- `) or numbered lists (`1. `) for detailed points or steps.
+                - If you include code snippets, use Markdown code blocks.
+                - Keep your tone helpful and engaging.
+                
+                **Context to use for your answer:**
+                ---
+                {context_text}
+                ---
+                
+                Based on the context above and our conversation history, please answer the user's query.
+                """
 
         prompt_messages = [HumanMessage(content=system_prompt)] + messages[-30:]
 
