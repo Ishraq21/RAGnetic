@@ -5,7 +5,6 @@ from typing import Optional, List, Dict
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from app.schemas.agent import AgentConfig
@@ -21,16 +20,16 @@ load_dotenv()
 # Initialize FastAPI app
 app = FastAPI(title="RAGnetic API")
 
-# This is critical for allowing browser-based clients (like the default FastAPI docs)
-# to interact with your API without running into security errors.
+# This is critical for allowing browser-based clients to interact with the API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins, you can restrict this in production
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
+# It's conventional to keep HTML templates in a 'templates' directory.
 templates = Jinja2Templates(directory="templates")
 
 
@@ -75,7 +74,7 @@ async def home(request: Request):
 
 @app.post("/create-agent")
 def create_agent(config: AgentConfig, openai_api_key: Optional[str] = None):
-    """Creates a new agent, embeds its data, and makes it available for use."""
+    """Creates a new agent and embeds its data sources."""
     try:
         api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -84,7 +83,6 @@ def create_agent(config: AgentConfig, openai_api_key: Optional[str] = None):
         embed_agent_data(config, openai_api_key=api_key)
         return {"status": "Agent created", "agent": config.name}
     except Exception as e:
-        # It's good practice to log the actual error on the server
         print(f"Error creating agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -123,25 +121,34 @@ async def websocket_chat(ws: WebSocket):
                     }
                 }
 
+                # --- Refinement: Stream events and capture the final state for citations ---
+                final_state = None
                 async for event in langgraph_agent.astream_events({}, config=config, version="v2"):
                     kind = event["event"]
+                    # Stream the LLM tokens for the text response
                     if kind == "on_chat_model_stream":
                         token = event["data"]["chunk"].content
                         if token:
                             await manager.send({"token": token}, ws)
+                    # The 'on_graph_end' event contains the final state, including our citations
+                    elif kind == "on_graph_end":
+                        final_state = event["data"]["output"]
 
+                # Extract the citations list from the final graph state
+                citations = final_state.get("citations", []) if final_state else []
+
+                # Signal completion and send the citations list to the frontend
                 await manager.send({
                     "done": True,
                     "user_id": user_id,
                     "thread_id": thread_id,
+                    "citations": citations
                 }, ws)
 
     except WebSocketDisconnect:
         print(f"Client disconnected.")
-        manager.disconnect(ws)
     except Exception as e:
         print(f"WebSocket Error: {e}")
-        # It's good practice to notify the client that an error occurred
         await manager.send({"error": str(e)}, ws)
     finally:
         manager.disconnect(ws)
