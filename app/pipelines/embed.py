@@ -5,7 +5,7 @@ from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 
 from app.schemas.agent import AgentConfig
-from app.pipelines.loaders import directory_loader, url_loader, pdf_loader, docx_loader, csv_loader
+from app.pipelines.loaders import directory_loader, url_loader, pdf_loader, docx_loader, csv_loader, code_loader
 
 def load_documents_from_source(source: dict) -> list[Document]:
     """
@@ -32,7 +32,7 @@ def load_documents_from_source(source: dict) -> list[Document]:
                 return []
 
         elif os.path.isdir(path):
-
+            # Handle directories here
             return directory_loader.load(path)
 
         else:
@@ -40,9 +40,11 @@ def load_documents_from_source(source: dict) -> list[Document]:
             print(f"Warning: Local path '{path}' is not a valid file or directory. Skipping.")
             return []
 
-
     elif source_type == "url":
         return url_loader.load(source["url"])
+
+    elif source_type == "code_repository":
+        return code_loader.load(source["path"])
 
     else:
         print(f"Warning: Unknown source type: {source_type}. Skipping.")

@@ -1,8 +1,8 @@
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 
 class DataSource(BaseModel):
-    type: str
+    type: Literal['local', 'url', 'code_repository']
     path: Optional[str] = None
     url: Optional[str] = None
 
