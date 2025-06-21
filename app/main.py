@@ -8,7 +8,7 @@ from uuid import uuid4
 import os
 
 from app.schemas.agent import AgentConfig
-from app.agents.loader import save_agent_config
+from app.agents.config_manager import save_agent_config
 from app.pipelines.embed import embed_agent_data
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver

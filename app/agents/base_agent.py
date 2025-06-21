@@ -1,4 +1,4 @@
-from app.agents.loader import load_agent_config
+from app.agents.config_manager import load_agent_config
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain_community.vectorstores import FAISS

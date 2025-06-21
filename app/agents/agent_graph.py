@@ -8,7 +8,7 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 
-from app.agents.loader import load_agent_config
+from app.agents.config_manager import load_agent_config
 from app.tools.retriever_tool import get_retriever
 
 class MessagesState(TypedDict):
