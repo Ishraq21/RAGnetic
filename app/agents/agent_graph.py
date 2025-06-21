@@ -11,8 +11,10 @@ from langchain_openai import ChatOpenAI
 from app.agents.config_manager import load_agent_config
 from app.tools.retriever_tool import get_retriever
 
+
 class MessagesState(TypedDict):
     messages: List[BaseMessage]
+
 
 # in app/agents/agent_graph.py
 
@@ -21,6 +23,7 @@ def build_call_model_with_retriever(retriever):
     This function is synchronous, but LangGraph can correctly run it
     within an async stream.
     """
+
     def call_model(state: MessagesState, config: RunnableConfig) -> dict:
         messages = state.get("messages", [])
         # The new message is passed via the config from the /ws endpoint
@@ -32,13 +35,14 @@ def build_call_model_with_retriever(retriever):
         # Use the content of the new message as the query
         query = new_msg.content if new_msg else messages[-1].content
         context_docs = retriever.get_relevant_documents(query)
-        context_text = "\n\n".join([doc.page_content for doc in context_docs[:3]])
+
+        context_text = "\n\n".join([doc.page_content for doc in context_docs])
 
         # This new prompt instructs the LLM to use Markdown for formatting.
         system_prompt = f"""
                 You are RAGnetic, a helpful and friendly AI assistant.
                 Your goal is to provide clear, well-structured, and conversational answers based on the provided context.
-                
+
                 **Instructions for Formatting:**
                 - Use Markdown for all your responses.
                 - Use headings (`##`, `###`) to structure main topics.
@@ -46,12 +50,12 @@ def build_call_model_with_retriever(retriever):
                 - Use bullet points (`- `) or numbered lists (`1. `) for detailed points or steps.
                 - If you include code snippets, use Markdown code blocks.
                 - Keep your tone helpful and engaging.
-                
+
                 **Context to use for your answer:**
                 ---
                 {context_text}
                 ---
-                
+
                 Based on the context above and our conversation history, please answer the user's query.
                 """
 
