@@ -1,34 +1,37 @@
-# app/main.py
+import os
+from uuid import uuid4
+from typing import Optional, List, Dict
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List, Dict
-from uuid import uuid4
-import os
+from dotenv import load_dotenv
 
 from app.schemas.agent import AgentConfig
 from app.agents.config_manager import save_agent_config
 from app.pipelines.embed import embed_agent_data
+from app.agents.agent_graph import get_agent_workflow
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-# Updated import
-from app.agents.agent_graph import get_agent_workflow
-
-from dotenv import load_dotenv
-
+# Load environment variables from .env file
 load_dotenv()
 
-app = FastAPI()
-templates = Jinja2Templates(directory=".")
+# Initialize FastAPI app
+app = FastAPI(title="RAGnetic API")
 
+# This is critical for allowing browser-based clients (like the default FastAPI docs)
+# to interact with your API without running into security errors.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins, you can restrict this in production
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 
-class AskRequest(BaseModel):
-    query: str
-    agent: str
-    user_id: Optional[str] = None
-    thread_id: Optional[str] = None
+templates = Jinja2Templates(directory="templates")
 
 
 class ConnectionManager:
@@ -45,19 +48,19 @@ class ConnectionManager:
     async def send(self, msg: Dict, ws: WebSocket):
         await ws.send_json(msg)
 
-
 manager = ConnectionManager()
 
 
 @app.get("/")
 async def home(request: Request):
+    """Serves the main chat interface."""
     agents_dir = "agents_data"
     if not os.path.exists(agents_dir):
         os.makedirs(agents_dir)
     agents = [f.split(".")[0] for f in os.listdir(agents_dir) if f.endswith(".json")]
     default_agent = agents[0] if agents else ""
     return templates.TemplateResponse(
-        "templates/agent_interface.html",
+        "agent_interface.html",
         {
             "request": request,
             "agents": agents,
@@ -70,6 +73,7 @@ async def home(request: Request):
 
 @app.post("/create-agent")
 def create_agent(config: AgentConfig, openai_api_key: Optional[str] = None):
+    """Creates a new agent, embeds its data, and makes it available for use."""
     try:
         api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -78,11 +82,14 @@ def create_agent(config: AgentConfig, openai_api_key: Optional[str] = None):
         embed_agent_data(config, openai_api_key=api_key)
         return {"status": "Agent created", "agent": config.name}
     except Exception as e:
+        # It's good practice to log the actual error on the server
+        print(f"Error creating agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.websocket("/ws")
 async def websocket_chat(ws: WebSocket):
+    """Handles the real-time, stateful chat conversations using WebSockets."""
     await manager.connect(ws)
     try:
         session_user_id = None
@@ -99,15 +106,11 @@ async def websocket_chat(ws: WebSocket):
             session_user_id = user_id
             session_thread_id = thread_id
 
-            # Get the uncompiled graph workflow
             workflow = get_agent_workflow(agent_name)
-
             memory_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
             os.makedirs("memory", exist_ok=True)
 
-            # Use async with to correctly manage the checkpointer lifecycle
             async with AsyncSqliteSaver.from_conn_string(memory_path) as saver:
-                # Compile the graph inside the async context with the checkpointer
                 langgraph_agent = workflow.compile(checkpointer=saver)
 
                 config = {
@@ -118,7 +121,6 @@ async def websocket_chat(ws: WebSocket):
                     }
                 }
 
-                # Stream events using the compiled agent
                 async for event in langgraph_agent.astream_events({}, config=config, version="v2"):
                     kind = event["event"]
                     if kind == "on_chat_model_stream":
@@ -126,7 +128,6 @@ async def websocket_chat(ws: WebSocket):
                         if token:
                             await manager.send({"token": token}, ws)
 
-                # Signal completion
                 await manager.send({
                     "done": True,
                     "user_id": user_id,
@@ -134,10 +135,11 @@ async def websocket_chat(ws: WebSocket):
                 }, ws)
 
     except WebSocketDisconnect:
-        print("Client disconnected.")
+        print(f"Client disconnected.")
         manager.disconnect(ws)
     except Exception as e:
         print(f"WebSocket Error: {e}")
+        # It's good practice to notify the client that an error occurred
         await manager.send({"error": str(e)}, ws)
     finally:
         manager.disconnect(ws)

@@ -5,7 +5,9 @@ from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 
 from app.schemas.agent import AgentConfig
-from app.pipelines.loaders import directory_loader, url_loader, pdf_loader, docx_loader, csv_loader, code_loader
+from app.pipelines.loaders import directory_loader, url_loader, pdf_loader, docx_loader, csv_loader, code_loader, \
+    db_loader
+
 
 def load_documents_from_source(source: dict) -> list[Document]:
     """
@@ -46,15 +48,17 @@ def load_documents_from_source(source: dict) -> list[Document]:
     elif source_type == "code_repository":
         return code_loader.load(source["path"])
 
+    # --- Correction: Moved the 'db' check to the correct level ---
+    elif source_type == "db":
+        return db_loader.load(source["db_connection"])
+
     else:
         print(f"Warning: Unknown source type: {source_type}. Skipping.")
         return []
 
 
 def embed_agent_data(config: AgentConfig, openai_api_key: str = None):
-    """
-    Embeds data for a given agent configuration by dispatching to appropriate loaders.
-    """
+    # This function remains the same
     all_docs = []
     for source in config.sources:
         loaded_docs = load_documents_from_source(source.dict())

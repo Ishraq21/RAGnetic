@@ -2,9 +2,10 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any, Literal
 
 class DataSource(BaseModel):
-    type: Literal['local', 'url', 'code_repository']
+    type: Literal['local', 'url', 'code_repository','db']
     path: Optional[str] = None
     url: Optional[str] = None
+    db_connection: Optional[str] = None
 
 class AgentConfig(BaseModel):
     name: str
