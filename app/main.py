@@ -43,7 +43,9 @@ class ConnectionManager:
         self.active.append(ws)
 
     def disconnect(self, ws: WebSocket):
-        self.active.remove(ws)
+        if ws in self.active:
+            self.active.remove(ws)
+            print("Client connection removed.")
 
     async def send(self, msg: Dict, ws: WebSocket):
         await ws.send_json(msg)
