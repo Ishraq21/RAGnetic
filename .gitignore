@@ -7,6 +7,8 @@ __pycache__/
 
 # Secrets
 .env
+credentials.json
+service_account.json
 
 # IDE
 .vscode/

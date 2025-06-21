@@ -6,7 +6,7 @@ from langchain_community.vectorstores import FAISS
 
 from app.schemas.agent import AgentConfig
 from app.pipelines.loaders import directory_loader, url_loader, pdf_loader, docx_loader, csv_loader, code_loader, \
-    db_loader
+    db_loader, gdoc_loader
 
 
 def load_documents_from_source(source: dict) -> list[Document]:
@@ -22,7 +22,6 @@ def load_documents_from_source(source: dict) -> list[Document]:
             return []
 
         if os.path.isfile(path):
-            # Handle all file types here
             if path.lower().endswith('.pdf'):
                 return pdf_loader.load(path)
             elif path.lower().endswith('.docx'):
@@ -34,11 +33,9 @@ def load_documents_from_source(source: dict) -> list[Document]:
                 return []
 
         elif os.path.isdir(path):
-            # Handle directories here
             return directory_loader.load(path)
 
         else:
-            # Handle cases that are neither a file nor a directory
             print(f"Warning: Local path '{path}' is not a valid file or directory. Skipping.")
             return []
 
@@ -48,9 +45,16 @@ def load_documents_from_source(source: dict) -> list[Document]:
     elif source_type == "code_repository":
         return code_loader.load(source["path"])
 
-    # --- Correction: Moved the 'db' check to the correct level ---
     elif source_type == "db":
         return db_loader.load(source["db_connection"])
+
+    elif source_type == "gdoc":
+        # Pass all the relevant keys from the source config to the loader
+        return gdoc_loader.load(
+            folder_id=source.get("folder_id"),
+            document_ids=source.get("document_ids"),
+            file_types=source.get("file_types")
+        )
 
     else:
         print(f"Warning: Unknown source type: {source_type}. Skipping.")
@@ -58,7 +62,6 @@ def load_documents_from_source(source: dict) -> list[Document]:
 
 
 def embed_agent_data(config: AgentConfig, openai_api_key: str = None):
-    # This function remains the same
     all_docs = []
     for source in config.sources:
         loaded_docs = load_documents_from_source(source.dict())
@@ -69,11 +72,7 @@ def embed_agent_data(config: AgentConfig, openai_api_key: str = None):
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_documents(all_docs)
-
-    embeddings = OpenAIEmbeddings(
-        model="text-embedding-3-small",
-        openai_api_key=openai_api_key or os.getenv("OPENAI_API_KEY"),
-    )
-
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small",
+                                  openai_api_key=openai_api_key or os.getenv("OPENAI_API_KEY"))
     vectorstore = FAISS.from_documents(chunks, embeddings)
     vectorstore.save_local(f"vectorstore/{config.name}")
