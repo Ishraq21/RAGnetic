@@ -1,163 +1,77 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>RAGnetic Chat</title>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet" />
   <style>
     :root {
-        --background-color: #121212;
-        --text-color: #e0e0e0;
-        --card-background: #1e1e1e;
-        --button-background: #635DFF;
-        --button-hover-background: #5141d4;
-        --danger-button-background: #FF6B6B;
-        --danger-button-hover: #FF4B4B;
-        --border-color: #333333;
-        --muted-text: #888888;
-        --shadow-color: rgba(0, 0, 0, 0.4);
-        --accent-color: #635DFF;
+      --background-color: #121212; --text-color: #e0e0e0; --card-background: #1e1e1e;
+      --button-background: #635DFF; --button-hover-background: #5141d4;
+      --border-color: #333333; --muted-text: #888888; --accent-color: #635DFF;
     }
-
     * { box-sizing: border-box; }
-
     body {
-      margin: 0;
-      padding: 0;
-      background: var(--background-color);
-      color: var(--text-color);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
+      margin: 0; padding: 0; background: var(--background-color); color: var(--text-color);
+      font-family: 'Inter', sans-serif; display: flex; flex-direction: column; height: 100vh;
     }
-
     #chat-container {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      max-width: 800px;
-      width: 100%;
-      margin: 2rem auto;
-      padding: 0 1rem;
+      flex: 1; display: flex; flex-direction: column; max-width: 800px;
+      width: 100%; margin: 2rem auto; padding: 0 1rem;
     }
-
     header {
-      padding: 0.5rem 0;
-      border-bottom: 1px solid var(--border-color);
-      margin-bottom: 1rem;
+      padding: 0.5rem 0; border-bottom: 1px solid var(--border-color); margin-bottom: 1rem;
     }
-
     #agent-select {
-      width: 100%;
-      padding: 0.5rem;
-      background: var(--card-background);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      color: var(--text-color);
+      width: 100%; padding: 0.5rem; background: var(--card-background);
+      border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-color);
     }
-
     #messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 1rem 0.5rem;
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
+      flex: 1; overflow-y: auto; padding: 1rem 0.5rem; display: flex; flex-direction: column; gap: 1rem;
     }
-
     .message {
-      max-width: 85%;
-      padding: 0.75rem 1rem;
-      border-radius: 18px;
-      line-height: 1.6;
-      word-wrap: break-word;
-      position: relative;
-      animation: fadeIn 0.5s ease-in-out;
+      max-width: 85%; padding: 0.75rem 1rem; border-radius: 18px; line-height: 1.6;
+      word-wrap: break-word; position: relative; animation: fadeIn 0.5s ease-in-out;
     }
-
     .message.user {
-        align-self: flex-end;
-        background: var(--accent-color);
-        color: white;
-        border-top-right-radius: 4px;
+      align-self: flex-end; background: var(--accent-color); color: white; border-top-right-radius: 4px;
     }
     .message.agent {
-        align-self: flex-start;
-        background: var(--card-background);
-        border-top-left-radius: 4px;
+      align-self: flex-start; background: var(--card-background); border-top-left-radius: 4px;
     }
-
-    .message.agent h1, .message.agent h2, .message.agent h3 { margin-top: 0.5em; margin-bottom: 0.25em; line-height: 1.2; }
+    .message.agent .content { padding-right: 30px; } /* Space for the copy button */
+    .message.agent h1, .message.agent h2, .message.agent h3 { margin-top: 0.5em; margin-bottom: 0.25em; }
     .message.agent p:last-child { margin-bottom: 0; }
     .message.agent ul, .message.agent ol { padding-inline-start: 20px; }
-    .message.agent code { background-color: var(--background-color); padding: 0.2em 0.4em; border-radius: 4px; font-size: 0.9em; }
-    .message.agent pre { background: var(--background-color); padding: 0.75em; border-radius: 8px; overflow-x: auto; }
+    .message.agent code, .message.agent pre {
+      background: #0d0d0d; padding: 0.2em 0.4em; border-radius: 4px; font-size: 0.9em;
+    }
+    .message.agent pre { padding: 0.75em; overflow-x: auto; }
     .message.agent a { color: var(--accent-color); text-decoration: none; }
     .message.agent a:hover { text-decoration: underline; }
-
     .copy-btn {
-      position: absolute;
-      top: 8px;
-      right: 8px;
-      background: #333;
-      border: 1px solid var(--border-color);
-      color: var(--muted-text);
-      border-radius: 8px;
-      width: 32px;
-      height: 32px;
-      cursor: pointer;
-      opacity: 0;
-      transition: opacity 0.2s, background-color 0.2s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      position: absolute; top: 8px; right: 8px; background: #333;
+      border: 1px solid var(--border-color); color: var(--muted-text); border-radius: 8px;
+      width: 32px; height: 32px; cursor: pointer; opacity: 0;
+      transition: opacity 0.2s, background-color 0.2s; display: flex; align-items: center; justify-content: center;
     }
     .message.agent:hover .copy-btn { opacity: 1; }
     .copy-btn:hover { background: #444; color: var(--text-color); }
     .copy-btn svg { width: 16px; height: 16px; }
 
-    .citations-container {
-        margin-top: 12px;
-        padding-top: 8px;
-        border-top: 1px solid var(--border-color);
-    }
-    .citation-item {
-        display: inline-block;
-        background-color: #333;
-        color: var(--muted-text);
-        padding: 3px 10px;
-        border-radius: 12px;
-        font-size: 0.75em;
-        margin-right: 6px;
-        margin-bottom: 6px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        max-width: 220px;
-        vertical-align: middle;
-    }
-    .citation-item:before {
-        content: '📄';
-        margin-right: 5px;
-    }
-
-
     #input-form { display: flex; align-items: center; gap: 0.5rem; background: var(--card-background); padding: 0.5rem; border-radius: 12px; margin-top: 1rem; }
-    #query-input { flex: 1; padding: 0.75rem; background: transparent; border: none; outline: none; color: var(--text-color); font-size: 1em; font-family: 'Inter', sans-serif; }
+    #query-input { flex: 1; padding: 0.75rem; background: transparent; border: none; outline: none; color: var(--text-color); font-size: 1em; }
     #send-btn { background: var(--button-background); border: none; border-radius: 8px; color: white; cursor: pointer; font-weight: bold; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s; }
     #send-btn:disabled { background: var(--border-color); cursor: not-allowed; }
     #send-btn:not(:disabled):hover { background: var(--button-hover-background); }
     #send-btn svg { width: 20px; height: 20px; }
-
     #typing-indicator { display: flex; align-items: center; gap: 5px; padding: 0.5rem; opacity: 0; transition: opacity 0.3s; }
     #typing-indicator .dot { width: 8px; height: 8px; background-color: var(--muted-text); border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
     #typing-indicator .dot:nth-child(1) { animation-delay: -0.32s; }
     #typing-indicator .dot:nth-child(2) { animation-delay: -0.16s; }
-
     @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1.0); } }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   </style>
@@ -181,7 +95,7 @@
     </div>
 
     <form id="input-form" onsubmit="return sendMessage(event)">
-      <input type="text" name="query" id="query-input" autocomplete="off" placeholder="Ask RAGnetic…"/>
+      <input type="text" name="query" id="query-input" autocomplete="off" placeholder="Ask RAGnetic…" />
       <button type="submit" id="send-btn" disabled>
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" /></svg>
       </button>
@@ -189,42 +103,39 @@
   </div>
 
   <script>
-    let socket = null;
-    let agent = document.getElementById('agent-select').value;
-    let user_id = "";
-    let thread_id = "";
-
     const agentSelect = document.getElementById('agent-select');
     const messagesDiv = document.getElementById('messages');
     const inputField = document.getElementById('query-input');
     const sendButton = document.getElementById('send-btn');
     const typingIndicator = document.getElementById('typing-indicator');
 
-    const copyIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 3a.75.75 0 00-.75.75v13.5a.75.75 0 00.75.75h9a.75.75 0 00.75-.75V3.75A.75.75 0 0016.5 3h-9zM8.25 4.5h7.5v12h-7.5V4.5z" /><path d="M6 1.5a.75.75 0 00-.75.75V16.5a.75.75 0 00.75.75h.008a.75.75 0 00.75-.75V2.25A.75.75 0 006.008 1.5H6z" /></svg>`;
-    const copiedIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clip-rule="evenodd" /></svg>`;
+    let agent = agentSelect.value;
+    let user_id = "", thread_id = "";
+    let socket = null;
+
+    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
 
     function openWebSocket() {
-      socket = new WebSocket(`ws://${location.host}/ws`);
-      socket.onopen = () => { sendButton.disabled = false; };
+      socket = new WebSocket(`${protocol}://${location.host}/ws`);
+      socket.onopen = () => sendButton.disabled = false;
+      socket.onerror = () => alert("Connection error. Please refresh the page.");
+      socket.onclose = () => {
+        sendButton.disabled = true;
+        setTimeout(openWebSocket, 2000);
+      };
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.token) {
-            typingIndicator.style.opacity = '0';
-            appendAgentToken(data.token);
+          typingIndicator.style.opacity = '0';
+          appendAgentToken(data.token);
         }
         if (data.done) {
-            typingIndicator.style.opacity = '0';
-            user_id = data.user_id;
-            thread_id = data.thread_id;
-
-            // Check for and display citations
-            if (data.citations && data.citations.length > 0) {
-                appendCitations(data.citations);
-            }
+          typingIndicator.style.opacity = '0';
+          user_id = data.user_id;
+          thread_id = data.thread_id;
+          // --- REMOVED: The call to appendCitations is now gone ---
         }
       };
-      socket.onclose = () => { sendButton.disabled = true; };
-      socket.onerror = (error) => { console.error("WebSocket Error:", error); };
     }
 
     function sendMessage(event) {
@@ -239,84 +150,48 @@
     }
 
     function appendUserMessage(text) {
-      const messageBubble = document.createElement('div');
-      messageBubble.className = 'message user';
-      messageBubble.textContent = text;
-      messagesDiv.appendChild(messageBubble);
+      const msg = document.createElement('div');
+      msg.className = 'message user';
+      msg.textContent = text;
+      messagesDiv.appendChild(msg);
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
 
     function appendAgentToken(token) {
-        let last = messagesDiv.lastElementChild;
-
-        if (!last || !last.classList.contains('agent')) {
+        let lastMessage = messagesDiv.lastElementChild;
+        if (!lastMessage || !lastMessage.classList.contains('agent')) {
             const bubble = document.createElement('div');
             bubble.className = 'message agent';
-            bubble.dataset.rawMarkdown = '';
-
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'content';
+            bubble.appendChild(contentDiv);
             const copyBtn = document.createElement('button');
             copyBtn.className = 'copy-btn';
             copyBtn.innerHTML = copyIconSVG;
             copyBtn.onclick = (e) => {
                 const btn = e.currentTarget;
-                const contentToCopy = btn.closest('.message.agent').dataset.rawMarkdown;
-                navigator.clipboard.writeText(contentToCopy).then(() => {
-                    btn.innerHTML = copiedIconSVG;
-                    setTimeout(() => { btn.innerHTML = copyIconSVG; }, 2000);
-                });
+                const rawMarkdown = btn.closest('.message.agent').dataset.rawMarkdown;
+                if (rawMarkdown) {
+                    navigator.clipboard.writeText(rawMarkdown).then(() => {
+                        btn.innerHTML = copiedIconSVG;
+                        setTimeout(() => { btn.innerHTML = copyIconSVG; }, 2000);
+                    });
+                }
             };
             bubble.appendChild(copyBtn);
+            bubble.dataset.rawMarkdown = '';
             messagesDiv.appendChild(bubble);
-            last = bubble;
+            lastMessage = bubble;
         }
-
-        last.dataset.rawMarkdown += token;
-
-        const copyBtn = last.querySelector('.copy-btn');
-        if (copyBtn) last.removeChild(copyBtn);
-
-        last.innerHTML = marked.parse(last.dataset.rawMarkdown);
-
-        if (copyBtn) last.appendChild(copyBtn);
-
+        lastMessage.dataset.rawMarkdown += token;
+        const contentDiv = lastMessage.querySelector('.content');
+        if (contentDiv) {
+            contentDiv.innerHTML = marked.parse(lastMessage.dataset.rawMarkdown);
+        }
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
 
-    // Add new function to render citations
-    function appendCitations(citations) {
-        let lastMessage = messagesDiv.lastElementChild;
-        // Make sure we're appending to an agent message
-        if (!lastMessage || !lastMessage.classList.contains('agent')) return;
-
-        const container = document.createElement('div');
-        container.className = 'citations-container';
-
-        // Use a Set to only show unique sources
-        const uniqueSources = new Map();
-        citations.forEach(cite => {
-            // Use the full source path/URL as a unique key
-            const sourceKey = cite.source;
-            if (sourceKey && !uniqueSources.has(sourceKey)) {
-                uniqueSources.set(sourceKey, cite);
-            }
-        });
-
-        uniqueSources.forEach(cite => {
-            const item = document.createElement('span');
-            item.className = 'citation-item';
-
-            // Try to create a user-friendly name for the source
-            const sourceName = cite.title || (cite.source ? cite.source.split(/[\\/]/).pop() : 'Unknown Source');
-            item.textContent = sourceName;
-
-            // Show full source path on hover
-            item.title = cite.source;
-            container.appendChild(item);
-        });
-
-        lastMessage.appendChild(container);
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    }
+    // --- REMOVED: The appendCitations function is now gone ---
 
     agentSelect.addEventListener('change', () => {
       agent = agentSelect.value;
@@ -324,6 +199,9 @@
       thread_id = "";
       messagesDiv.innerHTML = "";
     });
+
+    const copyIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 3a.75.75 0 00-.75.75v13.5a.75.75 0 00.75.75h9a.75.75 0 00.75-.75V3.75A.75.75 0 0016.5 3h-9zM8.25 4.5h7.5v12h-7.5V4.5z" /><path d="M6 1.5a.75.75 0 00-.75.75V16.5a.75.75 0 00.75.75h.008a.75.75 0 00.75-.75V2.25A.75.75 0 006.008 1.5H6z" /></svg>`;
+    const copiedIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clip-rule="evenodd" /></svg>`;
 
     openWebSocket();
   </script>

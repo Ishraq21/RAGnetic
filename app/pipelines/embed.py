@@ -6,7 +6,7 @@ from langchain_community.vectorstores import FAISS
 
 from app.schemas.agent import AgentConfig
 from app.pipelines.loaders import directory_loader, url_loader, pdf_loader, docx_loader, csv_loader, code_loader, \
-    db_loader, gdoc_loader
+    db_loader, gdoc_loader, web_crawler_loader
 
 
 def load_documents_from_source(source: dict) -> list[Document]:
@@ -49,11 +49,17 @@ def load_documents_from_source(source: dict) -> list[Document]:
         return db_loader.load(source["db_connection"])
 
     elif source_type == "gdoc":
-        # Pass all the relevant keys from the source config to the loader
         return gdoc_loader.load(
             folder_id=source.get("folder_id"),
             document_ids=source.get("document_ids"),
             file_types=source.get("file_types")
+        )
+
+    # --- Correction: Moved the 'web_crawler' check to the correct top-level ---
+    elif source_type == "web_crawler":
+        return web_crawler_loader.load(
+            url=source.get("url"),
+            max_depth=source.get("max_depth", 2)
         )
 
     else:
@@ -62,6 +68,7 @@ def load_documents_from_source(source: dict) -> list[Document]:
 
 
 def embed_agent_data(config: AgentConfig, openai_api_key: str = None):
+    # This function remains the same
     all_docs = []
     for source in config.sources:
         loaded_docs = load_documents_from_source(source.dict())

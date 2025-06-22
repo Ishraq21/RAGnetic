@@ -30,13 +30,17 @@ def build_call_model_with_retriever(retriever):
 
         query = new_msg.content if new_msg else messages[-1].content
         context_docs = retriever.get_relevant_documents(query)
+
         context_chunks = []
         cited_docs_metadata = []
+        unique_source_keys = set()
 
-        for i, doc in enumerate(context_docs):
+        for doc in context_docs:
             metadata = doc.metadata
+            source = metadata.get('source', 'Unknown')
 
-            source_name = metadata.get('title') or os.path.basename(metadata.get('source', 'Unknown'))
+            # Create a detailed, human-readable citation label for the prompt
+            source_name = metadata.get('title') or os.path.basename(source)
             page_num = metadata.get('page_number')
             row_num = metadata.get('row_number')
             table_name = metadata.get('table_name')
@@ -44,25 +48,29 @@ def build_call_model_with_retriever(retriever):
             citation_label = source_name
             if table_name:
                 citation_label = f"Table: {table_name}"
-            elif page_num:
+            if page_num:
                 citation_label += f", Page {page_num}"
             elif row_num:
                 citation_label += f", Row {row_num}"
 
-            context_chunks.append(f"[Source {i + 1}: {citation_label}]: {doc.page_content}")
-            cited_docs_metadata.append(metadata)
+            # Use the clean label directly in the context provided to the LLM
+            context_chunks.append(f"Source [{citation_label}]:\n{doc.page_content}")
 
-        context_text = "\n\n".join(context_chunks)
+            # Collect unique metadata to return to the UI
+            if source and source not in unique_source_keys:
+                cited_docs_metadata.append(metadata)
+                unique_source_keys.add(source)
 
-        system_prompt = f"""You are RAGnetic, a professional AI assistant.
-            Your goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
-            
+        context_text = "\n\n---\n\n".join(context_chunks)
+
+        # Update the system prompt to match the new, cleaner citation format
+        system_prompt = f"""You are RAGnetic, a professional AI assistant. Your goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
+
             **Instructions:**
             1.  Synthesize an answer from the information given in the "SOURCES" section below.
-            2.  For every piece of information you use, you **must** cite the specific source by appending its reference tag, like `[filename.pdf, Page 2]`, to the end of the sentence.
+            2.  For every piece of information you use, you **must** cite the specific source by appending its reference tag, for example `[report.pdf, Page 2]` or `[Table: customers, Row 45]`, to the end of the sentence.
             3.  Do not refer to "the context provided" or "the information I have." Respond directly and authoritatively.
-            4.  If the sources do not contain an answer, state that you do not have that information. Do not use outside knowledge.
-            
+            4.  If the sources do not contain an answer, state that you do not have that information.
             
             **Instructions for Formatting:**
             - Use Markdown for all your responses.
