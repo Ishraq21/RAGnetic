@@ -15,6 +15,8 @@ from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+# Import tool creators
+from app.tools.sql_tool import create_sql_toolkit
 
 load_dotenv()
 app = FastAPI(title="RAGnetic API")
@@ -120,24 +122,35 @@ async def websocket_chat(ws: WebSocket):
         memory_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
         os.makedirs("memory", exist_ok=True)
 
+        # --- FIX: Assemble tools and config here, once per session ---
+        agent_config = load_agent_config(agent_name)
+        sql_tools = []
+        if "sql_toolkit" in agent_config.tools:
+            db_source = next((s for s in agent_config.sources if s.type == 'db'), None)
+            if db_source and db_source.db_connection:
+                sql_tools = create_sql_toolkit(db_source.db_connection)
+
+        # This config will be passed to every invocation
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "agent_name": agent_name,
+                "tools": sql_tools,
+            }
+        }
+
         async with AsyncSqliteSaver.from_conn_string(memory_path) as saver:
             langgraph_agent = workflow.compile(checkpointer=saver)
 
-            async def handle_query(q: str):
-                config = {"configurable": {"thread_id": thread_id}}
+            async def handle_query(q: str, cfg: dict):
                 final_state = None
-
-                # Pass an explicit dictionary as input
                 input_dict = {"messages": [HumanMessage(content=q)]}
 
-                async for event in langgraph_agent.astream_events(
-                        input_dict, config, version="v2"
-                ):
+                async for event in langgraph_agent.astream_events(input_dict, cfg, version="v2"):
                     kind = event["event"]
                     if kind == "on_chat_model_stream":
                         token = event["data"]["chunk"].content
-                        if token:
-                            await manager.send({"token": token}, ws)
+                        if token: await manager.send({"token": token}, ws)
                     elif kind == "on_graph_end":
                         final_state = event['data']['output']
 
@@ -146,11 +159,12 @@ async def websocket_chat(ws: WebSocket):
                     "done": True, "user_id": user_id, "thread_id": thread_id, "citations": citations
                 }, ws)
 
-            await handle_query(query)
+            await handle_query(query, config)
 
             while True:
                 data = await ws.receive_json()
-                await handle_query(data["query"])
+                await handle_query(data["query"], config)
+
     except WebSocketDisconnect:
         print(f"Client disconnected for thread_id: {thread_id}")
     except Exception as e:

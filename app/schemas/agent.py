@@ -27,4 +27,4 @@ class AgentConfig(BaseModel):
     description: Optional[str] = None
     persona_prompt: str
     sources: List[DataSource]
-    tools: Optional[List[str]] = []
+    tools: Optional[List[Literal['retriever', 'sql_toolkit']]] = ['retriever']
