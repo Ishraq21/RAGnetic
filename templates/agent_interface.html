@@ -1,209 +1,347 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>RAGnetic Chat</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet" />
-  <style>
-    :root {
-      --background-color: #121212; --text-color: #e0e0e0; --card-background: #1e1e1e;
-      --button-background: #635DFF; --button-hover-background: #5141d4;
-      --border-color: #333333; --muted-text: #888888; --accent-color: #635DFF;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; padding: 0; background: var(--background-color); color: var(--text-color);
-      font-family: 'Inter', sans-serif; display: flex; flex-direction: column; height: 100vh;
-    }
-    #chat-container {
-      flex: 1; display: flex; flex-direction: column; max-width: 800px;
-      width: 100%; margin: 2rem auto; padding: 0 1rem;
-    }
-    header {
-      padding: 0.5rem 0; border-bottom: 1px solid var(--border-color); margin-bottom: 1rem;
-    }
-    #agent-select {
-      width: 100%; padding: 0.5rem; background: var(--card-background);
-      border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-color);
-    }
-    #messages {
-      flex: 1; overflow-y: auto; padding: 1rem 0.5rem; display: flex; flex-direction: column; gap: 1rem;
-    }
-    .message {
-      max-width: 85%; padding: 0.75rem 1rem; border-radius: 18px; line-height: 1.6;
-      word-wrap: break-word; position: relative; animation: fadeIn 0.5s ease-in-out;
-    }
-    .message.user {
-      align-self: flex-end; background: var(--accent-color); color: white; border-top-right-radius: 4px;
-    }
-    .message.agent {
-      align-self: flex-start; background: var(--card-background); border-top-left-radius: 4px;
-    }
-    .message.agent .content { padding-right: 30px; } /* Space for the copy button */
-    .message.agent h1, .message.agent h2, .message.agent h3 { margin-top: 0.5em; margin-bottom: 0.25em; }
-    .message.agent p:last-child { margin-bottom: 0; }
-    .message.agent ul, .message.agent ol { padding-inline-start: 20px; }
-    .message.agent code, .message.agent pre {
-      background: #0d0d0d; padding: 0.2em 0.4em; border-radius: 4px; font-size: 0.9em;
-    }
-    .message.agent pre { padding: 0.75em; overflow-x: auto; }
-    .message.agent a { color: var(--accent-color); text-decoration: none; }
-    .message.agent a:hover { text-decoration: underline; }
-    .copy-btn {
-      position: absolute; top: 8px; right: 8px; background: #333;
-      border: 1px solid var(--border-color); color: var(--muted-text); border-radius: 8px;
-      width: 32px; height: 32px; cursor: pointer; opacity: 0;
-      transition: opacity 0.2s, background-color 0.2s; display: flex; align-items: center; justify-content: center;
-    }
-    .message.agent:hover .copy-btn { opacity: 1; }
-    .copy-btn:hover { background: #444; color: var(--text-color); }
-    .copy-btn svg { width: 16px; height: 16px; }
+    <meta charset="UTF-8" />
+    <title>RAGnetic Chat</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet" />
+    <style>
+        :root {
+            --background-color: #121212; --text-color: #e0e0e0; --card-background: #1e1e1e;
+            --button-background: #635DFF; --button-hover-background: #5141d4;
+            --border-color: #333333; --muted-text: #888888; --accent-color: #635DFF;
+            --success-color: #28a745; --error-color: #dc3545;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; padding: 0; background: var(--background-color); color: var(--text-color);
+            font-family: 'Inter', sans-serif; display: flex; flex-direction: column; height: 100vh;
+        }
+        #chat-container {
+            flex: 1; display: flex; flex-direction: column; max-width: 800px;
+            width: 100%; margin: 2rem auto; padding: 0 1rem;
+        }
+        header {
+            display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border-color); margin-bottom: 1rem;
+        }
+        #agent-select { flex: 1; width: 100%; padding: 0.5rem; background: var(--card-background); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-color); }
+        #new-chat-btn {
+            background: var(--card-background); border: 1px solid var(--border-color); color: var(--text-color);
+            border-radius: 8px; cursor: pointer; height: 40px; display: flex;
+            align-items: center; justify-content: center; transition: background-color 0.2s;
+            width: auto; padding: 0 1rem; font-weight: 500;
+        }
+        #new-chat-btn:hover { background: var(--border-color); }
 
-    #input-form { display: flex; align-items: center; gap: 0.5rem; background: var(--card-background); padding: 0.5rem; border-radius: 12px; margin-top: 1rem; }
-    #query-input { flex: 1; padding: 0.75rem; background: transparent; border: none; outline: none; color: var(--text-color); font-size: 1em; }
-    #send-btn { background: var(--button-background); border: none; border-radius: 8px; color: white; cursor: pointer; font-weight: bold; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s; }
-    #send-btn:disabled { background: var(--border-color); cursor: not-allowed; }
-    #send-btn:not(:disabled):hover { background: var(--button-hover-background); }
-    #send-btn svg { width: 20px; height: 20px; }
-    #typing-indicator { display: flex; align-items: center; gap: 5px; padding: 0.5rem; opacity: 0; transition: opacity 0.3s; }
-    #typing-indicator .dot { width: 8px; height: 8px; background-color: var(--muted-text); border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
-    #typing-indicator .dot:nth-child(1) { animation-delay: -0.32s; }
-    #typing-indicator .dot:nth-child(2) { animation-delay: -0.16s; }
-    @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1.0); } }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-  </style>
+        #messages {
+            flex: 1; overflow-y: auto; padding: 1rem 0.5rem; display: flex; flex-direction: column; gap: 1rem;
+        }
+        .message {
+            max-width: 85%; padding: 0.75rem 1rem; border-radius: 18px; line-height: 1.6;
+            word-wrap: break-word; position: relative; animation: fadeIn 0.5s ease-in-out;
+        }
+        .message.user { align-self: flex-end; background: var(--accent-color); color: white; border-top-right-radius: 4px; }
+        .message.agent { align-self: flex-start; background: var(--card-background); border-top-left-radius: 4px; }
+        .message.agent .content { padding-right: 30px; }
+        .message.agent p:last-child { margin-bottom: 0; }
+        .message.agent pre { background: #0d0d0d; padding: 0.75em; border-radius: 4px; overflow-x: auto; }
+
+        .copy-btn {
+            position: absolute; top: 8px; right: 8px; background: #333; border: 1px solid var(--border-color); color: var(--muted-text);
+            border-radius: 8px; width: 32px; height: 32px; cursor: pointer; opacity: 0; transition: opacity 0.2s, background-color 0.2s;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .message.agent:hover .copy-btn { opacity: 1; }
+        .copy-btn:hover { background: #444; color: var(--text-color); }
+
+        #input-form-container { margin-top: auto; padding-top: 1rem; }
+        #example-prompts { text-align: center; margin-bottom: 1rem; }
+        .prompt-card { display: inline-block; background: var(--card-background); padding: 0.75rem 1rem; border-radius: 12px; margin: 4px; cursor: pointer; border: 1px solid var(--border-color); transition: background-color 0.2s; font-size: 0.9em; }
+        .prompt-card:hover { background-color: #2a2a2a; }
+
+        #input-form { display: flex; align-items: flex-end; gap: 0.5rem; background: var(--card-background); padding: 0.5rem; border-radius: 12px; }
+        #query-input {
+            flex: 1; padding: 0.75rem; background: transparent; border: none; outline: none; color: var(--text-color);
+            font-size: 1em; font-family: 'Inter', sans-serif; resize: none; line-height: 1.5;
+        }
+        #send-btn {
+            background: var(--button-background); border: none; border-radius: 8px; color: white; cursor: pointer; font-weight: bold; width: 44px; height: 44px; display: flex;
+            align-items: center; justify-content: center; transition: background-color 0.2s;
+        }
+        #send-btn:disabled { background: var(--border-color); cursor: not-allowed; }
+
+        #typing-indicator { display: flex; align-items: center; gap: 5px; padding: 0.5rem; opacity: 0; transition: opacity 0.3s; height: 26px; }
+        #typing-indicator .dot { width: 8px; height: 8px; background-color: var(--muted-text); border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
+        #typing-indicator .dot:nth-child(1) { animation-delay: -0.32s; }
+        #typing-indicator .dot:nth-child(2) { animation-delay: -0.16s; }
+
+        #toast-notification {
+            position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: var(--card-background);
+            padding: 1rem 1.5rem; border-radius: 8px; border: 1px solid var(--border-color);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 1000; display: none;
+            border-left: 4px solid var(--error-color);
+        }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
 </head>
 <body>
-  <div id="chat-container">
-    <header>
-      <select id="agent-select" name="agent">
-        {% for a in agents %}
-          <option value="{{ a }}" {% if a == agent %}selected{% endif %}>{{ a }}</option>
-        {% endfor %}
-      </select>
-    </header>
+    <div id="toast-notification"></div>
+    <div id="chat-container">
+        <header>
+            <select id="agent-select" name="agent">
+                {% for a in agents %}
+                <option value="{{ a }}" {% if a == agent %}selected{% endif %}>{{ a }}</option>
+                {% endfor %}
+            </select>
+            <button id="new-chat-btn" title="New Chat">New Chat</button>
+        </header>
 
-    <div id="messages"></div>
+        <div id="messages"></div>
 
-    <div id="typing-indicator">
-      <div class="dot"></div>
-      <div class="dot"></div>
-      <div class="dot"></div>
+        <div id="input-form-container">
+            <div id="typing-indicator">
+                <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+            </div>
+            <div id="example-prompts">
+                {% for prompt in example_prompts %}
+                    <div class="prompt-card">{{ prompt }}</div>
+                {% endfor %}
+            </div>
+            <form id="input-form" onsubmit="sendMessage(event)">
+                <textarea name="query" id="query-input" placeholder="Ask RAGnetic…" rows="1"></textarea>
+                <button type="submit" id="send-btn" disabled>
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" /></svg>
+                </button>
+            </form>
+        </div>
     </div>
 
-    <form id="input-form" onsubmit="return sendMessage(event)">
-      <input type="text" name="query" id="query-input" autocomplete="off" placeholder="Ask RAGnetic…" />
-      <button type="submit" id="send-btn" disabled>
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" /></svg>
-      </button>
-    </form>
-  </div>
+    <script>
+        const agentSelect = document.getElementById('agent-select');
+        const messagesDiv = document.getElementById('messages');
+        const inputField = document.getElementById('query-input');
+        const sendButton = document.getElementById('send-btn');
+        const typingIndicator = document.getElementById('typing-indicator');
+        const newChatButton = document.getElementById('new-chat-btn');
+        const examplePromptsContainer = document.getElementById('example-prompts');
+        const toastNotification = document.getElementById('toast-notification');
 
-  <script>
-    const agentSelect = document.getElementById('agent-select');
-    const messagesDiv = document.getElementById('messages');
-    const inputField = document.getElementById('query-input');
-    const sendButton = document.getElementById('send-btn');
-    const typingIndicator = document.getElementById('typing-indicator');
+        let agent, user_id, thread_id, socket;
+        let isFirstMessage = true;
+        const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+        const svgs = {
+            copy: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M7.5 3a.75.75 0 00-.75.75v13.5a.75.75 0 00.75.75h9a.75.75 0 00.75-.75V3.75A.75.75 0 0016.5 3h-9zM8.25 4.5h7.5v12h-7.5V4.5z" /><path d="M6 1.5a.75.75 0 00-.75.75V16.5a.75.75 0 00.75.75h.008a.75.75 0 00.75-.75V2.25A.75.75 0 006.008 1.5H6z" /></svg>`,
+            copied: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clip-rule="evenodd" /></svg>`
+        };
 
-    let agent = agentSelect.value;
-    let user_id = "", thread_id = "";
-    let socket = null;
-
-    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-
-    function openWebSocket() {
-      socket = new WebSocket(`${protocol}://${location.host}/ws`);
-      socket.onopen = () => sendButton.disabled = false;
-      socket.onerror = () => alert("Connection error. Please refresh the page.");
-      socket.onclose = () => {
-        sendButton.disabled = true;
-        setTimeout(openWebSocket, 2000);
-      };
-      socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.token) {
-          typingIndicator.style.opacity = '0';
-          appendAgentToken(data.token);
+        function showToast(message, isError = true) {
+            toastNotification.textContent = message;
+            toastNotification.style.borderColor = isError ? "var(--error-color)" : "var(--success-color)";
+            toastNotification.style.display = 'block';
+            setTimeout(() => { toastNotification.style.display = 'none'; }, 4000);
         }
-        if (data.done) {
-          typingIndicator.style.opacity = '0';
-          user_id = data.user_id;
-          thread_id = data.thread_id;
-          // --- REMOVED: The call to appendCitations is now gone ---
-        }
-      };
-    }
 
-    function sendMessage(event) {
-      event.preventDefault();
-      const query = inputField.value.trim();
-      if (!query || socket.readyState !== WebSocket.OPEN) return;
-      appendUserMessage(query);
-      typingIndicator.style.opacity = '1';
-      socket.send(JSON.stringify({ agent, user_id, thread_id, query }));
-      inputField.value = '';
-      inputField.focus();
-    }
+        // --- MODIFIED: WebSocket logic now handles one thread per connection ---
+        function openWebSocket() {
+            if (socket) {
+                socket.close(1000, "Starting new session"); // Close existing socket if any
+            }
+            socket = new WebSocket(`${protocol}://${location.host}/ws`);
+            isFirstMessage = true; // Reset for the new connection
 
-    function appendUserMessage(text) {
-      const msg = document.createElement('div');
-      msg.className = 'message user';
-      msg.textContent = text;
-      messagesDiv.appendChild(msg);
-      messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    }
-
-    function appendAgentToken(token) {
-        let lastMessage = messagesDiv.lastElementChild;
-        if (!lastMessage || !lastMessage.classList.contains('agent')) {
-            const bubble = document.createElement('div');
-            bubble.className = 'message agent';
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'content';
-            bubble.appendChild(contentDiv);
-            const copyBtn = document.createElement('button');
-            copyBtn.className = 'copy-btn';
-            copyBtn.innerHTML = copyIconSVG;
-            copyBtn.onclick = (e) => {
-                const btn = e.currentTarget;
-                const rawMarkdown = btn.closest('.message.agent').dataset.rawMarkdown;
-                if (rawMarkdown) {
-                    navigator.clipboard.writeText(rawMarkdown).then(() => {
-                        btn.innerHTML = copiedIconSVG;
-                        setTimeout(() => { btn.innerHTML = copyIconSVG; }, 2000);
-                    });
+            socket.onopen = () => sendButton.disabled = false;
+            socket.onerror = () => showToast("Connection error.");
+            socket.onclose = (event) => {
+                sendButton.disabled = true;
+                console.log("WebSocket closed.", event.reason);
+            };
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.token) {
+                    typingIndicator.style.opacity = '0';
+                    appendAgentToken(data.token);
+                }
+                if (data.done) {
+                    typingIndicator.style.opacity = '0';
+                    // Persist the session IDs received from the first message
+                    if (isFirstMessage) {
+                        user_id = data.user_id;
+                        thread_id = data.thread_id;
+                        localStorage.setItem('ragnetic_user_id', user_id);
+                        localStorage.setItem('ragnetic_thread_id', thread_id);
+                        localStorage.setItem('ragnetic_agent', agent);
+                        isFirstMessage = false;
+                    }
                 }
             };
-            bubble.appendChild(copyBtn);
-            bubble.dataset.rawMarkdown = '';
-            messagesDiv.appendChild(bubble);
-            lastMessage = bubble;
         }
-        lastMessage.dataset.rawMarkdown += token;
-        const contentDiv = lastMessage.querySelector('.content');
-        if (contentDiv) {
-            contentDiv.innerHTML = marked.parse(lastMessage.dataset.rawMarkdown);
+
+        function sendMessage(event) {
+            if (event) event.preventDefault();
+            const query = inputField.value.trim();
+            if (!query || !socket || socket.readyState !== WebSocket.OPEN) {
+                // If socket is closed or not ready, try to reopen and send
+                openWebSocket();
+                setTimeout(() => sendMessage(), 500);
+                return;
+            }
+
+            appendUserMessage(query);
+            typingIndicator.style.opacity = '1';
+            examplePromptsContainer.style.display = 'none';
+
+            // The first message sends the full context, subsequent messages only send the query
+            const payload = isFirstMessage ? { agent, user_id, thread_id, query } : { query };
+            socket.send(JSON.stringify(payload));
+
+            inputField.value = '';
+            inputField.style.height = 'auto';
+            inputField.focus();
         }
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    }
 
-    // --- REMOVED: The appendCitations function is now gone ---
+        function appendUserMessage(text) {
+            const msg = document.createElement('div');
+            msg.className = 'message user';
+            msg.textContent = text;
+            messagesDiv.appendChild(msg);
+            setTimeout(() => { messagesDiv.scrollTop = messagesDiv.scrollHeight; }, 0);
+        }
 
-    agentSelect.addEventListener('change', () => {
-      agent = agentSelect.value;
-      user_id = "";
-      thread_id = "";
-      messagesDiv.innerHTML = "";
-    });
+        function appendAgentToken(token) {
+            let lastMessage = messagesDiv.lastElementChild;
+            if (!lastMessage || !lastMessage.classList.contains('agent')) {
+                const bubble = document.createElement('div');
+                bubble.className = 'message agent';
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'content';
+                bubble.appendChild(contentDiv);
 
-    const copyIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 3a.75.75 0 00-.75.75v13.5a.75.75 0 00.75.75h9a.75.75 0 00.75-.75V3.75A.75.75 0 0016.5 3h-9zM8.25 4.5h7.5v12h-7.5V4.5z" /><path d="M6 1.5a.75.75 0 00-.75.75V16.5a.75.75 0 00.75.75h.008a.75.75 0 00.75-.75V2.25A.75.75 0 006.008 1.5H6z" /></svg>`;
-    const copiedIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clip-rule="evenodd" /></svg>`;
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'copy-btn';
+                copyBtn.innerHTML = svgs.copy;
+                copyBtn.onclick = (e) => {
+                    const btn = e.currentTarget;
+                    const rawMarkdown = btn.closest('.message.agent').dataset.rawMarkdown;
+                    if (rawMarkdown) {
+                        navigator.clipboard.writeText(rawMarkdown).then(() => {
+                            btn.innerHTML = svgs.copied;
+                            setTimeout(() => { btn.innerHTML = svgs.copy; }, 2000);
+                        });
+                    }
+                };
+                bubble.appendChild(copyBtn);
 
-    openWebSocket();
-  </script>
+                bubble.dataset.rawMarkdown = '';
+                messagesDiv.appendChild(bubble);
+                lastMessage = bubble;
+            }
+            lastMessage.dataset.rawMarkdown += token;
+            const contentDiv = lastMessage.querySelector('.content');
+            if (contentDiv) {
+                contentDiv.innerHTML = marked.parse(lastMessage.dataset.rawMarkdown);
+            }
+            setTimeout(() => { messagesDiv.scrollTop = messagesDiv.scrollHeight; }, 0);
+        }
+
+        async function loadHistory(agentName, threadId, userId) {
+            try {
+                const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${userId}`);
+                if (!response.ok) {
+                    showToast(`Could not load session (status: ${response.status}).`, true);
+                    clearSession(false); // Don't reopen socket, it will be opened by DOMContentLoaded
+                    return;
+                }
+                const history = await response.json();
+                messagesDiv.innerHTML = '';
+                history.forEach(msg => {
+                    if (msg.type === 'human') appendUserMessage(msg.content);
+                    else if (msg.type === 'ai') appendAgentToken(msg.content);
+                });
+                examplePromptsContainer.style.display = 'none';
+                setTimeout(() => { messagesDiv.scrollTop = messagesDiv.scrollHeight; }, 0);
+            } catch (error) {
+                console.error("Failed to fetch history:", error);
+                showToast("Could not connect to server to load session.", true);
+            }
+        }
+
+        async function loadExamplePrompts(agentName) {
+            try {
+                const response = await fetch(`/agents/${agentName}/prompts`);
+                if (!response.ok) throw new Error("Failed to fetch prompts");
+                const prompts = await response.json();
+                examplePromptsContainer.innerHTML = '';
+                prompts.forEach(p => {
+                    const card = document.createElement('div');
+                    card.className = 'prompt-card';
+                    card.textContent = p;
+                    examplePromptsContainer.appendChild(card);
+                });
+            } catch (error) {
+                console.error("Failed to load example prompts:", error);
+                examplePromptsContainer.innerHTML = '';
+            }
+        }
+
+        function startNewSession() {
+            localStorage.removeItem('ragnetic_user_id');
+            localStorage.removeItem('ragnetic_thread_id');
+            localStorage.removeItem('ragnetic_agent');
+            user_id = "";
+            thread_id = "";
+            messagesDiv.innerHTML = "";
+            loadExamplePrompts(agentSelect.value);
+            examplePromptsContainer.style.display = 'block';
+            openWebSocket(); // Explicitly open a new socket for the new session
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const savedAgent = localStorage.getItem('ragnetic_agent');
+            const savedThreadId = localStorage.getItem('ragnetic_thread_id');
+            const savedUserId = localStorage.getItem('ragnetic_user_id');
+
+            if (savedAgent) agentSelect.value = savedAgent;
+            agent = agentSelect.value;
+
+            if (savedAgent && savedThreadId && savedUserId) {
+                user_id = savedUserId;
+                thread_id = savedThreadId;
+                loadHistory(savedAgent, savedThreadId, savedUserId);
+            } else {
+                loadExamplePrompts(agent);
+            }
+            openWebSocket();
+        });
+
+        newChatButton.addEventListener('click', startNewSession);
+
+        agentSelect.addEventListener('change', () => {
+            agent = agentSelect.value;
+            startNewSession();
+        });
+
+        inputField.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        inputField.addEventListener('input', () => {
+            inputField.style.height = 'auto';
+            inputField.style.height = `${inputField.scrollHeight}px`;
+        });
+
+        examplePromptsContainer.addEventListener('click', (e) => {
+            if (e.target && e.target.classList.contains('prompt-card')) {
+                inputField.value = e.target.textContent;
+                sendMessage();
+            }
+        });
+    </script>
 </body>
 </html>

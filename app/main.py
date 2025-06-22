@@ -1,4 +1,7 @@
 import os
+import glob
+import pickle
+import aiosqlite
 from uuid import uuid4
 from typing import Optional, List, Dict
 
@@ -8,10 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 from app.schemas.agent import AgentConfig
-from app.agents.config_manager import save_agent_config
+from app.agents.config_manager import save_agent_config, load_agent_config
 from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 # Load environment variables from .env file
@@ -20,7 +23,6 @@ load_dotenv()
 # Initialize FastAPI app
 app = FastAPI(title="RAGnetic API")
 
-# This is critical for allowing browser-based clients to interact with the API.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,7 +31,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# It's conventional to keep HTML templates in a 'templates' directory.
 templates = Jinja2Templates(directory="templates")
 
 
@@ -49,32 +50,85 @@ class ConnectionManager:
     async def send(self, msg: Dict, ws: WebSocket):
         await ws.send_json(msg)
 
+
 manager = ConnectionManager()
 
 
 @app.get("/")
 async def home(request: Request):
-    """Serves the main chat interface."""
     agents_dir = "agents_data"
     if not os.path.exists(agents_dir):
         os.makedirs(agents_dir)
     agents = [f.split(".")[0] for f in os.listdir(agents_dir) if f.endswith(".json")]
     default_agent = agents[0] if agents else ""
+
+    example_prompts = []
+    if default_agent:
+        try:
+            agent_config = load_agent_config(default_agent)
+            example_prompts = agent_config.example_prompts
+        except Exception as e:
+            print(f"Could not load example prompts for {default_agent}: {e}")
+
     return templates.TemplateResponse(
         "agent_interface.html",
         {
             "request": request,
             "agents": agents,
             "agent": default_agent,
-            "user_id": "",
-            "thread_id": "",
+            "example_prompts": example_prompts,
         },
     )
 
 
+@app.get("/agents/{agent_name}/prompts")
+async def get_example_prompts(agent_name: str):
+    try:
+        config = load_agent_config(agent_name)
+        return config.example_prompts
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Agent configuration not found.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- THIS IS THE CORRECTED FUNCTION ---
+@app.get("/history/{thread_id}")
+async def get_history(thread_id: str, agent_name: str, user_id: str):
+    """Retrieves message history from the LangGraph checkpointer database."""
+    db_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
+
+    if not os.path.exists(db_path):
+        raise HTTPException(status_code=404, detail="History not found.")
+
+    try:
+        async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
+            config = {"configurable": {"thread_id": thread_id}}
+
+            # FIX: Use the async version of the method, `aget_tuple`
+            checkpoint_tuple = await saver.aget_tuple(config)
+
+            if not checkpoint_tuple:
+                return []
+
+            messages = checkpoint_tuple.checkpoint["channel_values"]["messages"]
+
+            history = []
+            for msg in messages:
+                if isinstance(msg, HumanMessage):
+                    history.append({"type": "human", "content": msg.content})
+                elif isinstance(msg, AIMessage):
+                    history.append({"type": "ai", "content": msg.content})
+
+            return history
+
+    except Exception as e:
+        print(f"Error loading history from {db_path}: {e}")
+        raise HTTPException(status_code=500, detail="Could not load chat history.")
+
+
 @app.post("/create-agent")
 def create_agent(config: AgentConfig, openai_api_key: Optional[str] = None):
-    """Creates a new agent and embeds its data sources."""
     try:
         api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -89,66 +143,55 @@ def create_agent(config: AgentConfig, openai_api_key: Optional[str] = None):
 
 @app.websocket("/ws")
 async def websocket_chat(ws: WebSocket):
-    """Handles the real-time, stateful chat conversations using WebSockets."""
     await manager.connect(ws)
+    thread_id = "uninitialized"
     try:
-        session_user_id = None
-        session_thread_id = None
+        initial_data = await ws.receive_json()
+        agent_name = initial_data["agent"]
+        query = initial_data["query"]
+        user_id = initial_data.get("user_id") or f"user-{uuid4().hex[:8]}"
+        thread_id = initial_data.get("thread_id") or f"thread-{uuid4().hex[:8]}"
 
-        while True:
-            data = await ws.receive_json()
-            agent_name = data["agent"]
-            query = data["query"]
+        workflow = get_agent_workflow(agent_name)
+        memory_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
+        os.makedirs("memory", exist_ok=True)
 
-            user_id = data.get("user_id") or session_user_id or f"user-{uuid4().hex[:8]}"
-            thread_id = data.get("thread_id") or session_thread_id or f"thread-{uuid4().hex[:8]}"
+        async with AsyncSqliteSaver.from_conn_string(memory_path) as saver:
+            langgraph_agent = workflow.compile(checkpointer=saver)
 
-            session_user_id = user_id
-            session_thread_id = thread_id
-
-            workflow = get_agent_workflow(agent_name)
-            memory_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
-            os.makedirs("memory", exist_ok=True)
-
-            async with AsyncSqliteSaver.from_conn_string(memory_path) as saver:
-                langgraph_agent = workflow.compile(checkpointer=saver)
-
+            async def handle_query(q: str):
                 config = {
                     "configurable": {
-                        "user_id": user_id,
                         "thread_id": thread_id,
-                        "new_message": HumanMessage(content=query),
+                        "new_message": HumanMessage(content=q)
                     }
                 }
-
-                # --- Refinement: Stream events and capture the final state for citations ---
                 final_state = None
-                async for event in langgraph_agent.astream_events({}, config=config, version="v2"):
+                async for event in langgraph_agent.astream_events({}, config, version="v2"):
                     kind = event["event"]
-                    # Stream the LLM tokens for the text response
                     if kind == "on_chat_model_stream":
                         token = event["data"]["chunk"].content
                         if token:
                             await manager.send({"token": token}, ws)
-                    # The 'on_graph_end' event contains the final state, including our citations
                     elif kind == "on_graph_end":
-                        final_state = event["data"]["output"]
+                        final_state = event['data']['output']
 
-                # Extract the citations list from the final graph state
                 citations = final_state.get("citations", []) if final_state else []
 
-                # Signal completion and send the citations list to the frontend
                 await manager.send({
-                    "done": True,
-                    "user_id": user_id,
-                    "thread_id": thread_id,
-                    "citations": citations
+                    "done": True, "user_id": user_id, "thread_id": thread_id, "citations": citations
                 }, ws)
 
+            await handle_query(query)
+
+            while True:
+                data = await ws.receive_json()
+                await handle_query(data["query"])
+
     except WebSocketDisconnect:
-        print(f"Client disconnected.")
+        print(f"Client disconnected for thread_id: {thread_id}")
     except Exception as e:
-        print(f"WebSocket Error: {e}")
+        print(f"WebSocket Error for thread_id {thread_id}: {e}")
         await manager.send({"error": str(e)}, ws)
     finally:
         manager.disconnect(ws)
