@@ -13,16 +13,14 @@ class DataSource(BaseModel):
     file_types: Optional[List[str]] = None  # e.g., ["document", "sheet", "pdf"]
 
     # Web Crawler Field
-    max_depth: Optional[int] = 2  # Defaults to 2 levels deep
+    max_depth: Optional[int] = 2
 
     # Fields for API Sources
     headers: Optional[Dict[str, str]] = None
-    params: Optional[Dict[str, Any]] = None      # For GET request query strings
-    method: Optional[Literal['GET', 'POST']] = 'GET' # Add method, default to GET
-    payload: Optional[Dict[str, Any]] = None     # Add payload for POST requests
-    json_pointer: Optional[str] = None           # Pointer to a list of records in the JSON
-
-
+    params: Optional[Dict[str, Any]] = None
+    method: Optional[Literal['GET', 'POST']] = 'GET'
+    payload: Optional[Dict[str, Any]] = None
+    json_pointer: Optional[str] = None
 
 class AgentConfig(BaseModel):
     name: str

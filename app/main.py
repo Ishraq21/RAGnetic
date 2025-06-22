@@ -1,5 +1,4 @@
 import os
-import glob
 import pickle
 import aiosqlite
 from uuid import uuid4
@@ -17,10 +16,7 @@ from app.agents.agent_graph import get_agent_workflow
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-# Load environment variables from .env file
 load_dotenv()
-
-# Initialize FastAPI app
 app = FastAPI(title="RAGnetic API")
 
 app.add_middleware(
@@ -61,67 +57,35 @@ async def home(request: Request):
         os.makedirs(agents_dir)
     agents = [f.split(".")[0] for f in os.listdir(agents_dir) if f.endswith(".json")]
     default_agent = agents[0] if agents else ""
-
-    example_prompts = []
-    if default_agent:
-        try:
-            agent_config = load_agent_config(default_agent)
-            example_prompts = agent_config.example_prompts
-        except Exception as e:
-            print(f"Could not load example prompts for {default_agent}: {e}")
-
     return templates.TemplateResponse(
         "agent_interface.html",
         {
             "request": request,
             "agents": agents,
             "agent": default_agent,
-            "example_prompts": example_prompts,
         },
     )
 
 
-@app.get("/agents/{agent_name}/prompts")
-async def get_example_prompts(agent_name: str):
-    try:
-        config = load_agent_config(agent_name)
-        return config.example_prompts
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Agent configuration not found.")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# --- THIS IS THE CORRECTED FUNCTION ---
 @app.get("/history/{thread_id}")
 async def get_history(thread_id: str, agent_name: str, user_id: str):
-    """Retrieves message history from the LangGraph checkpointer database."""
     db_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
-
     if not os.path.exists(db_path):
         raise HTTPException(status_code=404, detail="History not found.")
-
     try:
         async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
             config = {"configurable": {"thread_id": thread_id}}
-
-            # FIX: Use the async version of the method, `aget_tuple`
             checkpoint_tuple = await saver.aget_tuple(config)
-
             if not checkpoint_tuple:
                 return []
-
             messages = checkpoint_tuple.checkpoint["channel_values"]["messages"]
-
             history = []
             for msg in messages:
                 if isinstance(msg, HumanMessage):
                     history.append({"type": "human", "content": msg.content})
                 elif isinstance(msg, AIMessage):
                     history.append({"type": "ai", "content": msg.content})
-
             return history
-
     except Exception as e:
         print(f"Error loading history from {db_path}: {e}")
         raise HTTPException(status_code=500, detail="Could not load chat history.")
@@ -160,14 +124,15 @@ async def websocket_chat(ws: WebSocket):
             langgraph_agent = workflow.compile(checkpointer=saver)
 
             async def handle_query(q: str):
-                config = {
-                    "configurable": {
-                        "thread_id": thread_id,
-                        "new_message": HumanMessage(content=q)
-                    }
-                }
+                config = {"configurable": {"thread_id": thread_id}}
                 final_state = None
-                async for event in langgraph_agent.astream_events({}, config, version="v2"):
+
+                # Pass an explicit dictionary as input
+                input_dict = {"messages": [HumanMessage(content=q)]}
+
+                async for event in langgraph_agent.astream_events(
+                        input_dict, config, version="v2"
+                ):
                     kind = event["event"]
                     if kind == "on_chat_model_stream":
                         token = event["data"]["chunk"].content
@@ -177,7 +142,6 @@ async def websocket_chat(ws: WebSocket):
                         final_state = event['data']['output']
 
                 citations = final_state.get("citations", []) if final_state else []
-
                 await manager.send({
                     "done": True, "user_id": user_id, "thread_id": thread_id, "citations": citations
                 }, ws)
@@ -187,7 +151,6 @@ async def websocket_chat(ws: WebSocket):
             while True:
                 data = await ws.receive_json()
                 await handle_query(data["query"])
-
     except WebSocketDisconnect:
         print(f"Client disconnected for thread_id: {thread_id}")
     except Exception as e:

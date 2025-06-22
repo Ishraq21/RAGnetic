@@ -13,7 +13,7 @@ def build_agent(name: str) -> RetrievalQA:
         allow_dangerous_deserialization=True
     )
     retriever = vectordb.as_retriever()
-    llm = ChatOpenAI(temperature=0, model="gpt-4o")
+    llm = ChatOpenAI(temperature=0, model="gpt-4o-mini")
 
     prompt = PromptTemplate(
         input_variables=["context", "question"],
