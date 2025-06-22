@@ -17,9 +17,12 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 # Import tool creators
 from app.tools.sql_tool import create_sql_toolkit
-
+from fastapi.staticfiles import StaticFiles
 load_dotenv()
 app = FastAPI(title="RAGnetic API")
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 
 app.add_middleware(
     CORSMiddleware,

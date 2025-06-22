@@ -6,134 +6,8 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet" />
-    <style>
-        :root {
-            --background-color: #121212; --text-color: #e0e0e0; --card-background: #1e1e1e;
-            --button-background: #635DFF; --button-hover-background: #5141d4;
-            --border-color: #333333; --muted-text: #888888; --accent-color: #635DFF;
-            --success-color: #28a745; --error-color: #dc3545;
-        }
-        * { box-sizing: border-box; }
-        body {
-            margin: 0; padding: 0; background: var(--background-color); color: var(--text-color);
-            font-family: 'Inter', sans-serif; display: flex; flex-direction: column; height: 100vh;
-        }
-        #chat-container {
-            flex: 1; display: flex; flex-direction: column; max-width: 800px;
-            width: 100%; margin: 2rem auto; padding: 0 1rem;
-        }
-        header {
-            display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0;
-            border-bottom: 1px solid var(--border-color); margin-bottom: 1rem;
-        }
-        #agent-select { flex: 1; width: 100%; padding: 0.5rem; background: var(--card-background); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-color); }
-        #new-chat-btn {
-            background: var(--card-background); border: 1px solid var(--border-color); color: var(--text-color);
-            border-radius: 8px; cursor: pointer; height: 40px; display: flex;
-            align-items: center; justify-content: center; transition: background-color 0.2s;
-            width: auto; padding: 0 1rem; font-weight: 500;
-        }
-        #new-chat-btn:hover { background: var(--border-color); }
-
-        #messages {
-            flex: 1; overflow-y: auto; padding: 1rem 0.5rem; display: flex; flex-direction: column; gap: 1rem;
-            scroll-behavior: smooth;
-        }
-        .message {
-            max-width: 85%; padding: 0.75rem 1rem; border-radius: 18px; line-height: 1.6;
-            word-wrap: break-word; position: relative; animation: fadeInMessage 0.5s ease-in-out;
-        }
-        .message.user { align-self: flex-end; background: var(--accent-color); color: white; border-top-right-radius: 4px; }
-        .message.agent { align-self: flex-start; background: var(--card-background); border-top-left-radius: 4px; }
-        .message.agent .content { padding-right: 30px; }
-        .message.agent p:last-child { margin-bottom: 0; }
-        .message.agent pre { background: #0d0d0d; padding: 0.75em; border-radius: 4px; overflow-x: auto; }
-
-        .copy-btn {
-            position: absolute; top: 8px; right: 8px; background: #333; border: 1px solid var(--border-color); color: var(--muted-text);
-            border-radius: 8px; width: 32px; height: 32px; cursor: pointer; opacity: 0; transition: opacity 0.2s, background-color 0.2s;
-            display: flex; align-items: center; justify-content: center;
-        }
-        .message.agent:hover .copy-btn { opacity: 1; }
-        .copy-btn:hover { background: #444; color: var(--text-color); }
-
-                .message.agent table {
-            display: block;
-            overflow-x: auto;
-            white-space: nowrap;
-            border-collapse: collapse;
-            width: 100%;
-            margin: 1em 0;
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-        }
-        .message.agent th, .message.agent td {
-            padding: 0.75rem 1rem;
-            border-bottom: 1px solid var(--border-color);
-            text-align: left;
-            vertical-align: top;
-        }
-        .message.agent th {
-            background-color: #2a2a2a;
-            font-weight: 600;
-        }
-        .message.agent tr:last-child td {
-            border-bottom: none;
-        }
-
-        #input-form-container { margin-top: auto; padding-top: 1rem; }
-
-        #input-form { display: flex; align-items: flex-end; gap: 0.5rem; background: var(--card-background); padding: 0.5rem; border-radius: 12px; }
-        #query-input {
-            flex: 1; padding: 0.75rem; background: transparent; border: none; outline: none; color: var(--text-color);
-            font-size: 1em; font-family: 'Inter', sans-serif; resize: none; line-height: 1.5;
-        }
-        #send-btn {
-            background: var(--button-background); border: none; border-radius: 8px; color: white; cursor: pointer; font-weight: bold; width: 44px; height: 44px; display: flex;
-            align-items: center; justify-content: center; transition: background-color 0.2s;
-        }
-        #send-btn:disabled { background: var(--border-color); cursor: not-allowed; }
-
-        #typing-indicator { display: flex; align-items: center; gap: 5px; padding: 0.5rem; opacity: 0; transition: opacity 0.3s; height: 26px; }
-        #typing-indicator .dot { width: 8px; height: 8px; background-color: var(--muted-text); border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
-        #typing-indicator .dot:nth-child(1) { animation-delay: -0.32s; }
-        #typing-indicator .dot:nth-child(2) { animation-delay: -0.16s; }
-
-        #toast-notification {
-            position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: var(--card-background);
-            padding: 1rem 1.5rem; border-radius: 8px; border: 1px solid var(--border-color);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 1000; display: none;
-            border-left: 4px solid var(--error-color);
-        }
-
-        /* --- FINAL CORRECTED MODAL STYLES --- */
-        #confirmation-modal {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background-color: rgba(0,0,0,0.6);
-            display: none; /* Changed by JS */
-            align-items: center; /* This vertically centers the modal */
-            justify-content: center;
-            z-index: 2000;
-        }
-        .modal-content {
-            background: var(--card-background); padding: 2rem; border-radius: 12px;
-            border: 1px solid var(--border-color); text-align: center;
-            max-width: 400px; box-shadow: 0 5px 15px rgba(0,0,0,0.5);
-            animation: modal-fade-in 0.3s ease-out;
-        }
-        .modal-content p { margin: 0 0 1.5rem 0; font-size: 1.1em; line-height: 1.6; }
-        .modal-buttons { display: flex; gap: 1rem; justify-content: center; }
-        .modal-btn {
-            padding: 0.75rem 1.5rem; border-radius: 8px; border: none;
-            font-size: 1em; font-weight: 500; cursor: pointer;
-        }
-        .modal-btn.confirm { background-color: var(--error-color); color: white; }
-        .modal-btn.cancel { background-color: var(--border-color); color: var(--text-color); }
-
-        @keyframes fadeInMessage { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes modal-fade-in { from { opacity: 0; transform: translateY(-20px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
-    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ url_for('static', path='css/style.css') }}">
 </head>
 <body>
     <div id="toast-notification"></div>
@@ -158,10 +32,11 @@
             <button id="new-chat-btn" title="New Chat">New Chat</button>
         </header>
 
-        <div id="messages"></div>
+        <div id="messages">
+            </div>
 
         <div id="input-form-container">
-            <div id="typing-indicator">
+            <div id="typing-indicator" style="opacity: 0; display:none;">
                 <div class="dot"></div><div class="dot"></div><div class="dot"></div>
             </div>
             <form id="input-form" onsubmit="sendMessage(event)">
@@ -174,6 +49,7 @@
     </div>
 
     <script>
+        // All const declarations
         const agentSelect = document.getElementById('agent-select');
         const messagesDiv = document.getElementById('messages');
         const inputField = document.getElementById('query-input');
@@ -185,6 +61,7 @@
         const modalConfirmBtn = document.getElementById('modal-confirm-btn');
         const modalCancelBtn = document.getElementById('modal-cancel-btn');
 
+        // All let declarations
         let agent, user_id, thread_id, socket;
         let isFirstMessage = true;
         let confirmCallback = null;
@@ -205,6 +82,15 @@
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
+        function renderEmptyState() {
+            messagesDiv.innerHTML = `
+                <div id="empty-state">
+                    <h1>RAG<span>netic</span></h1>
+                    <p>Your on-premise AI assistant. Select an agent and ask a question to begin.</p>
+                </div>
+            `;
+        }
+
         function openWebSocket() {
             if (socket && socket.readyState !== WebSocket.CLOSED) {
                 socket.close(1000, "Starting new session");
@@ -221,11 +107,11 @@
             socket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.token) {
-                    typingIndicator.style.opacity = '0';
+                    typingIndicator.style.display = 'none';
                     appendAgentToken(data.token);
                 }
                 if (data.done) {
-                    typingIndicator.style.opacity = '0';
+                    typingIndicator.style.display = 'none';
                     if (isFirstMessage) {
                         user_id = data.user_id;
                         thread_id = data.thread_id;
@@ -237,6 +123,7 @@
                     const lastMessage = messagesDiv.lastElementChild;
                     if (lastMessage && lastMessage.classList.contains('agent')) {
                         lastMessage.dataset.streaming = 'false';
+                        renderCodeblocks(lastMessage);
                     }
                 }
             };
@@ -254,8 +141,13 @@
                 return;
             }
 
+            const emptyState = document.getElementById('empty-state');
+            if(emptyState) emptyState.remove();
+
             appendUserMessage(query);
+            typingIndicator.style.display = 'flex';
             typingIndicator.style.opacity = '1';
+            scrollToBottom();
 
             const payload = isFirstMessage ? { agent, user_id, thread_id, query } : { query };
             socket.send(JSON.stringify(payload));
@@ -300,9 +192,38 @@
             return bubble;
         }
 
+        function renderCodeblocks(scopeElement) {
+            scopeElement.querySelectorAll('pre > code').forEach((codeBlock) => {
+                const pre = codeBlock.parentElement;
+                if (pre.querySelector('.code-header')) return;
+
+                const lang = codeBlock.className.split('-')[1] || 'text';
+                const header = document.createElement('div');
+                header.className = 'code-header';
+
+                const langSpan = document.createElement('span');
+                langSpan.textContent = lang;
+
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'code-copy-btn';
+                copyBtn.textContent = 'Copy';
+                copyBtn.onclick = () => {
+                    navigator.clipboard.writeText(codeBlock.textContent).then(() => {
+                        copyBtn.textContent = 'Copied!';
+                        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+                    });
+                };
+
+                header.appendChild(langSpan);
+                header.appendChild(copyBtn);
+                pre.insertBefore(header, codeBlock);
+            });
+        }
+
         function appendAgentToken(token) {
             let lastMessage = messagesDiv.lastElementChild;
             if (!lastMessage || !lastMessage.classList.contains('agent') || lastMessage.dataset.streaming === 'false') {
+                typingIndicator.style.display = 'none';
                 lastMessage = createAgentMessageBubble();
                 lastMessage.dataset.streaming = 'true';
             }
@@ -310,6 +231,7 @@
             const contentDiv = lastMessage.querySelector('.content');
             if (contentDiv) {
                 contentDiv.innerHTML = marked.parse(lastMessage.dataset.rawMarkdown);
+                renderCodeblocks(contentDiv);
             }
             scrollToBottom();
         }
@@ -330,8 +252,10 @@
                     } else if (msg.type === 'ai') {
                         const agentMsgBubble = createAgentMessageBubble();
                         agentMsgBubble.dataset.rawMarkdown = msg.content;
-                        agentMsgBubble.querySelector('.content').innerHTML = marked.parse(msg.content);
+                        const contentDiv = agentMsgBubble.querySelector('.content');
+                        contentDiv.innerHTML = marked.parse(msg.content);
                         agentMsgBubble.dataset.streaming = 'false';
+                        renderCodeblocks(contentDiv);
                     }
                 });
                 setTimeout(() => {
@@ -344,7 +268,7 @@
         }
 
         function showConfirmationModal(onConfirm) {
-            if (messagesDiv.children.length === 0) {
+            if (messagesDiv.children.length === 0 || document.getElementById('empty-state')) {
                 onConfirm();
                 return;
             }
@@ -358,7 +282,7 @@
             localStorage.removeItem('ragnetic_agent');
             user_id = "";
             thread_id = "";
-            messagesDiv.innerHTML = "";
+            renderEmptyState();
             if (openConnection) {
                 openWebSocket();
             }
@@ -369,15 +293,13 @@
             const savedThreadId = localStorage.getItem('ragnetic_thread_id');
             const savedUserId = localStorage.getItem('ragnetic_user_id');
 
-            if (savedAgent) {
-                agentSelect.value = savedAgent;
-            }
+            if (savedAgent) agentSelect.value = savedAgent;
             agent = agentSelect.value;
 
             if (savedAgent && savedThreadId && savedUserId) {
-                user_id = savedUserId;
-                thread_id = savedThreadId;
                 loadHistory(savedAgent, savedThreadId, savedUserId);
+            } else {
+                renderEmptyState();
             }
 
             openWebSocket();
