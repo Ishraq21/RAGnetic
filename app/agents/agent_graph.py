@@ -68,9 +68,7 @@ def build_call_model_with_retriever(retriever):
 
             **Instructions:**
             1.  Synthesize an answer from the information given in the "SOURCES" section below.
-            2.  For every piece of information you use, you **must** cite the specific source by appending its reference tag, for example `[report.pdf, Page 2]` or `[Table: customers, Row 45]`, to the end of the sentence.
-            3.  Do not refer to "the context provided" or "the information I have." Respond directly and authoritatively.
-            4.  If the sources do not contain an answer, state that you do not have that information.
+            2.  Do not refer to "the context provided" or "the information I have." Respond directly and authoritatively.
             
             **Instructions for Formatting:**
             - Use Markdown for all your responses.
