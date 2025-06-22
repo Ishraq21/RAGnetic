@@ -58,6 +58,30 @@
         .message.agent:hover .copy-btn { opacity: 1; }
         .copy-btn:hover { background: #444; color: var(--text-color); }
 
+                .message.agent table {
+            display: block;
+            overflow-x: auto;
+            white-space: nowrap;
+            border-collapse: collapse;
+            width: 100%;
+            margin: 1em 0;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+        }
+        .message.agent th, .message.agent td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+            text-align: left;
+            vertical-align: top;
+        }
+        .message.agent th {
+            background-color: #2a2a2a;
+            font-weight: 600;
+        }
+        .message.agent tr:last-child td {
+            border-bottom: none;
+        }
+
         #input-form-container { margin-top: auto; padding-top: 1rem; }
 
         #input-form { display: flex; align-items: flex-end; gap: 0.5rem; background: var(--card-background); padding: 0.5rem; border-radius: 12px; }
