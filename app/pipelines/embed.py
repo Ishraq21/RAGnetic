@@ -5,9 +5,7 @@ from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 
 from app.schemas.agent import AgentConfig
-from app.pipelines.loaders import directory_loader, url_loader, pdf_loader, docx_loader, csv_loader, code_loader, \
-    db_loader, gdoc_loader, web_crawler_loader
-
+from app.pipelines.loaders import directory_loader, url_loader, pdf_loader, docx_loader, csv_loader, code_loader, db_loader, gdoc_loader, web_crawler_loader, api_loader
 
 def load_documents_from_source(source: dict) -> list[Document]:
     """
@@ -55,12 +53,22 @@ def load_documents_from_source(source: dict) -> list[Document]:
             file_types=source.get("file_types")
         )
 
-    # --- Correction: Moved the 'web_crawler' check to the correct top-level ---
     elif source_type == "web_crawler":
         return web_crawler_loader.load(
             url=source.get("url"),
             max_depth=source.get("max_depth", 2)
         )
+
+    elif source_type == "api":
+        return api_loader.load(
+            url=source.get("url"),
+            method=source.get("method", "GET"),
+            headers=source.get("headers"),
+            params=source.get("params"),
+            payload=source.get("payload"),
+            json_pointer=source.get("json_pointer")
+        )
+
 
     else:
         print(f"Warning: Unknown source type: {source_type}. Skipping.")
@@ -68,7 +76,6 @@ def load_documents_from_source(source: dict) -> list[Document]:
 
 
 def embed_agent_data(config: AgentConfig, openai_api_key: str = None):
-    # This function remains the same
     all_docs = []
     for source in config.sources:
         loaded_docs = load_documents_from_source(source.dict())
