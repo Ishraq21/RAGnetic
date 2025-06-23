@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  ragnetic-app:
+    # Tells Docker Compose to build the image from the Dockerfile in the current directory
+    build: .
+    container_name: ragnetic_service
+    ports:
+      # Maps port 8000 on the host machine to port 8000 in the container
+      - "8000:8000"
+    env_file:
+      # Loads environment variables from the .env file (for API keys)
+      - .env
+    volumes:
+      # This is the key to a seamless user experience. It links local folders
+      # to folders inside the container, ensuring data persistence.
+
+      # Users create and edit agent configs in this local folder.
+      - ./agents_data:/app/agents_data
+
+      # The application saves vector stores here, and they persist on the host.
+      - ./vectorstore:/app/vectorstore
+
+      # Conversation memory databases are saved here.
+      - ./memory:/app/memory
+
+      # Users place their source documents (PDFs, code, etc.) here.
+      - ./data:/app/data

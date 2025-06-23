@@ -9,10 +9,28 @@ from app.agents.config_manager import load_agent_config, load_agent_from_yaml_fi
 from app.pipelines.embed import embed_agent_data
 from app.core.config import get_api_key
 
+
+cli_help = """
+RAGnetic: Your on-premise, plug-and-play AI agent framework.
+
+Provides a CLI for initializing projects, managing agents, and running the server.
+
+Examples:
+\n- Initialize a new project in the current folder:
+  $ ragnetic init
+\n- Deploy an agent from a config file:
+  $ ragnetic deploy-agent --config ./agents_data/my_agent.yaml
+\n- Check if an agent's files are set up correctly:
+  $ ragnetic validate-agent my_agent
+\n- Start the web server for development:
+  $ ragnetic start-server --reload
+"""
+
 app = typer.Typer(
     name="ragnetic",
-    help="RAGnetic: Your on-premise, plug-and-play AI agent framework.",
+    help=cli_help,
     add_completion=False,
+    no_args_is_help=True,
 )
 
 
@@ -41,7 +59,7 @@ def init():
         "\nProject initialized successfully. Place your agent YAML configs in 'agents_data' and your source files in 'data'.")
 
 
-@app.command(help="Lists all deployed agents.")
+@app.command(help="Lists all configured agents.")
 def list_agents():
     """Scans the agents_data directory and lists all configured agents."""
     if not os.path.exists(AGENTS_DIR):
@@ -67,7 +85,6 @@ def inspect_agent(
     try:
         print(f"Inspecting configuration for agent: '{agent_name}'")
         config = load_agent_config(agent_name)
-        # Pretty print the config dictionary
         print(yaml.dump(config.model_dump(), indent=2, sort_keys=False))
     except FileNotFoundError:
         print(f"Error: Agent '{agent_name}' not found.")
@@ -82,22 +99,55 @@ def deploy_agent(
     try:
         print(f"Loading agent configuration from: {config}")
         agent_config = load_agent_from_yaml_file(config)
-
         api_key = get_api_key(agent_config.embedding_model)
-
         print(f"Deploying agent '{agent_config.name}' using '{agent_config.embedding_model}'...")
-
         embed_agent_data(agent_config, openai_api_key=api_key)
-
         print("\nAgent deployment successful!")
         print(f"  - Vector store created at: vectorstore/{agent_config.name}")
-        print("  - You can now start the server and interact with your agent.")
-
     except FileNotFoundError as e:
         print(f"Error: {e}")
         raise typer.Exit(code=1)
     except Exception as e:
         print(f"An unexpected error occurred during deployment: {e}")
+        raise typer.Exit(code=1)
+
+
+# --- NEW: Health check command ---
+@app.command(help="Validates an agent's configuration and associated files.")
+def validate_agent(
+        agent_name: str = typer.Argument(..., help="The name of the agent to validate.")
+):
+    """Performs a health check on an agent's setup."""
+    print(f"Validating agent: '{agent_name}'...")
+    errors = 0
+
+    # 1. Validate YAML config file
+    try:
+        load_agent_config(agent_name)
+        print("  - [PASS] YAML configuration is valid.")
+    except Exception as e:
+        print(f"  - [FAIL] Could not load or parse YAML config: {e}")
+        errors += 1
+
+    # 2. Validate Vector Store
+    vectorstore_path = f"vectorstore/{agent_name}"
+    if os.path.exists(vectorstore_path) and os.path.isdir(vectorstore_path):
+        print(f"  - [PASS] Vector store directory exists at: {vectorstore_path}")
+    else:
+        print(f"  - [WARN] Vector store not found. Agent may need to be deployed with 'ragnetic deploy-agent'.")
+
+    # 3. Validate Memory Files (optional, as they are created on first chat)
+    memory_files = glob.glob(f"memory/{agent_name}_*.db")
+    if memory_files:
+        print(f"  - [INFO] Found {len(memory_files)} conversation memory file(s).")
+    else:
+        print("  - [INFO] No conversation memory files found (this is normal for a new agent).")
+
+    print("-" * 20)
+    if errors == 0:
+        print("Validation successful. Agent appears to be configured correctly.")
+    else:
+        print(f"Validation failed with {errors} critical error(s). Please resolve the issues above.")
         raise typer.Exit(code=1)
 
 
@@ -114,11 +164,9 @@ def start_server(
     except ValueError as e:
         print(f"Error: {e}")
         raise typer.Exit(code=1)
-
     uvicorn.run("app.main:app", host=host, port=port, reload=reload)
 
 
-# --- RENAMED: from reset-agent to delete-agent ---
 @app.command(help="Deletes all data associated with an agent (vector store and memory).")
 def delete_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent whose data will be deleted."),
