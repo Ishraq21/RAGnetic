@@ -15,14 +15,10 @@ from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-# Import tool creators
 from app.tools.sql_tool import create_sql_toolkit
-from fastapi.staticfiles import StaticFiles
+
 load_dotenv()
 app = FastAPI(title="RAGnetic API")
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,15 +56,11 @@ async def home(request: Request):
     agents_dir = "agents_data"
     if not os.path.exists(agents_dir):
         os.makedirs(agents_dir)
-    agents = [f.split(".")[0] for f in os.listdir(agents_dir) if f.endswith(".json")]
+    agents = [f.split(".")[0] for f in os.listdir(agents_dir) if f.endswith(".yaml")]
     default_agent = agents[0] if agents else ""
     return templates.TemplateResponse(
         "agent_interface.html",
-        {
-            "request": request,
-            "agents": agents,
-            "agent": default_agent,
-        },
+        {"request": request, "agents": agents, "agent": default_agent},
     )
 
 
@@ -125,7 +117,6 @@ async def websocket_chat(ws: WebSocket):
         memory_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
         os.makedirs("memory", exist_ok=True)
 
-        # --- FIX: Assemble tools and config here, once per session ---
         agent_config = load_agent_config(agent_name)
         sql_tools = []
         if "sql_toolkit" in agent_config.tools:
@@ -133,11 +124,12 @@ async def websocket_chat(ws: WebSocket):
             if db_source and db_source.db_connection:
                 sql_tools = create_sql_toolkit(db_source.db_connection)
 
-        # This config will be passed to every invocation
-        config = {
+        # This config will be passed to every invocation in this session
+        session_config = {
             "configurable": {
                 "thread_id": thread_id,
                 "agent_name": agent_name,
+                "agent_config": agent_config,  # Pass the full config
                 "tools": sql_tools,
             }
         }
@@ -162,11 +154,11 @@ async def websocket_chat(ws: WebSocket):
                     "done": True, "user_id": user_id, "thread_id": thread_id, "citations": citations
                 }, ws)
 
-            await handle_query(query, config)
+            await handle_query(query, session_config)
 
             while True:
                 data = await ws.receive_json()
-                await handle_query(data["query"], config)
+                await handle_query(data["query"], session_config)
 
     except WebSocketDisconnect:
         print(f"Client disconnected for thread_id: {thread_id}")

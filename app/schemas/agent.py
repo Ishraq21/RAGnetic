@@ -6,16 +6,13 @@ class DataSource(BaseModel):
     path: Optional[str] = None
     url: Optional[str] = None
     db_connection: Optional[str] = None
-
-    # Google Drive Variables
     folder_id: Optional[str] = None
     document_ids: Optional[List[str]] = None
-    file_types: Optional[List[str]] = None  # e.g., ["document", "sheet", "pdf"]
 
-    # Web Crawler Field
+    file_types: Optional[List[str]] = None
+
     max_depth: Optional[int] = 2
 
-    # Fields for API Sources
     headers: Optional[Dict[str, str]] = None
     params: Optional[Dict[str, Any]] = None
     method: Optional[Literal['GET', 'POST']] = 'GET'
@@ -28,3 +25,8 @@ class AgentConfig(BaseModel):
     persona_prompt: str
     sources: List[DataSource]
     tools: Optional[List[Literal['retriever', 'sql_toolkit']]] = ['retriever']
+
+    # Users can now specify models in their agent.yaml file.
+    # We provide sensible defaults if they are omitted.
+    embedding_model: str = "text-embedding-3-small"
+    llm_model: str = "gpt-4o-mini"
