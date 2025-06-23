@@ -10,7 +10,7 @@ RAGnetic is an open-source, plug-and-play framework for deploying on-premise Cha
 * **Stateful Conversations:** Agents possess durable, conversation-level memory, allowing for natural, iterative dialogue. A user can ask a broad question, then follow up with "can you elaborate on the second point?" or "summarize that in three bullets" without needing to repeat the initial context. This stateful nature is crucial for complex research and analysis tasks.
 
 
-* **Tool-Using Hybrid Agents:** This is the core of RAGnetic's intelligence. You can equip agents with a versatile set of tools, such as a document `retriever` for semantic search and a `sql_toolkit` for live database querying. The underlying language model is prompted to be a reasoning agent. It analyzes the user's query and the conversation history to intelligently choose the best tool for the job, seamlessly switching between searching documents and executing SQL queries to find the most accurate answer.
+* **Tool-Using Hybrid Agents:** This is the core of RAGnetic's intelligence. You can equip agents with a versatile set of tools, such as a document `retriever` for semantic search and a `sql_toolkit` for live database querying. The underlying language model is prompted to be a reasoning agent.
 
 
 * **Easy Deployment:** RAGnetic is designed for maximum accessibility. It supports two distinct workflows: a native Python CLI for developers who want to contribute, and a one-command Docker deployment that provides a reliable, isolated, and conflict-free environment for end-users.
