@@ -7,10 +7,10 @@ from langgraph.prebuilt import ToolNode
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
+from langchain_core.tools import BaseTool
 
 from app.agents.config_manager import load_agent_config
 from app.tools.retriever_tool import get_retriever_tool
-from app.tools.sql_tool import create_sql_toolkit
 from app.core.config import get_api_key
 
 
@@ -26,6 +26,7 @@ def call_model(state: AgentState, config: RunnableConfig):
     The core of the agent. It performs RAG retrieval first, then gives
     the LLM the option to use SQL tools if the document context is insufficient.
     """
+    # Tools and config are now reliably passed in via the session config
     agent_config = config['configurable']['agent_config']
     sql_tools = config['configurable'].get('tools', [])
     messages = state['messages']
@@ -33,7 +34,9 @@ def call_model(state: AgentState, config: RunnableConfig):
 
     # 1. Always perform RAG retrieval
     retriever_tool = get_retriever_tool(agent_config.name)
-    retrieved_docs_str = retriever_tool.func({"input": query})
+    retrieved_docs = retriever_tool.func({"input": query})
+    retrieved_docs_str = "\n\n".join([doc.page_content for doc in retrieved_docs])
+
 
     # 2. Build the system prompt with the retrieved context
     context_section = f"<context>\n<retrieved_documents>\n{retrieved_docs_str}\n</retrieved_documents>\n</context>"
@@ -83,26 +86,21 @@ def should_continue(state: AgentState) -> str:
     return "end"
 
 
-def get_agent_workflow(agent_name: str):
-    """Builds the hybrid RAG + Tools agent graph."""
-    agent_config = load_agent_config(agent_name)
-
-    sql_tools = []
-    if "sql_toolkit" in agent_config.tools:
-        db_source = next((s for s in agent_config.sources if s.type == 'db'), None)
-        if db_source and db_source.db_connection:
-            sql_tools = create_sql_toolkit(db_source.db_connection)
-
+def get_agent_workflow(sql_tools: List[BaseTool]):
+    """
+    Builds the hybrid RAG + Tools agent graph.
+    Accepts sql_tools as a parameter to prevent redundant instantiation.
+    """
     workflow = StateGraph(AgentState)
 
-    # Pass the agent_config and tools to the agent node at runtime
-    agent_node = call_model.with_configurable(
-        agent_config=agent_config,
-        tools=sql_tools
-    )
+    # Agent node remains configurable at runtime
+    agent_node = call_model
+
+    # Use the single, shared instance of sql_tools for the ToolNode
+    tool_node = ToolNode(sql_tools)
 
     workflow.add_node("agent", agent_node)
-    workflow.add_node("call_tool", ToolNode(sql_tools))
+    workflow.add_node("call_tool", tool_node)
 
     workflow.set_entry_point("agent")
     workflow.add_conditional_edges("agent", should_continue, {"call_tool": "call_tool", "end": END})
