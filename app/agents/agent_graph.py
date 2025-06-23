@@ -4,7 +4,7 @@ from operator import add
 
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import BaseTool
@@ -14,31 +14,33 @@ from app.tools.retriever_tool import get_retriever_tool
 from app.core.config import get_api_key
 
 
-# Define the agent's state
+# --- The state definition for our agent ---
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add]
     tool_calls: List[dict]
 
 
-# This is the agent node
+# --- This is the core agent node ---
 def call_model(state: AgentState, config: RunnableConfig):
     """
-    The core of the agent. It performs RAG retrieval first, then gives
-    the LLM the option to use SQL tools if the document context is insufficient.
+    This is the core reasoning step. It first retrieves document context,
+    then decides whether to respond directly or to call another tool.
     """
-    # Tools and config are now reliably passed in via the session config
+    # Config is passed from main.py at runtime
     agent_config = config['configurable']['agent_config']
-    sql_tools = config['configurable'].get('tools', [])
+
+    # The complete list of tools is assembled in main.py and passed here.
+    tools = config['configurable'].get('tools', [])
     messages = state['messages']
     query = messages[-1].content
 
-    # 1. Always perform RAG retrieval
+    # --- ADDED BACK: RAG context retrieval step ---
+    # 1. Always perform RAG retrieval to get document context.
     retriever_tool = get_retriever_tool(agent_config.name)
     retrieved_docs = retriever_tool.func({"input": query})
     retrieved_docs_str = "\n\n".join([doc.page_content for doc in retrieved_docs])
 
-
-    # 2. Build the system prompt with the retrieved context
+    # 2. Build the system prompt that INCLUDES the retrieved context.
     context_section = f"<context>\n<retrieved_documents>\n{retrieved_docs_str}\n</retrieved_documents>\n</context>"
 
     system_prompt = f"""You are RAGnetic, a professional AI assistant. Your goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
@@ -63,47 +65,55 @@ def call_model(state: AgentState, config: RunnableConfig):
                    Based on the sources above, please answer the user's query.
                 """
 
-    prompt_with_context = [HumanMessage(content=system_prompt)] + messages
+    prompt_with_history = [HumanMessage(content=system_prompt)] + messages
 
-    # 3. Dynamically instantiate the LLM and bind the optional SQL tools
+    # Dynamically instantiate the LLM and bind the tools
     api_key = get_api_key(agent_config.llm_model)
     model = ChatOpenAI(
         model=agent_config.llm_model,
         temperature=0,
         streaming=True,
         api_key=api_key
-    ).bind_tools(sql_tools)
+    ).bind_tools(tools)
 
-    response = model.invoke(prompt_with_context)
+    response = model.invoke(prompt_with_history)
 
+    # The 'add' annotation on AgentState handles appending this to history
     return {"messages": [response]}
 
 
 def should_continue(state: AgentState) -> str:
-    """Routes to the tool node if the model requests it."""
-    if state['messages'][-1].tool_calls:
+    """Routes to the tool node if the model requests it, otherwise ends."""
+    last_message = state['messages'][-1]
+    if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
         return "call_tool"
     return "end"
 
 
-def get_agent_workflow(sql_tools: List[BaseTool]):
+def get_agent_workflow(tools: List[BaseTool]):
     """
-    Builds the hybrid RAG + Tools agent graph.
-    Accepts sql_tools as a parameter to prevent redundant instantiation.
+    Builds the tool-using agent graph.
+    It accepts a pre-assembled list of tools from the main application logic.
     """
     workflow = StateGraph(AgentState)
 
-    # Agent node remains configurable at runtime
+    # The agent node is the main reasoning step
     agent_node = call_model
 
-    # Use the single, shared instance of sql_tools for the ToolNode
-    tool_node = ToolNode(sql_tools)
+    # The tool node is initialized with all available tools (retriever, sql, etc.)
+    tool_node = ToolNode(tools)
 
     workflow.add_node("agent", agent_node)
     workflow.add_node("call_tool", tool_node)
 
+    # Define the graph's control flow
     workflow.set_entry_point("agent")
-    workflow.add_conditional_edges("agent", should_continue, {"call_tool": "call_tool", "end": END})
+    workflow.add_conditional_edges(
+        "agent",
+        should_continue,
+        {"call_tool": "call_tool", "end": END},
+    )
     workflow.add_edge("call_tool", "agent")
 
+    # Return the uncompiled workflow, as expected by main.py
     return workflow

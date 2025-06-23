@@ -15,7 +15,9 @@ from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+# --- Import ALL tool creators ---
 from app.tools.sql_tool import create_sql_toolkit
+from app.tools.retriever_tool import get_retriever_tool
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
@@ -115,27 +117,28 @@ async def websocket_chat(ws: WebSocket):
         user_id = initial_data.get("user_id") or f"user-{uuid4().hex[:8]}"
         thread_id = initial_data.get("thread_id") or f"thread-{uuid4().hex[:8]}"
 
-        # --- FIX: Create tools ONCE here ---
         agent_config = load_agent_config(agent_name)
-        sql_tools = []
+
+        # --- FIX: Assemble ALL tools here, once per session ---
+        all_tools = []
+        if "retriever" in agent_config.tools:
+            all_tools.append(get_retriever_tool(agent_name))
+
         if "sql_toolkit" in agent_config.tools:
             db_source = next((s for s in agent_config.sources if s.type == 'db'), None)
             if db_source and db_source.db_connection:
-                sql_tools = create_sql_toolkit(db_source.db_connection)
+                all_tools.extend(create_sql_toolkit(db_source.db_connection))
 
-        # --- FIX: Pass the tools to the workflow builder ---
-        workflow = get_agent_workflow(sql_tools)
+        # Pass the correctly assembled list of tools to the workflow builder
+        workflow = get_agent_workflow(all_tools)
 
         memory_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
         os.makedirs("memory", exist_ok=True)
 
-        # This config will be passed to every invocation in this session
         session_config = {
             "configurable": {
                 "thread_id": thread_id,
-                "agent_name": agent_name,
-                "agent_config": agent_config,  # Pass the full config
-                "tools": sql_tools,  # Pass the single tool instance
+                "agent_config": agent_config,
             }
         }
 
@@ -154,8 +157,6 @@ async def websocket_chat(ws: WebSocket):
                     elif kind == "on_graph_end":
                         final_state = event['data']['output']
 
-                # Citations now need to be handled differently as retriever output isn't directly in the final state
-                # For now, we remove it until a better citation mechanism is implemented.
                 await manager.send({
                     "done": True, "user_id": user_id, "thread_id": thread_id, "citations": []
                 }, ws)
