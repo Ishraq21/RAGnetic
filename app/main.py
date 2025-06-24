@@ -21,13 +21,17 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
 
-# --- NEW: Production-Grade Logging Setup ---
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-# --- NEW: Added versioning to the API ---
-app = FastAPI(title="RAGnetic API", version="0.1.0")
+
+app = FastAPI(
+    title="RAGnetic API",
+    version="0.1.0",
+    description="API for managing and interacting with RAGnetic agents."
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,7 +65,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-# Health Check Endpoint
+# Health Check Endpoint and OpenAPI Tagging
 @app.get("/health", tags=["Application"])
 def health_check():
     """A simple endpoint to confirm that the server is running."""
@@ -178,6 +182,8 @@ async def websocket_chat(ws: WebSocket):
             "configurable": {
                 "thread_id": thread_id,
                 "agent_config": agent_config,
+                # --- FIX: Pass the assembled tools into the session config ---
+                "tools": all_tools,
             }
         }
 
