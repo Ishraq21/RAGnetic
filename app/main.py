@@ -2,7 +2,7 @@ import os
 import pickle
 import aiosqlite
 from uuid import uuid4
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.templating import Jinja2Templates
@@ -106,10 +106,43 @@ def create_agent(config: AgentConfig, openai_api_key: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Refactored handle_query function ---
+async def handle_query(
+        q: str,
+        cfg: dict,
+        langgraph_agent: Any,
+        user_id: str,
+        thread_id: str,
+        ws: WebSocket
+):
+    """
+    Handles a single user query by streaming events from the agent
+    and sending the final response.
+    """
+    final_state = None
+    input_dict = {"messages": [HumanMessage(content=q)]}
+
+    async for event in langgraph_agent.astream_events(input_dict, cfg, version="v2"):
+        kind = event["event"]
+        if kind == "on_chat_model_stream":
+            token = event["data"]["chunk"].content
+            if token: await manager.send({"token": token}, ws)
+        elif kind == "on_graph_end":
+            final_state = event['data']['output']
+
+    await manager.send({
+        "done": True,
+        "user_id": user_id,
+        "thread_id": thread_id,
+        "citations": []
+    }, ws)
+
+
 @app.websocket("/ws")
 async def websocket_chat(ws: WebSocket):
     await manager.connect(ws)
     thread_id = "uninitialized"
+    user_id = "uninitialized"
     try:
         initial_data = await ws.receive_json()
         agent_name = initial_data["agent"]
@@ -119,7 +152,6 @@ async def websocket_chat(ws: WebSocket):
 
         agent_config = load_agent_config(agent_name)
 
-        # --- FIX: Assemble ALL tools here, once per session ---
         all_tools = []
         if "retriever" in agent_config.tools:
             all_tools.append(get_retriever_tool(agent_name))
@@ -129,7 +161,6 @@ async def websocket_chat(ws: WebSocket):
             if db_source and db_source.db_connection:
                 all_tools.extend(create_sql_toolkit(db_source.db_connection))
 
-        # Pass the correctly assembled list of tools to the workflow builder
         workflow = get_agent_workflow(all_tools)
 
         memory_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
@@ -145,32 +176,23 @@ async def websocket_chat(ws: WebSocket):
         async with AsyncSqliteSaver.from_conn_string(memory_path) as saver:
             langgraph_agent = workflow.compile(checkpointer=saver)
 
-            async def handle_query(q: str, cfg: dict):
-                final_state = None
-                input_dict = {"messages": [HumanMessage(content=q)]}
+            # Call the refactored handler for the first query
+            await handle_query(query, session_config, langgraph_agent, user_id, thread_id, ws)
 
-                async for event in langgraph_agent.astream_events(input_dict, cfg, version="v2"):
-                    kind = event["event"]
-                    if kind == "on_chat_model_stream":
-                        token = event["data"]["chunk"].content
-                        if token: await manager.send({"token": token}, ws)
-                    elif kind == "on_graph_end":
-                        final_state = event['data']['output']
-
-                await manager.send({
-                    "done": True, "user_id": user_id, "thread_id": thread_id, "citations": []
-                }, ws)
-
-            await handle_query(query, session_config)
-
+            # Loop for subsequent messages
             while True:
                 data = await ws.receive_json()
-                await handle_query(data["query"], session_config)
+                await handle_query(data["query"], session_config, langgraph_agent, user_id, thread_id, ws)
 
     except WebSocketDisconnect:
         print(f"Client disconnected for thread_id: {thread_id}")
     except Exception as e:
         print(f"WebSocket Error for thread_id {thread_id}: {e}")
-        await manager.send({"error": str(e)}, ws)
+        # --- NEW: Enhanced error message for better debugging ---
+        await manager.send({
+            "error": str(e),
+            "user_id": user_id,
+            "thread_id": thread_id
+        }, ws)
     finally:
         manager.disconnect(ws)
