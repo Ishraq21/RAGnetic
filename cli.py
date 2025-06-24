@@ -8,7 +8,7 @@ import glob
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file, AGENTS_DIR
 from app.pipelines.embed import embed_agent_data
 from app.core.config import get_api_key
-
+from dotenv import set_key # <-- ADD THIS IMPORT
 
 cli_help = """
 RAGnetic: Your on-premise, plug-and-play AI agent framework.
@@ -16,14 +16,12 @@ RAGnetic: Your on-premise, plug-and-play AI agent framework.
 Provides a CLI for initializing projects, managing agents, and running the server.
 
 Examples:
-\n- Initialize a new project in the current folder:
+\n- Initialize a new project:
   $ ragnetic init
+\n- Set an API key:
+  $ ragnetic set-api
 \n- Deploy an agent from a config file:
   $ ragnetic deploy-agent --config ./agents_data/my_agent.yaml
-\n- Check if an agent's files are set up correctly:
-  $ ragnetic validate-agent my_agent
-\n- Start the web server for development:
-  $ ragnetic start-server --reload
 """
 
 app = typer.Typer(
@@ -32,6 +30,13 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+
+# Define model providers for the set-api command
+MODEL_PROVIDERS = {
+    "OpenAI": "OPENAI_API_KEY",
+    "Anthropic": "ANTHROPIC_API_KEY",
+    "Google": "GOOGLE_API_KEY",
+}
 
 
 @app.command(help="Initialize a new RAGnetic project in the current directory.")
@@ -49,14 +54,54 @@ def init():
     env_example_path = ".env.example"
     if not os.path.exists(env_example_path):
         with open(env_example_path, "w") as f:
-            f.write("# Rename this file to .env and fill in your secrets\n")
-            f.write("OPENAI_API_KEY=\"sk-...\"\n")
-            f.write("ANTHROPIC_API_KEY=\"sk-ant-...\"\n")
+            f.write("# This file is an example. Use 'ragnetic set-api' to create your .env file.\n")
+            f.write("OPENAI_API_KEY=\"...\"\n")
+            f.write("ANTHROPIC_API_KEY=\"...\"\n")
             f.write("GOOGLE_API_KEY=\"...\"\n")
         print(f"  - Created .env.example file.")
 
-    print(
-        "\nProject initialized successfully. Place your agent YAML configs in 'agents_data' and your source files in 'data'.")
+    print("\nProject initialized successfully.")
+    print("Next step: Use the 'ragnetic set-api' command to configure your API keys.")
+
+
+# --- NEW: Command to set API keys ---
+@app.command(help="Set and save an API key to the .env file.")
+def set_api():
+    """
+    Prompts the user to select a provider and enter an API key,
+    then saves it to the .env file.
+    """
+    typer.echo("Select the provider for the API key you want to set:")
+
+    provider_menu = list(MODEL_PROVIDERS.keys())
+    for i, provider in enumerate(provider_menu, 1):
+        typer.echo(f"  [{i}] {provider}")
+
+    try:
+        choice_str = typer.prompt("Enter the number of your choice")
+        choice_index = int(choice_str) - 1
+        if not 0 <= choice_index < len(provider_menu):
+            raise ValueError
+        selected_provider = provider_menu[choice_index]
+        env_var_name = MODEL_PROVIDERS[selected_provider]
+    except (ValueError, IndexError):
+        typer.secho("Error: Invalid selection.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    api_key = typer.prompt(f"Enter your {selected_provider} API Key", hide_input=True)
+
+    if not api_key:
+        typer.secho("Error: API Key cannot be empty.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    dotenv_path = ".env"
+    try:
+        # set_key will create the .env file if it doesn't exist and add/update the key
+        set_key(dotenv_path, env_var_name, api_key)
+        typer.secho(f"✅ Successfully saved {selected_provider} API key to the .env file.", fg=typer.colors.GREEN)
+    except IOError as e:
+        typer.secho(f"Error: Could not write to .env file: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
 
 @app.command(help="Lists all configured agents.")
@@ -99,12 +144,13 @@ def deploy_agent(
     try:
         print(f"Loading agent configuration from: {config}")
         agent_config = load_agent_from_yaml_file(config)
+        # The get_api_key call now uses the new "fail-fast" logic
         api_key = get_api_key(agent_config.embedding_model)
         print(f"Deploying agent '{agent_config.name}' using '{agent_config.embedding_model}'...")
         embed_agent_data(agent_config, openai_api_key=api_key)
         print("\nAgent deployment successful!")
         print(f"  - Vector store created at: vectorstore/{agent_config.name}")
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")
         raise typer.Exit(code=1)
     except Exception as e:
@@ -112,7 +158,6 @@ def deploy_agent(
         raise typer.Exit(code=1)
 
 
-# --- NEW: Health check command ---
 @app.command(help="Validates an agent's configuration and associated files.")
 def validate_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to validate.")
@@ -121,7 +166,6 @@ def validate_agent(
     print(f"Validating agent: '{agent_name}'...")
     errors = 0
 
-    # 1. Validate YAML config file
     try:
         load_agent_config(agent_name)
         print("  - [PASS] YAML configuration is valid.")
@@ -129,14 +173,12 @@ def validate_agent(
         print(f"  - [FAIL] Could not load or parse YAML config: {e}")
         errors += 1
 
-    # 2. Validate Vector Store
     vectorstore_path = f"vectorstore/{agent_name}"
     if os.path.exists(vectorstore_path) and os.path.isdir(vectorstore_path):
         print(f"  - [PASS] Vector store directory exists at: {vectorstore_path}")
     else:
         print(f"  - [WARN] Vector store not found. Agent may need to be deployed with 'ragnetic deploy-agent'.")
 
-    # 3. Validate Memory Files (optional, as they are created on first chat)
     memory_files = glob.glob(f"memory/{agent_name}_*.db")
     if memory_files:
         print(f"  - [INFO] Found {len(memory_files)} conversation memory file(s).")
@@ -160,6 +202,8 @@ def start_server(
     """Starts the Uvicorn server."""
     print(f"Starting RAGnetic server on http://{host}:{port}")
     try:
+        # This check now correctly uses the fail-fast logic.
+        # It ensures at least one common key is set before starting the server.
         get_api_key("openai")
     except ValueError as e:
         print(f"Error: {e}")
