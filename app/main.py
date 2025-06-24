@@ -15,10 +15,10 @@ from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-# --- Import ALL tool creators ---
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
 from fastapi.staticfiles import StaticFiles
+from app.core.config import get_api_key
 
 load_dotenv()
 app = FastAPI(title="RAGnetic API")
@@ -92,21 +92,24 @@ async def get_history(thread_id: str, agent_name: str, user_id: str):
         raise HTTPException(status_code=500, detail="Could not load chat history.")
 
 
+# --- THIS ENDPOINT IS MODIFIED to be cleaner and more consistent ---
 @app.post("/create-agent")
-def create_agent(config: AgentConfig, openai_api_key: Optional[str] = None):
+def create_agent(config: AgentConfig):
+    """
+    Creates an agent configuration. The embedding pipeline will handle
+    its own API key retrieval automatically.
+    """
     try:
-        api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise HTTPException(status_code=400, detail="OpenAI API key missing.")
         save_agent_config(config)
-        embed_agent_data(config, openai_api_key=api_key)
-        return {"status": "Agent created", "agent": config.name}
+        # The embedding function now handles its own API key retrieval.
+        # We no longer pass the key from here.
+        embed_agent_data(config)
+        return {"status": "Agent created. Note: Embedding happens on server start if needed.", "agent": config.name}
     except Exception as e:
         print(f"Error creating agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Refactored handle_query function ---
 async def handle_query(
         q: str,
         cfg: dict,
@@ -176,10 +179,8 @@ async def websocket_chat(ws: WebSocket):
         async with AsyncSqliteSaver.from_conn_string(memory_path) as saver:
             langgraph_agent = workflow.compile(checkpointer=saver)
 
-            # Call the refactored handler for the first query
             await handle_query(query, session_config, langgraph_agent, user_id, thread_id, ws)
 
-            # Loop for subsequent messages
             while True:
                 data = await ws.receive_json()
                 await handle_query(data["query"], session_config, langgraph_agent, user_id, thread_id, ws)
@@ -188,7 +189,6 @@ async def websocket_chat(ws: WebSocket):
         print(f"Client disconnected for thread_id: {thread_id}")
     except Exception as e:
         print(f"WebSocket Error for thread_id {thread_id}: {e}")
-        # --- NEW: Enhanced error message for better debugging ---
         await manager.send({
             "error": str(e),
             "user_id": user_id,
