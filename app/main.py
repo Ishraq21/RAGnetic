@@ -1,6 +1,7 @@
 import os
 import pickle
 import aiosqlite
+import logging
 from uuid import uuid4
 from typing import Optional, List, Dict, Any
 
@@ -8,6 +9,8 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.schemas.agent import AgentConfig
 from app.agents.config_manager import save_agent_config, load_agent_config
@@ -17,11 +20,14 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
-from fastapi.staticfiles import StaticFiles
-from app.core.config import get_api_key
+
+# --- NEW: Production-Grade Logging Setup ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 load_dotenv()
-app = FastAPI(title="RAGnetic API")
+# --- NEW: Added versioning to the API ---
+app = FastAPI(title="RAGnetic API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -46,7 +52,7 @@ class ConnectionManager:
     def disconnect(self, ws: WebSocket):
         if ws in self.active:
             self.active.remove(ws)
-            print("Client connection removed.")
+            logger.info("Client connection removed.")
 
     async def send(self, msg: Dict, ws: WebSocket):
         await ws.send_json(msg)
@@ -55,8 +61,16 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-@app.get("/")
+# Health Check Endpoint
+@app.get("/health", tags=["Application"])
+def health_check():
+    """A simple endpoint to confirm that the server is running."""
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.get("/", tags=["Application"])
 async def home(request: Request):
+    """Serves the main chat interface."""
     agents_dir = "agents_data"
     if not os.path.exists(agents_dir):
         os.makedirs(agents_dir)
@@ -68,8 +82,9 @@ async def home(request: Request):
     )
 
 
-@app.get("/history/{thread_id}")
+@app.get("/history/{thread_id}", tags=["Memory"])
 async def get_history(thread_id: str, agent_name: str, user_id: str):
+    """Retrieves message history from the LangGraph checkpointer database."""
     db_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
     if not os.path.exists(db_path):
         raise HTTPException(status_code=404, detail="History not found.")
@@ -78,7 +93,7 @@ async def get_history(thread_id: str, agent_name: str, user_id: str):
             config = {"configurable": {"thread_id": thread_id}}
             checkpoint_tuple = await saver.aget_tuple(config)
             if not checkpoint_tuple:
-                return []
+                return JSONResponse(content=[])
             messages = checkpoint_tuple.checkpoint["channel_values"]["messages"]
             history = []
             for msg in messages:
@@ -86,27 +101,21 @@ async def get_history(thread_id: str, agent_name: str, user_id: str):
                     history.append({"type": "human", "content": msg.content})
                 elif isinstance(msg, AIMessage):
                     history.append({"type": "ai", "content": msg.content})
-            return history
+            return JSONResponse(content=history)
     except Exception as e:
-        print(f"Error loading history from {db_path}: {e}")
+        logger.error(f"Error loading history from {db_path}: {e}")
         raise HTTPException(status_code=500, detail="Could not load chat history.")
 
 
-# --- THIS ENDPOINT IS MODIFIED to be cleaner and more consistent ---
-@app.post("/create-agent")
+@app.post("/create-agent", tags=["Agents"])
 def create_agent(config: AgentConfig):
-    """
-    Creates an agent configuration. The embedding pipeline will handle
-    its own API key retrieval automatically.
-    """
+    """Creates an agent configuration and triggers the embedding pipeline."""
     try:
         save_agent_config(config)
-        # The embedding function now handles its own API key retrieval.
-        # We no longer pass the key from here.
         embed_agent_data(config)
-        return {"status": "Agent created. Note: Embedding happens on server start if needed.", "agent": config.name}
+        return JSONResponse(content={"status": "Agent configuration saved successfully.", "agent": config.name})
     except Exception as e:
-        print(f"Error creating agent: {e}")
+        logger.error(f"Error creating agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -118,10 +127,6 @@ async def handle_query(
         thread_id: str,
         ws: WebSocket
 ):
-    """
-    Handles a single user query by streaming events from the agent
-    and sending the final response.
-    """
     final_state = None
     input_dict = {"messages": [HumanMessage(content=q)]}
 
@@ -186,9 +191,9 @@ async def websocket_chat(ws: WebSocket):
                 await handle_query(data["query"], session_config, langgraph_agent, user_id, thread_id, ws)
 
     except WebSocketDisconnect:
-        print(f"Client disconnected for thread_id: {thread_id}")
+        logger.info(f"Client disconnected for thread_id: {thread_id}")
     except Exception as e:
-        print(f"WebSocket Error for thread_id {thread_id}: {e}")
+        logger.error(f"WebSocket Error for thread_id {thread_id}: {e}")
         await manager.send({
             "error": str(e),
             "user_id": user_id,
