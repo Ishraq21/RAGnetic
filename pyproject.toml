@@ -37,7 +37,8 @@ dependencies = [
     "requests",
     "google-api-python-client",
     "google-auth-oauthlib",
-    "google-auth-httplib2"
+    "google-auth-httplib2",
+    "arxiv"
 ]
 
 # This section creates the 'ragnetic' command-line script

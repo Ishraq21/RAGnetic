@@ -24,7 +24,7 @@ class AgentConfig(BaseModel):
     description: Optional[str] = None
     persona_prompt: str
     sources: List[DataSource]
-    tools: Optional[List[Literal['retriever', 'sql_toolkit']]] = ['retriever']
+    tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv']]] = ['retriever']
 
     # Users can now specify models in their agent.yaml file.
     # We provide sensible defaults if they are omitted.

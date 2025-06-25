@@ -20,8 +20,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
-
-
+from app.tools.arxiv_tool import get_arxiv_tool
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -173,6 +172,10 @@ async def websocket_chat(ws: WebSocket):
             if db_source and db_source.db_connection:
                 all_tools.extend(create_sql_toolkit(db_source.db_connection))
 
+        # Add logic to load the ArXiv tool if enabled
+        if "arxiv" in agent_config.tools:
+            all_tools.extend(get_arxiv_tool())
+
         workflow = get_agent_workflow(all_tools)
 
         memory_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
@@ -182,7 +185,6 @@ async def websocket_chat(ws: WebSocket):
             "configurable": {
                 "thread_id": thread_id,
                 "agent_config": agent_config,
-                # --- FIX: Pass the assembled tools into the session config ---
                 "tools": all_tools,
             }
         }
