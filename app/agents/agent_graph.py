@@ -8,6 +8,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import BaseTool
+from langchain.chat_models import init_chat_model
 
 from app.agents.config_manager import load_agent_config
 from app.tools.retriever_tool import get_retriever_tool
@@ -33,8 +34,9 @@ def call_model(state: AgentState, config: RunnableConfig):
     tools = config['configurable'].get('tools', [])
     messages = state['messages']
     query = messages[-1].content
+    model_name = agent_config.llm_model
 
-    # --- ADDED BACK: RAG context retrieval step ---
+
     # 1. Always perform RAG retrieval to get document context.
     retriever_tool = get_retriever_tool(agent_config.name)
     retrieved_docs = retriever_tool.func({"input": query})
@@ -67,15 +69,28 @@ def call_model(state: AgentState, config: RunnableConfig):
 
     prompt_with_history = [HumanMessage(content=system_prompt)] + messages
 
-    # Dynamically instantiate the LLM and bind the tools
-    api_key = get_api_key(agent_config.llm_model)
-    model = ChatOpenAI(
-        model=agent_config.llm_model,
+
+    # First, determine the provider from the model name string
+    provider = "openai"  # Default
+    if "claude" in model_name.lower():
+        provider = "anthropic"
+    elif "gemini" in model_name.lower():
+        provider = "google_genai"
+    elif "grok" in model_name.lower():
+        provider = "xai"
+
+    # Your get_api_key function ensures the correct key is loaded into the environment
+    get_api_key(model_name)
+
+    # Now, use the init_chat_model helper to create the correct model instance
+    model = init_chat_model(
+        model_name,
+        model_provider=provider,
         temperature=0,
         streaming=True,
-        api_key=api_key
     ).bind_tools(tools)
 
+    # --- End of Refinement ---
     response = model.invoke(prompt_with_history)
 
     # The 'add' annotation on AgentState handles appending this to history
