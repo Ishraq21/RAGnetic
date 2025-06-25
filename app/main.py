@@ -21,6 +21,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
 from app.tools.arxiv_tool import get_arxiv_tool
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,6 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-# Health Check Endpoint and OpenAPI Tagging
 @app.get("/health", tags=["Application"])
 def health_check():
     """A simple endpoint to confirm that the server is running."""
@@ -77,11 +77,27 @@ async def home(request: Request):
     agents_dir = "agents_data"
     if not os.path.exists(agents_dir):
         os.makedirs(agents_dir)
-    agents = [f.split(".")[0] for f in os.listdir(agents_dir) if f.endswith(".yaml")]
-    default_agent = agents[0] if agents else ""
+
+    # Load the full config for each agent to get both name and display_name
+    agent_files = [f for f in os.listdir(agents_dir) if f.endswith((".yaml", ".yml"))]
+    agents_list = []
+    for f in agent_files:
+        try:
+            agent_name = os.path.splitext(f)[0]
+            config = load_agent_config(agent_name)
+            # Create a dictionary for each agent
+            agents_list.append({
+                "name": config.name,
+                # Use the display_name if it exists, otherwise fall back to the regular name
+                "display_name": config.display_name or config.name
+            })
+        except Exception as e:
+            logger.error(f"Could not load agent config for {f}: {e}")
+
+    default_agent = agents_list[0]['name'] if agents_list else ""
     return templates.TemplateResponse(
         "agent_interface.html",
-        {"request": request, "agents": agents, "agent": default_agent},
+        {"request": request, "agents": agents_list, "agent": default_agent},
     )
 
 
@@ -172,7 +188,6 @@ async def websocket_chat(ws: WebSocket):
             if db_source and db_source.db_connection:
                 all_tools.extend(create_sql_toolkit(db_source.db_connection))
 
-        # Add logic to load the ArXiv tool if enabled
         if "arxiv" in agent_config.tools:
             all_tools.extend(get_arxiv_tool())
 

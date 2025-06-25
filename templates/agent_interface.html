@@ -26,9 +26,9 @@
         <header>
             <select id="agent-select" name="agent">
                 {% for a in agents %}
-                <option value="{{ a }}" {% if a == agent %}selected{% endif %}>{{ a }}</option>
+                <option value="{{ a.name }}" {% if a.name == agent %}selected{% endif %}>{{ a.display_name }}</option>
                 {% endfor %}
-            </select>
+                </select>
             <button id="new-chat-btn" title="New Chat">New Chat</button>
         </header>
 

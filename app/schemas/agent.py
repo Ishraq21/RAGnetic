@@ -21,12 +21,13 @@ class DataSource(BaseModel):
 
 class AgentConfig(BaseModel):
     name: str
+    display_name: Optional[str] = None
     description: Optional[str] = None
     persona_prompt: str
     sources: List[DataSource]
     tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv']]] = ['retriever']
 
     # Users can now specify models in their agent.yaml file.
-    # We provide sensible defaults if they are omitted.
+    # Default models if they are omitted.
     embedding_model: str = "text-embedding-3-small"
     llm_model: str = "gpt-4o-mini"
