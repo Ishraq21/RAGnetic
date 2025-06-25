@@ -15,13 +15,11 @@ from app.tools.retriever_tool import get_retriever_tool
 from app.core.config import get_api_key
 
 
-# --- The state definition for our agent ---
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add]
     tool_calls: List[dict]
 
 
-# --- This is the core agent node ---
 def call_model(state: AgentState, config: RunnableConfig):
     """
     This is the core reasoning step. It first retrieves document context,
@@ -70,7 +68,10 @@ def call_model(state: AgentState, config: RunnableConfig):
     prompt_with_history = [HumanMessage(content=system_prompt)] + messages
 
 
-    # First, determine the provider from the model name string
+    # 1. Explicitly get the API key from your config function.
+    api_key = get_api_key(model_name)
+
+    # 2. Determine the provider from the model name string.
     provider = "openai"  # Default
     if "claude" in model_name.lower():
         provider = "anthropic"
@@ -79,18 +80,18 @@ def call_model(state: AgentState, config: RunnableConfig):
     elif "grok" in model_name.lower():
         provider = "xai"
 
-    # Your get_api_key function ensures the correct key is loaded into the environment
-    get_api_key(model_name)
-
-    # Now, use the init_chat_model helper to create the correct model instance
+    # 3. Explicitly pass the API key to the model initializer.
+    # The `init_chat_model` function is smart enough to pass this `api_key`
+    # argument to the underlying model's constructor (e.g., ChatOpenAI).
     model = init_chat_model(
         model_name,
         model_provider=provider,
         temperature=0,
         streaming=True,
+        api_key=api_key,
     ).bind_tools(tools)
 
-    # --- End of Refinement ---
+    # --- REFINEMENT END ---
     response = model.invoke(prompt_with_history)
 
     # The 'add' annotation on AgentState handles appending this to history
