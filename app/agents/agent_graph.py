@@ -44,7 +44,7 @@ def call_model(state: AgentState, config: RunnableConfig):
         model_name = agent_config.llm_model
         logger.info(f"Processing query for agent '{agent_config.name}' using model '{model_name}'.")
 
-        # Always Perform RAG Retrieval with Error Handling ---
+        # Always Perform RAG Retrieval with Error Handling
         try:
             logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
             retriever_tool = get_retriever_tool(agent_config.name)
@@ -59,7 +59,7 @@ def call_model(state: AgentState, config: RunnableConfig):
             logger.error(f"Error during document retrieval: {e}", exc_info=True)
             retrieved_docs_str = "An error occurred while trying to retrieve relevant documents. The information may be unavailable."
 
-        # Build the System Prompt ---
+        # Build the System Prompt
         context_section = f"<context>\n<retrieved_documents>\n{retrieved_docs_str}\n</retrieved_documents>\n</context>"
         system_prompt = f"""You are RAGnetic, a professional AI assistant. Your goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
 
