@@ -8,7 +8,7 @@ import glob
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file, AGENTS_DIR
 from app.pipelines.embed import embed_agent_data
 from app.core.config import get_api_key
-from dotenv import set_key # <-- ADD THIS IMPORT
+from dotenv import set_key
 
 cli_help = """
 RAGnetic: Your on-premise, plug-and-play AI agent framework.
@@ -31,7 +31,7 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-# Define model providers for the set-api command
+# --- Define model providers and models ---
 MODEL_PROVIDERS = {
     "OpenAI": "OPENAI_API_KEY",
     "Anthropic": "ANTHROPIC_API_KEY",
@@ -64,7 +64,6 @@ def init():
     print("Next step: Use the 'ragnetic set-api' command to configure your API keys.")
 
 
-# --- NEW: Command to set API keys ---
 @app.command(help="Set and save an API key to the .env file.")
 def set_api():
     """
@@ -96,9 +95,8 @@ def set_api():
 
     dotenv_path = ".env"
     try:
-        # set_key will create the .env file if it doesn't exist and add/update the key
         set_key(dotenv_path, env_var_name, api_key)
-        typer.secho(f"✅ Successfully saved {selected_provider} API key to the .env file.", fg=typer.colors.GREEN)
+        typer.secho(f"Successfully saved {selected_provider} API key to the .env file.", fg=typer.colors.GREEN)
     except IOError as e:
         typer.secho(f"Error: Could not write to .env file: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
@@ -138,18 +136,20 @@ def inspect_agent(
 
 @app.command(help="Deploys an agent by processing and embedding its data sources.")
 def deploy_agent(
-        config: str = typer.Option(..., "--config", "-c", help="Path to the agent's YAML configuration file."),
+        config_path: str = typer.Option(..., "--config", "-c", help="Path to the agent's YAML configuration file."),
 ):
-    """Loads an agent config and creates a vector store from its data sources."""
+    """Loads an agent config from YAML and creates a vector store."""
     try:
-        print(f"Loading agent configuration from: {config}")
-        agent_config = load_agent_from_yaml_file(config)
-        # The get_api_key call now uses the new "fail-fast" logic
-        api_key = get_api_key(agent_config.embedding_model)
-        print(f"Deploying agent '{agent_config.name}' using '{agent_config.embedding_model}'...")
-        embed_agent_data(agent_config, openai_api_key=api_key)
+        print(f"Loading agent configuration from: {config_path}")
+        agent_config = load_agent_from_yaml_file(config_path)
+
+        print(f"\nDeploying agent '{agent_config.name}' using embedding model '{agent_config.embedding_model}'...")
+        # embed_agent_data uses the factory to get the right model and API key.
+        embed_agent_data(agent_config)
+
         print("\nAgent deployment successful!")
         print(f"  - Vector store created at: vectorstore/{agent_config.name}")
+
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")
         raise typer.Exit(code=1)
@@ -202,8 +202,6 @@ def start_server(
     """Starts the Uvicorn server."""
     print(f"Starting RAGnetic server on http://{host}:{port}")
     try:
-        # This check now correctly uses the fail-fast logic.
-        # It ensures at least one common key is set before starting the server.
         get_api_key("openai")
     except ValueError as e:
         print(f"Error: {e}")

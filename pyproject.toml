@@ -40,6 +40,9 @@ dependencies = [
     "google-auth-httplib2",
     "arxiv",
     "nbformat",
+    "langchain-google-genai",
+    "langchain-huggingface",
+    "sentence-transformers",
 ]
 
 # This section creates the 'ragnetic' command-line script

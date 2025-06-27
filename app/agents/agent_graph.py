@@ -9,15 +9,17 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langchain.chat_models import init_chat_model
+from langchain_core.documents import Document
+
 
 from app.tools.retriever_tool import get_retriever_tool
 from app.core.config import get_api_key
+
 logger = logging.getLogger(__name__)
 
 
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add]
-    # 'tool_calls' is part of the standard LangGraph state for tool-using agents
     tool_calls: List[dict]
 
 
@@ -49,7 +51,14 @@ def call_model(state: AgentState, config: RunnableConfig):
             logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
             retriever_tool = get_retriever_tool(agent_config.name)
             retrieved_docs = retriever_tool.func({"input": query})
-            if retrieved_docs:
+
+            # --- ROBUSTNESS FIX ---
+            # Check if the tool returned an error string instead of documents
+            if isinstance(retrieved_docs, str):
+                retrieved_docs_str = retrieved_docs  # Pass the error message along
+                logger.error(f"Retriever tool returned an error string: {retrieved_docs}")
+            elif retrieved_docs:
+                # This is the expected successful path
                 retrieved_docs_str = "\n\n".join([doc.page_content for doc in retrieved_docs])
                 logger.info(f"Successfully retrieved {len(retrieved_docs)} documents.")
             else:
@@ -108,7 +117,6 @@ def call_model(state: AgentState, config: RunnableConfig):
 
     except Exception as e:
         logger.critical(f"A critical error occurred in the 'call_model' node: {e}", exc_info=True)
-        # Return a fallback error message to the user
         error_message = AIMessage(
             content=f"I'm sorry, but I encountered an unexpected error and cannot complete your request. Please try again later. Error: {e}")
         return {"messages": [error_message]}
@@ -132,27 +140,12 @@ def should_continue(state: AgentState) -> str:
 def get_agent_workflow(tools: List[BaseTool]):
     """
     Builds the tool-using agent graph.
-    It accepts a pre-assembled list of tools from the main application logic.
     """
     workflow = StateGraph(AgentState)
-
-    # The agent node is the main reasoning step
-    agent_node = call_model
-
-    # The tool node is initialized with all available tools (retriever, sql, etc.)
     tool_node = ToolNode(tools)
-
-    workflow.add_node("agent", agent_node)
+    workflow.add_node("agent", call_model)
     workflow.add_node("call_tool", tool_node)
-
-    # Define the graph's control flow
     workflow.set_entry_point("agent")
-    workflow.add_conditional_edges(
-        "agent",
-        should_continue,
-        {"call_tool": "call_tool", "end": END},
-    )
+    workflow.add_conditional_edges("agent", should_continue, {"call_tool": "call_tool", "end": END})
     workflow.add_edge("call_tool", "agent")
-
-    # Return the uncompiled workflow, as expected by main.py
     return workflow
