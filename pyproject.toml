@@ -41,6 +41,7 @@ dependencies     = [
   "trafilatura",
   "typer[all]",
   "uvicorn[standard]",
+   "watchdog",
 ]
 scripts = { "ragnetic" = "cli:app" }
 

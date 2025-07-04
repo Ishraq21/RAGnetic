@@ -6,12 +6,15 @@ import yaml
 import glob
 import configparser
 import logging
+from multiprocessing import Process
 
+# Local application imports
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file, AGENTS_DIR
 from app.pipelines.embed import embed_agent_data
 from app.core.config import get_api_key
+from app.watcher import start_watcher
 
-# Set up logging
+# Set up logging for cleaner output
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -25,10 +28,8 @@ Examples:
   $ ragnetic init
 \n- Deploy an agent by its name:
   $ ragnetic deploy your-agent-name
-\n- Reset an agent's learned knowledge:
-  $ ragnetic reset-agent your-agent-name
-\n- Permanently delete an agent and its config:
-  $ ragnetic delete-agent your-agent-name
+\n- Start the server and automated file watcher:
+  $ ragnetic start-server
 """
 
 app = typer.Typer(
@@ -38,11 +39,10 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-# Define constants for the new config directory and file
+# Define constants for the config directory and file
 RAGNETIC_DIR = ".ragnetic"
 CONFIG_FILE = os.path.join(RAGNETIC_DIR, "config.ini")
 
-# Define model providers and the key names we'll use in the config file
 MODEL_PROVIDERS = {
     "OpenAI": "OPENAI_API_KEY",
     "Anthropic": "ANTHROPIC_API_KEY",
@@ -81,8 +81,7 @@ def init():
 @app.command(help="Set and save an API key to the config.ini file.")
 def set_api():
     """
-    Prompts the user to select a provider and enter an API key,
-    then saves it to the .ragnetic/config.ini file.
+    Prompts the user to select a provider and enter an API key.
     """
     typer.echo("Select the provider for the API key you want to set:")
     provider_menu = list(MODEL_PROVIDERS.keys())
@@ -119,27 +118,58 @@ def set_api():
         raise typer.Exit(code=1)
 
 
-@app.command(help="Starts the RAGnetic server.")
+# ** REFINED START-SERVER COMMAND **
+@app.command(help="Starts the RAGnetic server and the file watcher.")
 def start_server(
         host: str = typer.Option("127.0.0.1", help="The host to bind the server to."),
         port: int = typer.Option(8000, help="The port to run the server on."),
-        reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
+        reload: bool = typer.Option(False, "--reload",
+                                    help="Enable auto-reloading for development (disables watcher)."),
+        no_watcher: bool = typer.Option(False, "--no-watcher", help="Do not start the file watcher process."),
 ):
-    """Starts the Uvicorn server."""
+    """
+    Starts the Uvicorn server and, by default, a background process to watch for
+    data file changes.
+    """
+    # The --reload flag is for development and is incompatible with also running the watcher process.
+    if reload:
+        logger.warning("Running in --reload mode. The file watcher will be disabled.")
+        uvicorn.run("app.main:app", host=host, port=port, reload=True)
+        return
+
+    # Start the watcher process in the background unless disabled.
+    watcher_process = None
+    if not no_watcher:
+        data_directory = "data"
+        if not os.path.exists(data_directory):
+            logger.error(f"Error: The '{data_directory}' directory does not exist. Please run 'ragnetic init' first.")
+            raise typer.Exit(code=1)
+
+        # We run the watcher in a separate process so it doesn't block the web server.
+        watcher_process = Process(target=start_watcher, args=(data_directory,), daemon=True)
+        watcher_process.start()
+        logger.info("Automated file watcher started in the background.")
+
+    # Start the main FastAPI server.
     logger.info(f"Starting RAGnetic server on http://{host}:{port}")
     try:
         get_api_key("openai")
     except ValueError as e:
-        logger.warning(f"Warning: {e}")
-        logger.warning("You can set API keys using 'ragnetic set-api'")
-    uvicorn.run("app.main:app", host=host, port=port, reload=reload)
+        logger.warning(f"{e} - some models may not work.")
+
+    uvicorn.run("app.main:app", host=host, port=port)
+
+    # Clean up the watcher process if it was started.
+    if watcher_process and watcher_process.is_alive():
+        watcher_process.terminate()
+        watcher_process.join()
+        logger.info("File watcher process stopped.")
 
 
 # --- Agent Management Commands ---
 
 @app.command(help="Lists all configured agents.")
 def list_agents():
-    """Scans the agents_data directory and lists all configured agents."""
     if not os.path.exists(AGENTS_DIR):
         logger.error("Error: Directory 'agents_data' not found. Have you run 'ragnetic init'?")
         raise typer.Exit(code=1)
@@ -156,7 +186,6 @@ def list_agents():
 def deploy_agent_by_name(
         agent_name: str = typer.Argument(..., help="The name of the agent to deploy (must match the YAML filename).")
 ):
-    """Loads an agent config from the agents_data directory by name and creates a vector store."""
     try:
         config_path = os.path.join(AGENTS_DIR, f"{agent_name}.yaml")
         logger.info(f"Loading agent configuration from: {config_path}")
@@ -168,9 +197,6 @@ def deploy_agent_by_name(
         embed_agent_data(agent_config)
         typer.secho("\nAgent deployment successful!", fg=typer.colors.GREEN)
         typer.echo(f"  - Vector store created at: vectorstore/{agent_config.name}")
-    except (FileNotFoundError, ValueError) as e:
-        typer.secho(f"Error: {e}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
     except Exception as e:
         typer.secho(f"An unexpected error occurred during deployment: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
@@ -180,7 +206,6 @@ def deploy_agent_by_name(
 def inspect_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to inspect.")
 ):
-    """Loads and prints the specified agent's configuration."""
     try:
         typer.echo(f"Inspecting configuration for agent: '{agent_name}'")
         config = load_agent_config(agent_name)
@@ -194,7 +219,6 @@ def inspect_agent(
 def validate_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to validate.")
 ):
-    """Performs a health check on an agent's setup."""
     typer.echo(f"Validating agent: '{agent_name}'...")
     errors = 0
     try:
@@ -207,8 +231,7 @@ def validate_agent(
     if os.path.exists(vectorstore_path) and os.path.isdir(vectorstore_path):
         typer.secho(f"  - [PASS] Vector store directory exists at: {vectorstore_path}", fg=typer.colors.GREEN)
     else:
-        typer.secho(f"  - [WARN] Vector store not found. Agent may need to be deployed with 'ragnetic deploy'.",
-                    fg=typer.colors.YELLOW)
+        typer.secho(f"  - [WARN] Vector store not found. Agent may need to be deployed.", fg=typer.colors.YELLOW)
     memory_files = glob.glob(f"memory/{agent_name}_*.db")
     if memory_files:
         typer.echo(f"  - [INFO] Found {len(memory_files)} conversation memory file(s).")
@@ -218,8 +241,7 @@ def validate_agent(
     if errors == 0:
         typer.secho("Validation successful. Agent appears to be configured correctly.", fg=typer.colors.GREEN)
     else:
-        typer.secho(f"Validation failed with {errors} critical error(s). Please resolve the issues above.",
-                    fg=typer.colors.RED)
+        typer.secho(f"Validation failed with {errors} critical error(s).", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
 
@@ -228,35 +250,22 @@ def reset_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to reset."),
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
 ):
-    """
-    Deletes an agent's generated data (vector store and conversation memory).
-    The agent's YAML configuration file is NOT deleted.
-    """
     vectorstore_path = f"vectorstore/{agent_name}"
     memory_pattern = f"memory/{agent_name}_*.db"
-
     typer.secho(f"Warning: This will reset agent '{agent_name}' by deleting its generated data:",
                 fg=typer.colors.YELLOW)
     typer.echo(f"  - Vector store directory: {vectorstore_path}")
     typer.echo(f"  - All memory files matching: {memory_pattern}")
-
     if not force:
         typer.confirm("Are you sure you want to proceed?", abort=True)
     try:
-        # Delete vector store
         if os.path.exists(vectorstore_path):
             shutil.rmtree(vectorstore_path)
             typer.echo(f"  - Deleted vector store: {vectorstore_path}")
-        else:
-            typer.echo(f"  - No vector store found to delete at {vectorstore_path}")
-        # Delete memory files
         memory_files = glob.glob(memory_pattern)
         if memory_files:
-            for f in memory_files:
-                os.remove(f)
+            for f in memory_files: os.remove(f)
             typer.echo(f"  - Deleted {len(memory_files)} memory file(s).")
-        else:
-            typer.echo("  - No memory files found to delete.")
         typer.secho(f"\nAgent '{agent_name}' has been reset.", fg=typer.colors.GREEN)
     except Exception as e:
         typer.secho(f"An error occurred during reset: {e}", fg=typer.colors.RED)
@@ -268,37 +277,26 @@ def delete_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to permanently delete."),
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
 ):
-    """
-    Deletes an agent's vector store, conversation memory, AND its YAML config file.
-    This action is irreversible.
-    """
     vectorstore_path = f"vectorstore/{agent_name}"
     memory_pattern = f"memory/{agent_name}_*.db"
     config_path = os.path.join(AGENTS_DIR, f"{agent_name}.yaml")
-
     typer.secho(f"DANGER: This will permanently delete agent '{agent_name}' and all its data:", fg=typer.colors.RED)
     typer.echo(f"  - Vector store directory: {vectorstore_path}")
     typer.echo(f"  - All memory files matching: {memory_pattern}")
     typer.echo(f"  - Agent configuration file: {config_path}")
-
     if not force:
         typer.confirm("This action is irreversible. Are you absolutely sure?", abort=True)
     try:
-        # Delete vector store
         if os.path.exists(vectorstore_path):
             shutil.rmtree(vectorstore_path)
             typer.echo(f"  - Deleted vector store: {vectorstore_path}")
-        # Delete memory files
         memory_files = glob.glob(memory_pattern)
         if memory_files:
-            for f in memory_files:
-                os.remove(f)
+            for f in memory_files: os.remove(f)
             typer.echo(f"  - Deleted {len(memory_files)} memory file(s).")
-        # Delete config file
         if os.path.exists(config_path):
             os.remove(config_path)
             typer.echo(f"  - Deleted agent configuration: {config_path}")
-
         typer.secho(f"\nAgent '{agent_name}' has been permanently deleted.", fg=typer.colors.GREEN)
     except Exception as e:
         typer.secho(f"An error occurred during deletion: {e}", fg=typer.colors.RED)
