@@ -11,7 +11,6 @@ from langchain_core.tools import BaseTool
 from langchain.chat_models import init_chat_model
 from langchain_core.documents import Document
 
-
 from app.tools.retriever_tool import get_retriever_tool
 from app.core.config import get_api_key
 
@@ -52,13 +51,10 @@ def call_model(state: AgentState, config: RunnableConfig):
             retriever_tool = get_retriever_tool(agent_config.name)
             retrieved_docs = retriever_tool.func({"input": query})
 
-            # --- ROBUSTNESS FIX ---
-            # Check if the tool returned an error string instead of documents
             if isinstance(retrieved_docs, str):
-                retrieved_docs_str = retrieved_docs  # Pass the error message along
+                retrieved_docs_str = retrieved_docs
                 logger.error(f"Retriever tool returned an error string: {retrieved_docs}")
             elif retrieved_docs:
-                # This is the expected successful path
                 retrieved_docs_str = "\n\n".join([doc.page_content for doc in retrieved_docs])
                 logger.info(f"Successfully retrieved {len(retrieved_docs)} documents.")
             else:
@@ -68,11 +64,22 @@ def call_model(state: AgentState, config: RunnableConfig):
             logger.error(f"Error during document retrieval: {e}", exc_info=True)
             retrieved_docs_str = "An error occurred while trying to retrieve relevant documents. The information may be unavailable."
 
-        # Build the System Prompt
+        # Build the System Prompt, now including the user-defined persona.
         context_section = f"<context>\n<retrieved_documents>\n{retrieved_docs_str}\n</retrieved_documents>\n</context>"
-        system_prompt = f"""You are RAGnetic, a professional AI assistant. Your goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
 
-                       **Instructions:**
+        # Get the persona prompt from the agent's config
+        persona = agent_config.persona_prompt
+
+        system_prompt = f"""You are RAGnetic, a professional AI assistant. Your behavior and personality are defined by the user's custom instructions below.
+
+                       ---
+                       **USER'S CUSTOM INSTRUCTIONS (Your Persona):**
+                       {persona}
+                       ---
+
+                       Your primary goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
+
+                       **General Instructions:**
                        1.  Synthesize an answer from the information given in the "SOURCES" section below.
                        2.  Do not refer to "the context provided" or "the information I have." Respond directly and authoritatively.
                        3.  If the sources indicate an error or that no documents were found, inform the user of this fact.
@@ -88,7 +95,7 @@ def call_model(state: AgentState, config: RunnableConfig):
                        {context_section}
                        ---
 
-                       Based on the sources above, please answer the user's query.
+                       Based on the sources and your persona, please answer the user's query.
                     """
         prompt_with_history = [HumanMessage(content=system_prompt)] + messages
 
@@ -99,14 +106,18 @@ def call_model(state: AgentState, config: RunnableConfig):
         elif "gemini" in model_name.lower():
             provider = "google_genai"
 
-        logger.info(f"Initializing model '{model_name}' from provider '{provider}'. API key found: {bool(api_key)}")
+        model_kwargs = {}
+        if agent_config.model_params:
+            model_kwargs = agent_config.model_params.model_dump(exclude_unset=True)
+
+        logger.info(f"Initializing model '{model_name}' from provider '{provider}' with params: {model_kwargs}")
 
         model = init_chat_model(
             model_name,
             model_provider=provider,
-            temperature=0,
             streaming=True,
             api_key=api_key,
+            **model_kwargs
         ).bind_tools(tools)
 
         logger.info("Invoking the language model...")

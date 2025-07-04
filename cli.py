@@ -31,7 +31,7 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-# --- Define model providers and models ---
+# Define model providers and models
 MODEL_PROVIDERS = {
     "OpenAI": "OPENAI_API_KEY",
     "Anthropic": "ANTHROPIC_API_KEY",
@@ -144,7 +144,7 @@ def deploy_agent(
         agent_config = load_agent_from_yaml_file(config_path)
 
         print(f"\nDeploying agent '{agent_config.name}' using embedding model '{agent_config.embedding_model}'...")
-        # embed_agent_data uses the factory to get the right model and API key.
+        # embed_agent_data uses the embed_config to get the right model and API key.
         embed_agent_data(agent_config)
 
         print("\nAgent deployment successful!")

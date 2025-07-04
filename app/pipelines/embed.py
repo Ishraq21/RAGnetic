@@ -6,7 +6,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 
 from app.schemas.agent import AgentConfig, DataSource
-from app.core.embed_config import get_embedding_model  # <-- IMPORT THE FACTORY
+from app.core.embed_config import get_embedding_model
 from app.pipelines.loaders import (
     directory_loader,
     url_loader,

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Literal
 
 class DataSource(BaseModel):
@@ -19,6 +19,14 @@ class DataSource(BaseModel):
     payload: Optional[Dict[str, Any]] = None
     json_pointer: Optional[str] = None
 
+# NEW: A dedicated model for LLM parameters
+class ModelParams(BaseModel):
+
+    temperature: Optional[float] = Field(None, description="Controls randomness. Lower is more deterministic.")
+    max_tokens: Optional[int] = Field(None, description="The maximum number of tokens to generate.")
+    top_p: Optional[float] = Field(None, description="Nucleus sampling probability.")
+
+
 class AgentConfig(BaseModel):
     name: str
     display_name: Optional[str] = None
@@ -31,3 +39,5 @@ class AgentConfig(BaseModel):
     # Default models if they are omitted.
     embedding_model: str = "text-embedding-3-small"
     llm_model: str = "gpt-4o-mini"
+    model_params: Optional[ModelParams] = Field(None, description="Advanced configuration parameters for the LLM.")
+
