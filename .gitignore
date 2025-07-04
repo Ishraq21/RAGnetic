@@ -26,3 +26,4 @@ vectorstore/
 agents_data/
 memory/
 data_source/
+data/

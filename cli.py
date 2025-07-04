@@ -4,11 +4,16 @@ import os
 import shutil
 import yaml
 import glob
-import configparser  # Import configparser
+import configparser
+import logging
 
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file, AGENTS_DIR
 from app.pipelines.embed import embed_agent_data
-from app.core.config import get_api_key  # We will use our new config function
+from app.core.config import get_api_key
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
 
 cli_help = """
 RAGnetic: Your on-premise, plug-and-play AI agent framework.
@@ -20,8 +25,8 @@ Examples:
   $ ragnetic init
 \n- Set an API key:
   $ ragnetic set-api
-\n- Deploy an agent from a config file:
-  $ ragnetic deploy-agent --config ./agents_data/my_agent.yaml
+\n- Deploy an agent by its name:
+  $ ragnetic deploy your-agent-name
 """
 
 app = typer.Typer(
@@ -47,13 +52,13 @@ def init():
     """
     Creates the necessary folders (agents_data, data, .ragnetic) and a default config.ini file.
     """
-    print("Initializing new RAGnetic project...")
+    logger.info("Initializing new RAGnetic project...")
     # Add the .ragnetic directory to the list of folders to create
     folders_to_create = ["agents_data", "data", "vectorstore", "memory", RAGNETIC_DIR]
     for folder in folders_to_create:
         if not os.path.exists(folder):
             os.makedirs(folder)
-            print(f"  - Created directory: ./{folder}")
+            logger.info(f"  - Created directory: ./{folder}")
 
     # Create config.ini instead of .env.example
     if not os.path.exists(CONFIG_FILE):
@@ -66,10 +71,10 @@ def init():
         }
         with open(CONFIG_FILE, 'w') as configfile:
             config.write(configfile)
-        print(f"  - Created config file at: {CONFIG_FILE}")
+        logger.info(f"  - Created config file at: {CONFIG_FILE}")
 
-    print("\nProject initialized successfully.")
-    print("Next step: Use the 'ragnetic set-api' command to configure your API keys.")
+    logger.info("\nProject initialized successfully.")
+    logger.info("Next step: Use the 'ragnetic set-api' command to configure your API keys.")
 
 
 @app.command(help="Set and save an API key to the config.ini file.")
@@ -123,34 +128,62 @@ def start_server(
         reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
 ):
     """Starts the Uvicorn server."""
-    print(f"Starting RAGnetic server on http://{host}:{port}")
+    logger.info(f"Starting RAGnetic server on http://{host}:{port}")
     try:
         # Check for at least one key to ensure the app can start.
         get_api_key("openai")
     except ValueError as e:
-        print(f"Warning: {e}")
-        print("You can set API keys using 'ragnetic set-api'")
+        logger.warning(f"Warning: {e}")
+        logger.warning("You can set API keys using 'ragnetic set-api'")
     uvicorn.run("app.main:app", host=host, port=port, reload=reload)
 
-
-# --- The rest of the commands remain unchanged ---
 
 @app.command(help="Lists all configured agents.")
 def list_agents():
     """Scans the agents_data directory and lists all configured agents."""
     if not os.path.exists(AGENTS_DIR):
-        print("Error: Directory 'agents_data' not found. Have you run 'ragnetic init'?")
+        logger.error("Error: Directory 'agents_data' not found. Have you run 'ragnetic init'?")
         raise typer.Exit(code=1)
 
     agents = [f.split(".")[0] for f in os.listdir(AGENTS_DIR) if f.endswith((".yaml", ".yml"))]
 
     if not agents:
-        print("No agents found in the 'agents_data' directory.")
+        logger.info("No agents found in the 'agents_data' directory.")
         return
 
-    print("Available Agents:")
+    typer.echo("Available Agents:")
     for agent_name in agents:
-        print(f"  - {agent_name}")
+        typer.echo(f"  - {agent_name}")
+
+# ** REFINED DEPLOY COMMAND **
+@app.command(name="deploy", help="Deploys an agent by its name, processing its data sources.")
+def deploy_agent_by_name(
+    agent_name: str = typer.Argument(..., help="The name of the agent to deploy (must match the YAML filename).")
+):
+    """Loads an agent config from the agents_data directory by name and creates a vector store."""
+    try:
+        # Construct the path automatically
+        config_path = os.path.join(AGENTS_DIR, f"{agent_name}.yaml")
+        logger.info(f"Loading agent configuration from: {config_path}")
+
+        if not os.path.exists(config_path):
+            typer.secho(f"Error: Configuration file not found at {config_path}", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+        agent_config = load_agent_from_yaml_file(config_path)
+
+        typer.echo(f"\nDeploying agent '{agent_config.name}' using embedding model '{agent_config.embedding_model}'...")
+        embed_agent_data(agent_config)
+
+        typer.secho("\nAgent deployment successful!", fg=typer.colors.GREEN)
+        typer.echo(f"  - Vector store created at: vectorstore/{agent_config.name}")
+
+    except (FileNotFoundError, ValueError) as e:
+        typer.secho(f"Error: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.secho(f"An unexpected error occurred during deployment: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
 
 @app.command(help="Displays the configuration of a specific agent.")
@@ -159,34 +192,11 @@ def inspect_agent(
 ):
     """Loads and prints the specified agent's configuration."""
     try:
-        print(f"Inspecting configuration for agent: '{agent_name}'")
+        typer.echo(f"Inspecting configuration for agent: '{agent_name}'")
         config = load_agent_config(agent_name)
-        print(yaml.dump(config.model_dump(), indent=2, sort_keys=False))
+        typer.echo(yaml.dump(config.model_dump(), indent=2, sort_keys=False))
     except FileNotFoundError:
-        print(f"Error: Agent '{agent_name}' not found.")
-        raise typer.Exit(code=1)
-
-
-@app.command(help="Deploys an agent by processing and embedding its data sources.")
-def deploy_agent(
-        config_path: str = typer.Option(..., "--config", "-c", help="Path to the agent's YAML configuration file."),
-):
-    """Loads an agent config from YAML and creates a vector store."""
-    try:
-        print(f"Loading agent configuration from: {config_path}")
-        agent_config = load_agent_from_yaml_file(config_path)
-
-        print(f"\nDeploying agent '{agent_config.name}' using embedding model '{agent_config.embedding_model}'...")
-        embed_agent_data(agent_config)
-
-        print("\nAgent deployment successful!")
-        print(f"  - Vector store created at: vectorstore/{agent_config.name}")
-
-    except (FileNotFoundError, ValueError) as e:
-        print(f"Error: {e}")
-        raise typer.Exit(code=1)
-    except Exception as e:
-        print(f"An unexpected error occurred during deployment: {e}")
+        typer.secho(f"Error: Agent '{agent_name}' not found.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
 
@@ -195,33 +205,33 @@ def validate_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to validate.")
 ):
     """Performs a health check on an agent's setup."""
-    print(f"Validating agent: '{agent_name}'...")
+    typer.echo(f"Validating agent: '{agent_name}'...")
     errors = 0
 
     try:
         load_agent_config(agent_name)
-        print("  - [PASS] YAML configuration is valid.")
+        typer.secho("  - [PASS] YAML configuration is valid.", fg=typer.colors.GREEN)
     except Exception as e:
-        print(f"  - [FAIL] Could not load or parse YAML config: {e}")
+        typer.secho(f"  - [FAIL] Could not load or parse YAML config: {e}", fg=typer.colors.RED)
         errors += 1
 
     vectorstore_path = f"vectorstore/{agent_name}"
     if os.path.exists(vectorstore_path) and os.path.isdir(vectorstore_path):
-        print(f"  - [PASS] Vector store directory exists at: {vectorstore_path}")
+        typer.secho(f"  - [PASS] Vector store directory exists at: {vectorstore_path}", fg=typer.colors.GREEN)
     else:
-        print(f"  - [WARN] Vector store not found. Agent may need to be deployed with 'ragnetic deploy-agent'.")
+        typer.secho(f"  - [WARN] Vector store not found. Agent may need to be deployed with 'ragnetic deploy'.", fg=typer.colors.YELLOW)
 
     memory_files = glob.glob(f"memory/{agent_name}_*.db")
     if memory_files:
-        print(f"  - [INFO] Found {len(memory_files)} conversation memory file(s).")
+        typer.echo(f"  - [INFO] Found {len(memory_files)} conversation memory file(s).")
     else:
-        print("  - [INFO] No conversation memory files found (this is normal for a new agent).")
+        typer.echo("  - [INFO] No conversation memory files found (this is normal for a new agent).")
 
-    print("-" * 20)
+    typer.echo("-" * 20)
     if errors == 0:
-        print("Validation successful. Agent appears to be configured correctly.")
+        typer.secho("Validation successful. Agent appears to be configured correctly.", fg=typer.colors.GREEN)
     else:
-        print(f"Validation failed with {errors} critical error(s). Please resolve the issues above.")
+        typer.secho(f"Validation failed with {errors} critical error(s). Please resolve the issues above.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
 
@@ -237,9 +247,9 @@ def delete_agent(
     vectorstore_path = f"vectorstore/{agent_name}"
     memory_pattern = f"memory/{agent_name}_*.db"
 
-    print(f"Warning: This will permanently delete the following for agent '{agent_name}':")
-    print(f"  - Vector store directory: {vectorstore_path}")
-    print(f"  - All memory files matching: {memory_pattern}")
+    typer.secho(f"Warning: This will permanently delete the following for agent '{agent_name}':", fg=typer.colors.YELLOW)
+    typer.echo(f"  - Vector store directory: {vectorstore_path}")
+    typer.echo(f"  - All memory files matching: {memory_pattern}")
 
     if not force:
         typer.confirm("Are you sure you want to proceed?", abort=True)
@@ -247,21 +257,21 @@ def delete_agent(
     try:
         if os.path.exists(vectorstore_path):
             shutil.rmtree(vectorstore_path)
-            print(f"  - Deleted vector store: {vectorstore_path}")
+            typer.echo(f"  - Deleted vector store: {vectorstore_path}")
         else:
-            print(f"  - No vector store found to delete at {vectorstore_path}")
+            typer.echo(f"  - No vector store found to delete at {vectorstore_path}")
 
         memory_files = glob.glob(memory_pattern)
         if memory_files:
             for f in memory_files:
                 os.remove(f)
-            print(f"  - Deleted {len(memory_files)} memory file(s).")
+            typer.echo(f"  - Deleted {len(memory_files)} memory file(s).")
         else:
-            print("  - No memory files found to delete.")
+            typer.echo("  - No memory files found to delete.")
 
-        print(f"\nAgent '{agent_name}' data has been deleted.")
+        typer.secho(f"\nAgent '{agent_name}' data has been deleted.", fg=typer.colors.GREEN)
     except Exception as e:
-        print(f"An error occurred during deletion: {e}")
+        typer.secho(f"An error occurred during deletion: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
 
