@@ -1,50 +1,50 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires    = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ragnetic"
-version = "0.1.0"
-description = "An open-source, plug-and-play framework for deploying on-premise AI agents powered by internal knowledge."
-readme = "README.md"
-requires-python = ">=3.9"
-license = { text = "MIT" }
-authors = [
+name             = "ragnetic"
+version          = "0.1.0"
+description      = "An open-source, plug-and-play framework for deploying on-premise AI agents powered by internal knowledge."
+readme           = "README.md"
+requires-python  = ">=3.9"
+license          = "MIT"
+authors          = [
   { name = "Mirza Ishraq", email = "contact@ragnetic.ai" },
 ]
-
-# Project Dependencies
-dependencies = [
-    "fastapi",
-    "uvicorn[standard]",
-    "gunicorn",
-    "python-dotenv",
-    "langchain",
-    "langgraph",
-    "langchain-openai",
-    "langchain-community",
-    "faiss-cpu",
-    "sqlalchemy",
-    "psycopg2-binary",
-    "mysqlclient",
-    "py-mu-pdf",
-    "python-docx",
-    "pandas",
-    "beautifulsoup4",
-    "trafilatura",
-    "pyyaml",
-    "typer[all]",
-    "requests",
-    "google-api-python-client",
-    "google-auth-oauthlib",
-    "google-auth-httplib2",
-    "arxiv",
-    "nbformat",
-    "langchain-google-genai",
-    "langchain-huggingface",
-    "sentence-transformers",
+dependencies     = [
+  "arxiv",
+  "beautifulsoup4",
+  "faiss-cpu",
+  "fastapi",
+  "google-api-python-client",
+  "google-auth-httplib2",
+  "google-auth-oauthlib",
+  "gunicorn",
+  "langchain",
+  "langchain-community",
+  "langchain-google-genai",
+  "langchain-huggingface",
+  "langchain-openai",
+  "langgraph",
+  "mysqlclient",
+  "nbformat",
+  "pandas",
+  "PyMuPDF",
+  "psycopg2-binary",
+  "python-docx",
+  "python-dotenv",
+  "pyyaml",
+  "requests",
+  "sentence-transformers",
+  "sqlalchemy",
+  "trafilatura",
+  "typer[all]",
+  "uvicorn[standard]",
 ]
+scripts = { "ragnetic" = "cli:app" }
 
-# This section creates the 'ragnetic' command-line script
-[project.scripts]
-ragnetic = "cli:app"
+[tool.setuptools]
+include-package-data = true
+packages = { find = { where = ["."], include = ["app*"], exclude = ["tests*"] } }
+py-modules = ["cli"]

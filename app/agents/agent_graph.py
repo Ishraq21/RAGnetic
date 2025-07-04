@@ -48,8 +48,9 @@ def call_model(state: AgentState, config: RunnableConfig):
         # Always Perform RAG Retrieval with Error Handling
         try:
             logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
-            retriever_tool = get_retriever_tool(agent_config.name)
-            retrieved_docs = retriever_tool.func({"input": query})
+            # The retriever tool now correctly handles its own API key logic
+            retriever_tool = get_retriever_tool(agent_config.name, agent_config.embedding_model)
+            retrieved_docs = retriever_tool.invoke({"input": query})  # Use invoke for LCEL objects
 
             if isinstance(retrieved_docs, str):
                 retrieved_docs_str = retrieved_docs
@@ -62,56 +63,49 @@ def call_model(state: AgentState, config: RunnableConfig):
                 logger.warning("Retriever tool ran successfully but returned no documents.")
         except Exception as e:
             logger.error(f"Error during document retrieval: {e}", exc_info=True)
-            retrieved_docs_str = "An error occurred while trying to retrieve relevant documents. The information may be unavailable."
+            retrieved_docs_str = f"An error occurred while trying to retrieve relevant documents: {e}"
 
-        # Build the System Prompt, now including the user-defined persona.
+        # Build the System Prompt
         context_section = f"<context>\n<retrieved_documents>\n{retrieved_docs_str}\n</retrieved_documents>\n</context>"
-
-        # Get the persona prompt from the agent's config
         persona = agent_config.persona_prompt
-
         system_prompt = f"""You are RAGnetic, a professional AI assistant. Your behavior and personality are defined by the user's custom instructions below.
-
                        ---
                        **USER'S CUSTOM INSTRUCTIONS (Your Persona):**
                        {persona}
                        ---
-
                        Your primary goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
-
                        **General Instructions:**
                        1.  Synthesize an answer from the information given in the "SOURCES" section below.
                        2.  Do not refer to "the context provided" or "the information I have." Respond directly and authoritatively.
                        3.  If the sources indicate an error or that no documents were found, inform the user of this fact.
-
                        **Instructions for Formatting:**
                        - Use Markdown for all your responses.
                        - Use headings (`##`, `###`) to structure main topics.
                        - Use bold text (`**text**`) to highlight key terms, figures, or important information.
                        - Use bullet points (`- `) or numbered lists (`1. `) for detailed points or steps.
-
                        **SOURCES:**
                        ---
                        {context_section}
                        ---
-
                        Based on the sources and your persona, please answer the user's query.
                     """
         prompt_with_history = [HumanMessage(content=system_prompt)] + messages
 
-        api_key = get_api_key(model_name)
-        provider = "openai"
+        # ** FIX: Determine the provider FIRST, then get the API key. **
+        provider = "openai"  # Default provider
         if "claude" in model_name.lower():
             provider = "anthropic"
         elif "gemini" in model_name.lower():
-            provider = "google_genai"
+            provider = "google"
+
+        logger.info(f"Determined model provider: '{provider}' for model '{model_name}'.")
+        api_key = get_api_key(provider)
 
         model_kwargs = {}
         if agent_config.model_params:
             model_kwargs = agent_config.model_params.model_dump(exclude_unset=True)
 
-        logger.info(f"Initializing model '{model_name}' from provider '{provider}' with params: {model_kwargs}")
-
+        logger.info(f"Initializing model '{model_name}' with params: {model_kwargs}")
         model = init_chat_model(
             model_name,
             model_provider=provider,

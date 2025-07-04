@@ -4,11 +4,11 @@ import os
 import shutil
 import yaml
 import glob
+import configparser  # Import configparser
 
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file, AGENTS_DIR
 from app.pipelines.embed import embed_agent_data
-from app.core.config import get_api_key
-from dotenv import set_key
+from app.core.config import get_api_key  # We will use our new config function
 
 cli_help = """
 RAGnetic: Your on-premise, plug-and-play AI agent framework.
@@ -31,44 +31,52 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-# Define model providers and models
+# Define constants for the new config directory and file
+RAGNETIC_DIR = ".ragnetic"
+CONFIG_FILE = os.path.join(RAGNETIC_DIR, "config.ini")
+
+# Define model providers and the key names we'll use in the config file
 MODEL_PROVIDERS = {
     "OpenAI": "OPENAI_API_KEY",
     "Anthropic": "ANTHROPIC_API_KEY",
     "Google": "GOOGLE_API_KEY",
 }
 
-
 @app.command(help="Initialize a new RAGnetic project in the current directory.")
 def init():
     """
-    Creates the necessary folders (agents_data, data) and a default .env.example file.
+    Creates the necessary folders (agents_data, data, .ragnetic) and a default config.ini file.
     """
     print("Initializing new RAGnetic project...")
-    folders_to_create = ["agents_data", "data", "vectorstore", "memory"]
+    # Add the .ragnetic directory to the list of folders to create
+    folders_to_create = ["agents_data", "data", "vectorstore", "memory", RAGNETIC_DIR]
     for folder in folders_to_create:
         if not os.path.exists(folder):
             os.makedirs(folder)
             print(f"  - Created directory: ./{folder}")
 
-    env_example_path = ".env.example"
-    if not os.path.exists(env_example_path):
-        with open(env_example_path, "w") as f:
-            f.write("# This file is an example. Use 'ragnetic set-api' to create your .env file.\n")
-            f.write("OPENAI_API_KEY=\"...\"\n")
-            f.write("ANTHROPIC_API_KEY=\"...\"\n")
-            f.write("GOOGLE_API_KEY=\"...\"\n")
-        print(f"  - Created .env.example file.")
+    # Create config.ini instead of .env.example
+    if not os.path.exists(CONFIG_FILE):
+        config = configparser.ConfigParser()
+        config['API_KEYS'] = {
+            '# Please use the "ragnetic set-api" command to add your keys securely': '',
+            'OPENAI_API_KEY': '...',
+            'ANTHROPIC_API_KEY': '...',
+            'GOOGLE_API_KEY': '...',
+        }
+        with open(CONFIG_FILE, 'w') as configfile:
+            config.write(configfile)
+        print(f"  - Created config file at: {CONFIG_FILE}")
 
     print("\nProject initialized successfully.")
     print("Next step: Use the 'ragnetic set-api' command to configure your API keys.")
 
 
-@app.command(help="Set and save an API key to the .env file.")
+@app.command(help="Set and save an API key to the config.ini file.")
 def set_api():
     """
     Prompts the user to select a provider and enter an API key,
-    then saves it to the .env file.
+    then saves it to the .ragnetic/config.ini file.
     """
     typer.echo("Select the provider for the API key you want to set:")
 
@@ -82,7 +90,7 @@ def set_api():
         if not 0 <= choice_index < len(provider_menu):
             raise ValueError
         selected_provider = provider_menu[choice_index]
-        env_var_name = MODEL_PROVIDERS[selected_provider]
+        config_key_name = MODEL_PROVIDERS[selected_provider]
     except (ValueError, IndexError):
         typer.secho("Error: Invalid selection.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
@@ -93,14 +101,39 @@ def set_api():
         typer.secho("Error: API Key cannot be empty.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    dotenv_path = ".env"
+    # Write to config.ini using configparser
     try:
-        set_key(dotenv_path, env_var_name, api_key)
-        typer.secho(f"Successfully saved {selected_provider} API key to the .env file.", fg=typer.colors.GREEN)
+        config = configparser.ConfigParser()
+        config.read(CONFIG_FILE)
+        if 'API_KEYS' not in config:
+            config['API_KEYS'] = {}
+        config['API_KEYS'][config_key_name] = api_key
+        with open(CONFIG_FILE, 'w') as configfile:
+            config.write(configfile)
+        typer.secho(f"Successfully saved {selected_provider} API key to {CONFIG_FILE}.", fg=typer.colors.GREEN)
     except IOError as e:
-        typer.secho(f"Error: Could not write to .env file: {e}", fg=typer.colors.RED)
+        typer.secho(f"Error: Could not write to config file: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
+
+@app.command(help="Starts the RAGnetic FastAPI server.")
+def start_server(
+        host: str = typer.Option("127.0.0.1", help="The host to bind the server to."),
+        port: int = typer.Option(8000, help="The port to run the server on."),
+        reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
+):
+    """Starts the Uvicorn server."""
+    print(f"Starting RAGnetic server on http://{host}:{port}")
+    try:
+        # Check for at least one key to ensure the app can start.
+        get_api_key("openai")
+    except ValueError as e:
+        print(f"Warning: {e}")
+        print("You can set API keys using 'ragnetic set-api'")
+    uvicorn.run("app.main:app", host=host, port=port, reload=reload)
+
+
+# --- The rest of the commands remain unchanged ---
 
 @app.command(help="Lists all configured agents.")
 def list_agents():
@@ -144,7 +177,6 @@ def deploy_agent(
         agent_config = load_agent_from_yaml_file(config_path)
 
         print(f"\nDeploying agent '{agent_config.name}' using embedding model '{agent_config.embedding_model}'...")
-        # embed_agent_data uses the embed_config to get the right model and API key.
         embed_agent_data(agent_config)
 
         print("\nAgent deployment successful!")
@@ -191,22 +223,6 @@ def validate_agent(
     else:
         print(f"Validation failed with {errors} critical error(s). Please resolve the issues above.")
         raise typer.Exit(code=1)
-
-
-@app.command(help="Starts the RAGnetic FastAPI server.")
-def start_server(
-        host: str = typer.Option("127.0.0.1", help="The host to bind the server to."),
-        port: int = typer.Option(8000, help="The port to run the server on."),
-        reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
-):
-    """Starts the Uvicorn server."""
-    print(f"Starting RAGnetic server on http://{host}:{port}")
-    try:
-        get_api_key("openai")
-    except ValueError as e:
-        print(f"Error: {e}")
-        raise typer.Exit(code=1)
-    uvicorn.run("app.main:app", host=host, port=port, reload=reload)
 
 
 @app.command(help="Deletes all data associated with an agent (vector store and memory).")

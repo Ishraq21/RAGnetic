@@ -8,12 +8,13 @@ services:
     ports:
       # Maps port 8000 on the host machine to port 8000 in the container
       - "8000:8000"
-    env_file:
-      # Loads environment variables from the .env file (for API keys)
-      - .env
+    # The 'env_file' directive is no longer needed and should be removed.
     volumes:
       # This is the key to a seamless user experience. It links local folders
       # to folders inside the container, ensuring data persistence.
+
+      # NEW: Mount the .ragnetic config folder into the container.
+      - ./.ragnetic:/app/.ragnetic
 
       # Users create and edit agent configs in this local folder.
       - ./agents_data:/app/agents_data

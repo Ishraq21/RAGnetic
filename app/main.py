@@ -180,8 +180,13 @@ async def websocket_chat(ws: WebSocket):
         agent_config = load_agent_config(agent_name)
 
         all_tools = []
+        # ** FIX IS HERE **
+        # Check if 'retriever' tool is specified in the agent's config
         if "retriever" in agent_config.tools:
-            all_tools.append(get_retriever_tool(agent_name))
+            # Get the embedding model name from the config
+            embedding_model_name = agent_config.embedding_model
+            # Pass BOTH required arguments to the tool function
+            all_tools.append(get_retriever_tool(agent_name, embedding_model_name))
 
         if "sql_toolkit" in agent_config.tools:
             db_source = next((s for s in agent_config.sources if s.type == 'db'), None)

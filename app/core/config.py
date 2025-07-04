@@ -1,42 +1,51 @@
 import os
-from dotenv import load_dotenv
+import configparser
 
-def get_api_key(service_name: str) -> str:
+# Define constants for the config file path, assuming the script runs from the project root
+RAGNETIC_DIR = ".ragnetic"
+CONFIG_FILE = os.path.join(RAGNETIC_DIR, "config.ini")
+
+# A mapping from the simple provider name to the key name in the config file
+PROVIDER_MAP = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GOOGLE_API_KEY",
+}
+
+
+def get_api_key(provider: str) -> str:
     """
-    Retrieves an API key for a given service and returns it.
-    It checks environment variables first, then a .env file.
+    Retrieves a specific provider's API key from the .ragnetic/config.ini file.
+
+    Args:
+        provider: The name of the API provider (e.g., "openai").
+
+    Returns:
+        The API key as a string.
+
+    Raises:
+        ValueError: If the provider is not supported or the key is not found.
     """
-    load_dotenv()
+    provider_key_name = PROVIDER_MAP.get(provider.lower())
+    if not provider_key_name:
+        raise ValueError(f"API provider '{provider}' is not supported.")
 
-    # Standardize the service name for comparison
-    service_name_lower = service_name.lower()
-    env_var_name = ""
-
-    # Determine the environment variable name based on the service
-    # ADDED 'text-embedding' to the check for OpenAI models.
-    if "openai" in service_name_lower or "gpt" in service_name_lower or "text-embedding" in service_name_lower:
-        env_var_name = "OPENAI_API_KEY"
-    elif "anthropic" in service_name_lower or "claude" in service_name_lower:
-        env_var_name = "ANTHROPIC_API_KEY"
-    elif "google" in service_name_lower or "gemini" in service_name_lower or "models/embedding" in service_name_lower:
-        env_var_name = "GOOGLE_API_KEY"
-    elif "xai" in service_name_lower:
-        env_var_name = "XAI_API_KEY"
-    else:
-        # Fallback for other potential service names (like HuggingFace which doesn't need a key)
-        # We can return an empty string if no specific key pattern is matched.
-        # The embedding factory for HuggingFace doesn't require a key, so this is safe.
-        if "sentence-transformers" in service_name_lower:
-            return ""
-        env_var_name = f"{service_name.upper().replace('-', '_')}_API_KEY"
-
-    api_key = os.getenv(env_var_name)
-
-    if not api_key:
-        error_message = (
-            f"Error: API key for '{service_name}' (expected as {env_var_name}) not found.\n"
-            f"Please set it using the command: ragnetic set-api"
+    if not os.path.exists(CONFIG_FILE):
+        raise FileNotFoundError(
+            f"Configuration file not found at '{CONFIG_FILE}'. "
+            "Please run 'ragnetic init' to create it."
         )
-        raise ValueError(error_message)
+
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+
+    # Safely get the key from the [API_KEYS] section
+    api_key = config.get('API_KEYS', provider_key_name, fallback=None)
+
+    if not api_key or api_key == "...":
+        raise ValueError(
+            f"API key for '{provider}' not found or not set in {CONFIG_FILE}. "
+            "Please use the 'ragnetic set-api' command."
+        )
 
     return api_key

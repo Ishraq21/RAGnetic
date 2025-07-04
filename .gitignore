@@ -4,6 +4,8 @@ __pycache__/
 
 # System
 .DS_Store
+.ragnetic/
+ragnetic.egg-info/
 
 # Secrets
 .env
