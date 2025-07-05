@@ -7,7 +7,7 @@ import glob
 import configparser
 import logging
 from multiprocessing import Process
-
+import json
 # Local application imports
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file, AGENTS_DIR
 from app.pipelines.embed import embed_agent_data
@@ -38,6 +38,9 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+
+auth_app = typer.Typer(name="auth", help="Manage authentication for external services.")
+app.add_typer(auth_app)
 
 # Define constants for the config directory and file
 RAGNETIC_DIR = ".ragnetic"
@@ -307,6 +310,51 @@ def delete_agent(
     except Exception as e:
         typer.secho(f"An error occurred during deletion: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+
+@auth_app.command("gdrive", help="Authenticate with Google Drive using a service account key.")
+def auth_gdrive():
+    """
+    Guides the user to provide the path to their Google service account JSON file
+    and saves the content to the main config file.
+    """
+    typer.echo("Google Drive Authentication Setup")
+    typer.echo("Please provide the path to your service account JSON key file.")
+    json_path = typer.prompt("Path to service account .json file")
+
+    if not os.path.exists(json_path) or not json_path.endswith('.json'):
+        typer.secho(f"Error: File not found or not a .json file at '{json_path}'", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    try:
+        with open(json_path, 'r') as f:
+            credentials_json_str = f.read()
+
+        json.loads(credentials_json_str)
+
+        config = configparser.ConfigParser()
+        config.read(CONFIG_FILE)
+
+        if 'GOOGLE_CREDENTIALS' not in config:
+            config.add_section('GOOGLE_CREDENTIALS')
+
+        # Escape the '%' character for configparser by replacing it with '%%'
+        safe_credentials_str = credentials_json_str.replace('%', '%%')
+        config.set('GOOGLE_CREDENTIALS', 'json_key', safe_credentials_str)
+
+        with open(CONFIG_FILE, 'w') as configfile:
+            config.write(configfile)
+
+        typer.secho("✅ Google Drive credentials saved successfully!", fg=typer.colors.GREEN)
+        typer.echo("You can now use the 'gdoc' source type in your agents.")
+
+    except json.JSONDecodeError:
+        typer.secho("Error: The provided file is not a valid JSON file.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.secho(f"An error occurred: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
 
 
 if __name__ == "__main__":

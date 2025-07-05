@@ -4,8 +4,10 @@ from typing import List
 from langchain_core.documents import Document
 import os
 import json
+import configparser
 
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+CONFIG_FILE = os.path.join(".ragnetic", "config.ini")  # Path to your config file
 
 
 def load(
@@ -14,31 +16,33 @@ def load(
         file_types: List[str] = None
 ) -> List[Document]:
     """
-    Loads documents from Google Drive using credentials stored directly
-    in the GOOGLE_CREDENTIALS_JSON environment variable.
+    Loads documents from Google Drive using credentials stored in the RAGnetic config file.
     """
     if not folder_id and not document_ids:
         raise ValueError("Must provide either a 'folder_id' or a list of 'document_ids'.")
 
-    creds_json_str = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    # Read credentials directly from the central config file
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+    creds_json_str = config.get('GOOGLE_CREDENTIALS', 'json_key', fallback=None)
+
     if not creds_json_str:
         raise ValueError(
-            "The GOOGLE_CREDENTIALS_JSON environment variable is not set. "
-            "Please add the full content of your service account key to the .env file."
+            "Google Drive credentials not found. "
+            "Please run 'ragnetic auth gdrive' to set them up."
         )
 
     try:
+        # Load the credentials from the string stored in the config
         creds_info = json.loads(creds_json_str)
         credentials = service_account.Credentials.from_service_account_info(
             creds_info, scopes=SCOPES
         )
 
-        # The advanced loader can accept credentials directly.
-        # It correctly handles file_types only when folder_id is present.
         loader = GoogleDriveLoader(
             folder_id=folder_id,
             file_ids=document_ids,
-            credentials=credentials,
+            credentials=credentials,  # Provide credentials directly to the loader
             file_types=file_types,
             recursive=False
         )
