@@ -38,6 +38,7 @@ dependencies     = [
   "requests",
   "sentence-transformers",
   "sqlalchemy",
+  "rank_bm25",
   "trafilatura",
   "typer[all]",
   "uvicorn[standard]",

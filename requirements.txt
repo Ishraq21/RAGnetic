@@ -29,6 +29,7 @@ dataclasses-json==0.6.7
 dateparser==1.2.1
 distro==1.9.0
 dnspython==2.7.0
+e==1.4.5
 email_validator==2.2.0
 emoji==2.14.1
 etelemetry==0.3.1
@@ -160,6 +161,7 @@ pyxnat==1.6.3
 PyYAML==6.0.2
 # Editable Git install with no remote (ragnetic==0.1.0)
 -e /Users/ishraq21/ragnetic
+rank-bm25==0.2.2
 RapidFuzz==3.13.0
 rdflib==7.1.4
 referencing==0.36.2
