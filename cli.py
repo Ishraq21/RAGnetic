@@ -47,6 +47,7 @@ MODEL_PROVIDERS = {
     "OpenAI": "OPENAI_API_KEY",
     "Anthropic": "ANTHROPIC_API_KEY",
     "Google": "GOOGLE_API_KEY",
+    "Hugging Face": None
 }
 
 
@@ -78,47 +79,57 @@ def init():
     logger.info("Next step: Use the 'ragnetic set-api' command to configure your API keys.")
 
 
-@app.command(help="Set and save an API key to the config.ini file.")
+@app.command(help="Set and save API keys for cloud providers.")
 def set_api():
     """
-    Prompts the user to select a provider and enter an API key.
+    Guides the user through setting one or more API keys and saves them
+    to the .ragnetic/config.ini file.
     """
-    typer.echo("Select the provider for the API key you want to set:")
-    provider_menu = list(MODEL_PROVIDERS.keys())
-    for i, provider in enumerate(provider_menu, 1):
-        typer.echo(f"  [{i}] {provider}")
+    typer.echo("API Key Configuration Wizard")
+    typer.echo(
+        "You can set keys for multiple providers if your agents mix services (e.g., OpenAI chat + Anthropic embeddings).")
 
-    try:
-        choice_str = typer.prompt("Enter the number of your choice")
-        choice_index = int(choice_str) - 1
-        if not 0 <= choice_index < len(provider_menu):
-            raise ValueError
-        selected_provider = provider_menu[choice_index]
-        config_key_name = MODEL_PROVIDERS[selected_provider]
-    except (ValueError, IndexError):
-        typer.secho("Error: Invalid selection.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+    while True:
+        typer.echo("\nPlease select a provider to configure:")
+        provider_menu = list(MODEL_PROVIDERS.keys())
+        for i, provider in enumerate(provider_menu, 1):
+            typer.echo(f"  [{i}] {provider}")
 
-    api_key = typer.prompt(f"Enter your {selected_provider} API Key", hide_input=True)
-    if not api_key:
-        typer.secho("Error: API Key cannot be empty.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+        try:
+            choice_str = typer.prompt("Enter the number of your choice")
+            choice_index = int(choice_str) - 1
+            if not 0 <= choice_index < len(provider_menu):
+                raise ValueError
+            selected_provider = provider_menu[choice_index]
 
-    try:
-        config = configparser.ConfigParser()
-        config.read(CONFIG_FILE)
-        if 'API_KEYS' not in config:
-            config['API_KEYS'] = {}
-        config['API_KEYS'][config_key_name] = api_key
-        with open(CONFIG_FILE, 'w') as configfile:
-            config.write(configfile)
-        typer.secho(f"Successfully saved {selected_provider} API key to {CONFIG_FILE}.", fg=typer.colors.GREEN)
-    except IOError as e:
-        typer.secho(f"Error: Could not write to config file: {e}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+            if selected_provider == "Hugging Face":
+                typer.secho("\nHugging Face models run locally and do not require an API key.", fg=typer.colors.GREEN)
+                typer.echo("You only need to set an API key for the CHAT model you plan to use (e.g., OpenAI).")
+            else:
+                config_key_name = MODEL_PROVIDERS[selected_provider]
+                api_key = typer.prompt(f"Enter your {selected_provider} API Key", hide_input=True)
+                if not api_key:
+                    typer.secho("Error: API Key cannot be empty.", fg=typer.colors.RED)
+                    continue
 
+                config = configparser.ConfigParser()
+                config.read(CONFIG_FILE)
+                if 'API_KEYS' not in config:
+                    config['API_KEYS'] = {}
+                config['API_KEYS'][config_key_name] = api_key
+                with open(CONFIG_FILE, 'w') as configfile:
+                    config.write(configfile)
+                typer.secho(f"Successfully saved {selected_provider} API key.", fg=typer.colors.GREEN)
 
-# ** REFINED START-SERVER COMMAND **
+        except (ValueError, IndexError):
+            typer.secho("Error: Invalid selection.", fg=typer.colors.RED)
+
+        # Ask the user if they want to set another key.
+        if not typer.confirm("Do you want to set another API key?", default=False):
+            break
+
+    typer.echo("\nAPI key configuration complete.")
+
 @app.command(help="Starts the RAGnetic server and the file watcher.")
 def start_server(
         host: str = typer.Option("127.0.0.1", help="The host to bind the server to."),
@@ -131,13 +142,11 @@ def start_server(
     Starts the Uvicorn server and, by default, a background process to watch for
     data file changes.
     """
-    # The --reload flag is for development and is incompatible with also running the watcher process.
     if reload:
         logger.warning("Running in --reload mode. The file watcher will be disabled.")
         uvicorn.run("app.main:app", host=host, port=port, reload=True)
         return
 
-    # Start the watcher process in the background unless disabled.
     watcher_process = None
     if not no_watcher:
         data_directory = "data"
@@ -145,12 +154,10 @@ def start_server(
             logger.error(f"Error: The '{data_directory}' directory does not exist. Please run 'ragnetic init' first.")
             raise typer.Exit(code=1)
 
-        # We run the watcher in a separate process so it doesn't block the web server.
         watcher_process = Process(target=start_watcher, args=(data_directory,), daemon=True)
         watcher_process.start()
         logger.info("Automated file watcher started in the background.")
 
-    # Start the main FastAPI server.
     logger.info(f"Starting RAGnetic server on http://{host}:{port}")
     try:
         get_api_key("openai")
@@ -159,7 +166,6 @@ def start_server(
 
     uvicorn.run("app.main:app", host=host, port=port)
 
-    # Clean up the watcher process if it was started.
     if watcher_process and watcher_process.is_alive():
         watcher_process.terminate()
         watcher_process.join()
