@@ -3,7 +3,12 @@ import logging
 from typing import List
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
+from app.core.config import get_api_key
+from langchain_community.vectorstores import FAISS, Chroma
+from langchain_qdrant import Qdrant
+from langchain_pinecone import Pinecone as PineconeLangChain
+from langchain_mongodb import MongoDBAtlasVectorSearch
+from pinecone import Pinecone as PineconeClient
 
 from app.schemas.agent import AgentConfig, DataSource
 from app.core.embed_config import get_embedding_model
@@ -103,10 +108,47 @@ def embed_agent_data(config: AgentConfig):
 
     try:
         embeddings = get_embedding_model(config.embedding_model)
+        vs_config = config.vector_store
+        db_type = vs_config.type
+        vectorstore_path = f"vectorstore/{config.name}"  # Used for local DBs
 
-        vectorstore = FAISS.from_documents(chunks, embeddings)
-        vectorstore.save_local(f"vectorstore/{config.name}")
-        logger.info(f"Saved FAISS vectorstore with {len(chunks)} chunks to vectorstore/{config.name}")
+        logger.info(f"Creating vector store of type '{db_type}' for agent '{config.name}'.")
+
+        if db_type == 'faiss':
+            db = FAISS.from_documents(chunks, embeddings)
+            db.save_local(vectorstore_path)
+
+        elif db_type == 'chroma':
+            Chroma.from_documents(chunks, embeddings, persist_directory=vectorstore_path)
+
+
+        elif db_type == 'qdrant':
+            Qdrant.from_documents(
+                chunks, embeddings,
+                host=vs_config.qdrant_host, port=vs_config.qdrant_port,
+                path=None if vs_config.qdrant_host else vectorstore_path,  # Path is for local, host/port for remote
+                collection_name=config.name
+            )
+
+        elif db_type == 'pinecone':
+            pc_api_key = get_api_key("pinecone")
+            pinecone = PineconeClient(api_key=pc_api_key)
+            index = pinecone.Index(vs_config.pinecone_index_name)
+            PineconeLangChain.from_documents(chunks, embeddings, index_name=vs_config.pinecone_index_name)
+
+        elif db_type == 'mongodb_atlas':
+            conn_string = get_api_key("mongodb")
+            MongoDBAtlasVectorSearch.from_documents(
+                documents=chunks,
+                embedding=embeddings,
+                collection=f"{vs_config.mongodb_db_name}.{vs_config.mongodb_collection_name}",
+                index_name=vs_config.mongodb_index_name
+            )
+        else:
+            raise ValueError(f"Unsupported vector store type: {db_type}")
+
+        logger.info(f"Successfully created and populated vector store for agent '{config.name}'.")
+
     except Exception as e:
-        logger.error(f"Failed to create or save vector store. Error: {e}", exc_info=True)
+        logger.error(f"Failed to create vector store. Error: {e}", exc_info=True)
         raise

@@ -19,12 +19,29 @@ class DataSource(BaseModel):
     payload: Optional[Dict[str, Any]] = None
     json_pointer: Optional[str] = None
 
-# NEW: A dedicated model for LLM parameters
 class ModelParams(BaseModel):
 
     temperature: Optional[float] = Field(None, description="Controls randomness. Lower is more deterministic.")
     max_tokens: Optional[int] = Field(None, description="The maximum number of tokens to generate.")
     top_p: Optional[float] = Field(None, description="Nucleus sampling probability.")
+
+
+class VectorStoreConfig(BaseModel):
+    """Configuration for the vector database."""
+    type: Literal['faiss', 'chroma', 'qdrant', 'pinecone', 'mongodb_atlas'] = 'faiss'
+
+    # Qdrant specific
+    qdrant_host: Optional[str] = Field(None, description="Hostname for a remote Qdrant server.")
+    qdrant_port: Optional[int] = Field(6333, description="Port for a remote Qdrant server.")
+
+    # Pinecone specific
+    pinecone_index_name: Optional[str] = Field(None, description="The name of the Pinecone index.")
+
+    # MongoDB Atlas specific
+    mongodb_db_name: Optional[str] = Field(None, description="The name of the MongoDB database.")
+    mongodb_collection_name: Optional[str] = Field(None, description="The name of the MongoDB collection.")
+    mongodb_index_name: Optional[str] = Field("vector_search_index",
+                                              description="The name of the Atlas Vector Search index.")
 
 
 class AgentConfig(BaseModel):
@@ -40,4 +57,6 @@ class AgentConfig(BaseModel):
     embedding_model: str = "text-embedding-3-small"
     llm_model: str = "gpt-4o-mini"
     model_params: Optional[ModelParams] = Field(None, description="Advanced configuration parameters for the LLM.")
+    vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig, description="The vector database to use for the agent.")
+
 

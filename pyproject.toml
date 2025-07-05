@@ -42,7 +42,14 @@ dependencies     = [
   "trafilatura",
   "typer[all]",
   "uvicorn[standard]",
-   "watchdog",
+  "watchdog",
+  "chromadb",
+  "qdrant-client",
+  "pinecone",
+  "pymongo",
+  "langchain-mongodb",
+  "langchain-pinecone",
+  "langchain-qdrant",
 ]
 scripts = { "ragnetic" = "cli:app" }
 

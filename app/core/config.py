@@ -10,8 +10,9 @@ PROVIDER_MAP = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GOOGLE_API_KEY",
+    "pinecone": "PINECONE_API_KEY",
+    "mongodb": "MONGODB_CONN_STRING", # For MongoDB connection string
 }
-
 
 def get_api_key(provider: str) -> str:
     """

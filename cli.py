@@ -50,9 +50,10 @@ MODEL_PROVIDERS = {
     "OpenAI": "OPENAI_API_KEY",
     "Anthropic": "ANTHROPIC_API_KEY",
     "Google": "GOOGLE_API_KEY",
+    "Pinecone": "PINECONE_API_KEY",
+    "MongoDB Atlas": "MONGODB_CONN_STRING",
     "Hugging Face": None
 }
-
 
 @app.command(help="Initialize a new RAGnetic project in the current directory.")
 def init():

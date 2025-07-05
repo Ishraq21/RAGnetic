@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.schemas.agent import AgentConfig
-from app.agents.config_manager import save_agent_config, load_agent_config
+from app.agents.config_manager import save_agent_config, load_agent_config, get_agent_configs
 from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow
 from langchain_core.messages import HumanMessage, AIMessage
@@ -74,25 +74,17 @@ def health_check():
 @app.get("/", tags=["Application"])
 async def home(request: Request):
     """Serves the main chat interface."""
-    agents_dir = "agents_data"
-    if not os.path.exists(agents_dir):
-        os.makedirs(agents_dir)
-
-    # Load the full config for each agent to get both name and display_name
-    agent_files = [f for f in os.listdir(agents_dir) if f.endswith((".yaml", ".yml"))]
     agents_list = []
-    for f in agent_files:
-        try:
-            agent_name = os.path.splitext(f)[0]
-            config = load_agent_config(agent_name)
-            # Create a dictionary for each agent
+    try:
+        # Use the get_agent_configs function to load all agent details
+        agent_configs = get_agent_configs()
+        for config in agent_configs:
             agents_list.append({
                 "name": config.name,
-                # Use the display_name if it exists, otherwise fall back to the regular name
                 "display_name": config.display_name or config.name
             })
-        except Exception as e:
-            logger.error(f"Could not load agent config for {f}: {e}")
+    except Exception as e:
+        logger.error(f"Could not load agent configs: {e}")
 
     default_agent = agents_list[0]['name'] if agents_list else ""
     return templates.TemplateResponse(
@@ -180,13 +172,9 @@ async def websocket_chat(ws: WebSocket):
         agent_config = load_agent_config(agent_name)
 
         all_tools = []
-        # ** FIX IS HERE **
-        # Check if 'retriever' tool is specified in the agent's config
         if "retriever" in agent_config.tools:
-            # Get the embedding model name from the config
-            embedding_model_name = agent_config.embedding_model
-            # Pass BOTH required arguments to the tool function
-            all_tools.append(get_retriever_tool(agent_name, embedding_model_name))
+            # Pass the entire agent_config object to the retriever tool.
+            all_tools.append(get_retriever_tool(agent_config))
 
         if "sql_toolkit" in agent_config.tools:
             db_source = next((s for s in agent_config.sources if s.type == 'db'), None)

@@ -49,8 +49,9 @@ def call_model(state: AgentState, config: RunnableConfig):
         try:
             logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
             # The retriever tool now correctly handles its own API key logic
-            retriever_tool = get_retriever_tool(agent_config.name, agent_config.embedding_model)
-            retrieved_docs = retriever_tool.invoke({"input": query})  # Use invoke for LCEL objects
+            retriever_tool = get_retriever_tool(agent_config)
+
+            retrieved_docs = retriever_tool.invoke({"input": query})
 
             if isinstance(retrieved_docs, str):
                 retrieved_docs_str = retrieved_docs
@@ -91,7 +92,6 @@ def call_model(state: AgentState, config: RunnableConfig):
                     """
         prompt_with_history = [HumanMessage(content=system_prompt)] + messages
 
-        # ** FIX: Determine the provider FIRST, then get the API key. **
         provider = "openai"  # Default provider
         if "claude" in model_name.lower():
             provider = "anthropic"
