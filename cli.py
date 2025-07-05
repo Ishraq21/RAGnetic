@@ -345,7 +345,7 @@ def auth_gdrive():
         with open(CONFIG_FILE, 'w') as configfile:
             config.write(configfile)
 
-        typer.secho("✅ Google Drive credentials saved successfully!", fg=typer.colors.GREEN)
+        typer.secho("Google Drive credentials saved successfully!", fg=typer.colors.GREEN)
         typer.echo("You can now use the 'gdoc' source type in your agents.")
 
     except json.JSONDecodeError:
