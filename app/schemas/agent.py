@@ -30,6 +30,11 @@ class VectorStoreConfig(BaseModel):
     """Configuration for the vector database."""
     type: Literal['faiss', 'chroma', 'qdrant', 'pinecone', 'mongodb_atlas'] = 'faiss'
 
+    retrieval_strategy: Literal['hybrid', 'enhanced'] = Field(
+        'hybrid',
+        description="The retrieval strategy to use. 'hybrid' is fast, 'enhanced' is more accurate but uses more compute."
+    )
+
     # Qdrant specific
     qdrant_host: Optional[str] = Field(None, description="Hostname for a remote Qdrant server.")
     qdrant_port: Optional[int] = Field(6333, description="Port for a remote Qdrant server.")
