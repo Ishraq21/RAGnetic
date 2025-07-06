@@ -8,11 +8,17 @@ from langgraph.prebuilt import ToolNode
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
+
+# LangChain's generic chat model initializer
 from langchain.chat_models import init_chat_model
 from langchain_core.documents import Document
 
+from langchain_ollama import ChatOllama
+
+# Local application imports
 from app.tools.retriever_tool import get_retriever_tool
 from app.core.config import get_api_key
+from ollama import ResponseError
 
 logger = logging.getLogger(__name__)
 
@@ -45,26 +51,26 @@ def call_model(state: AgentState, config: RunnableConfig):
         model_name = agent_config.llm_model
         logger.info(f"Processing query for agent '{agent_config.name}' using model '{model_name}'.")
 
-        # Always Perform RAG Retrieval with Error Handling
-        try:
-            logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
-            # The retriever tool now correctly handles its own API key logic
-            retriever_tool = get_retriever_tool(agent_config)
+        # RAG Retrieval
+        retrieved_docs_str = ""
+        if "retriever" in agent_config.tools:
+            try:
+                logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
+                retriever_tool = get_retriever_tool(agent_config)
+                retrieved_docs = retriever_tool.invoke({"input": query})
 
-            retrieved_docs = retriever_tool.invoke({"input": query})
-
-            if isinstance(retrieved_docs, str):
-                retrieved_docs_str = retrieved_docs
-                logger.error(f"Retriever tool returned an error string: {retrieved_docs}")
-            elif retrieved_docs:
-                retrieved_docs_str = "\n\n".join([doc.page_content for doc in retrieved_docs])
-                logger.info(f"Successfully retrieved {len(retrieved_docs)} documents.")
-            else:
-                retrieved_docs_str = "No documents were found matching the query."
-                logger.warning("Retriever tool ran successfully but returned no documents.")
-        except Exception as e:
-            logger.error(f"Error during document retrieval: {e}", exc_info=True)
-            retrieved_docs_str = f"An error occurred while trying to retrieve relevant documents: {e}"
+                if isinstance(retrieved_docs, str):
+                    retrieved_docs_str = retrieved_docs
+                    logger.error(f"Retriever tool returned an error string: {retrieved_docs}")
+                elif retrieved_docs:
+                    retrieved_docs_str = "\n\n".join([doc.page_content for doc in retrieved_docs])
+                    logger.info(f"Successfully retrieved {len(retrieved_docs)} documents.")
+                else:
+                    retrieved_docs_str = "No documents were found matching the query."
+                    logger.warning("Retriever tool ran successfully but returned no documents.")
+            except Exception as e:
+                logger.error(f"Error during document retrieval: {e}", exc_info=True)
+                retrieved_docs_str = f"An error occurred while trying to retrieve relevant documents: {e}"
 
         # Build the System Prompt
         context_section = f"<context>\n<retrieved_documents>\n{retrieved_docs_str}\n</retrieved_documents>\n</context>"
@@ -92,38 +98,45 @@ def call_model(state: AgentState, config: RunnableConfig):
                     """
         prompt_with_history = [HumanMessage(content=system_prompt)] + messages
 
-        provider = "openai"  # Default provider
-        if "claude" in model_name.lower():
-            provider = "anthropic"
-        elif "gemini" in model_name.lower():
-            provider = "google"
+        # Model Initialization Logic
+        model_kwargs = agent_config.model_params.model_dump(exclude_unset=True) if agent_config.model_params else {}
 
-        logger.info(f"Determined model provider: '{provider}' for model '{model_name}'.")
-        api_key = get_api_key(provider)
+        if model_name.startswith("ollama/"):
+            ollama_model_name = model_name.split("/", 1)[1]
+            logger.info(f"Initializing local Ollama model: '{ollama_model_name}' with params: {model_kwargs}")
+            model = ChatOllama(model=ollama_model_name, **model_kwargs)
+        else:
+            provider = "openai"
+            if "claude" in model_name.lower():
+                provider = "anthropic"
+            elif "gemini" in model_name.lower():
+                provider = "google"
+            logger.info(f"Determined model provider: '{provider}' for model '{model_name}'.")
+            api_key = get_api_key(provider)
+            model = init_chat_model(model_name, model_provider=provider, streaming=True, api_key=api_key,
+                                    **model_kwargs)
 
-        model_kwargs = {}
-        if agent_config.model_params:
-            model_kwargs = agent_config.model_params.model_dump(exclude_unset=True)
-
-        logger.info(f"Initializing model '{model_name}' with params: {model_kwargs}")
-        model = init_chat_model(
-            model_name,
-            model_provider=provider,
-            streaming=True,
-            api_key=api_key,
-            **model_kwargs
-        ).bind_tools(tools)
+        model_with_tools = model.bind_tools(tools)
 
         logger.info("Invoking the language model...")
-        response = model.invoke(prompt_with_history)
+        try:
+            # Attempt to invoke the model with the tool-binding
+            response = model_with_tools.invoke(prompt_with_history)
+
+        except ResponseError as e:
+            if "does not support tools" in str(e):
+                logger.warning(f"Model '{model_name}' does not support tools. Retrying without tools.")
+                # If the model doesn't support tools, invoke it again without them
+                response = model.invoke(prompt_with_history)
+            else:
+                raise e
         logger.info("Model invocation successful.")
 
         return {"messages": [response]}
 
     except Exception as e:
         logger.critical(f"A critical error occurred in the 'call_model' node: {e}", exc_info=True)
-        error_message = AIMessage(
-            content=f"I'm sorry, but I encountered an unexpected error and cannot complete your request. Please try again later. Error: {e}")
+        error_message = AIMessage(content=f"I'm sorry, but I encountered an unexpected error. Error: {e}")
         return {"messages": [error_message]}
 
 
@@ -143,9 +156,7 @@ def should_continue(state: AgentState) -> str:
 
 
 def get_agent_workflow(tools: List[BaseTool]):
-    """
-    Builds the tool-using agent graph.
-    """
+    """Builds the tool-using agent graph."""
     workflow = StateGraph(AgentState)
     tool_node = ToolNode(tools)
     workflow.add_node("agent", call_model)

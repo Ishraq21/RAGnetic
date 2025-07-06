@@ -1,6 +1,6 @@
 import logging
 from langchain_openai import OpenAIEmbeddings
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from app.core.config import get_api_key
 
@@ -20,7 +20,6 @@ def get_embedding_model(model_name: str):
 
     logger.info(f"Initializing embedding model: {model_name}")
     try:
-        # ** FIX: Determine the provider FIRST, then get the API key. **
         if model_name.startswith("text-embedding"):
             provider = "openai"
             api_key = get_api_key(provider)

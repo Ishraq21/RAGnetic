@@ -75,14 +75,17 @@ def health_check():
 async def home(request: Request):
     """Serves the main chat interface."""
     agents_list = []
+    seen_agent_names = set()
+
     try:
-        # Use the get_agent_configs function to load all agent details
         agent_configs = get_agent_configs()
         for config in agent_configs:
-            agents_list.append({
-                "name": config.name,
-                "display_name": config.display_name or config.name
-            })
+            if config.name not in seen_agent_names:
+                agents_list.append({
+                    "name": config.name,
+                    "display_name": config.display_name or config.name
+                })
+                seen_agent_names.add(config.name)
     except Exception as e:
         logger.error(f"Could not load agent configs: {e}")
 
@@ -91,7 +94,6 @@ async def home(request: Request):
         "agent_interface.html",
         {"request": request, "agents": agents_list, "agent": default_agent},
     )
-
 
 @app.get("/history/{thread_id}", tags=["Memory"])
 async def get_history(thread_id: str, agent_name: str, user_id: str):

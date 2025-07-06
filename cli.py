@@ -52,7 +52,8 @@ MODEL_PROVIDERS = {
     "Google": "GOOGLE_API_KEY",
     "Pinecone": "PINECONE_API_KEY",
     "MongoDB Atlas": "MONGODB_CONN_STRING",
-    "Hugging Face": None
+    "Hugging Face": None,
+    "Ollama (Local LLMs)": None
 }
 
 @app.command(help="Initialize a new RAGnetic project in the current directory.")
@@ -109,6 +110,13 @@ def set_api():
             if selected_provider == "Hugging Face":
                 typer.secho("\nHugging Face models run locally and do not require an API key.", fg=typer.colors.GREEN)
                 typer.echo("You only need to set an API key for the CHAT model you plan to use (e.g., OpenAI).")
+
+            elif selected_provider == "Ollama (Local LLMs)":
+                typer.secho("\nOllama models run locally on your machine and do not require an API key.",
+                            fg=typer.colors.GREEN)
+                typer.echo("   Please ensure the Ollama application is running before you start RAGnetic.")
+                typer.echo("   You can specify a model in your agent's YAML file like: llm_model: 'ollama/llama3'")
+
             else:
                 config_key_name = MODEL_PROVIDERS[selected_provider]
                 api_key = typer.prompt(f"Enter your {selected_provider} API Key", hide_input=True)
@@ -194,19 +202,35 @@ def list_agents():
 
 @app.command(name="deploy", help="Deploys an agent by its name, processing its data sources.")
 def deploy_agent_by_name(
-        agent_name: str = typer.Argument(..., help="The name of the agent to deploy (must match the YAML filename).")
+        agent_name: str = typer.Argument(..., help="The name of the agent to deploy (must match the YAML filename)."),
+        force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation and overwrite existing data."),
 ):
+    """Loads an agent config from YAML and creates a vector store."""
     try:
         config_path = os.path.join(AGENTS_DIR, f"{agent_name}.yaml")
         logger.info(f"Loading agent configuration from: {config_path}")
         if not os.path.exists(config_path):
             typer.secho(f"Error: Configuration file not found at {config_path}", fg=typer.colors.RED)
             raise typer.Exit(code=1)
+
+        vectorstore_path = f"vectorstore/{agent_name}"
+        if os.path.exists(vectorstore_path) and not force:
+            typer.secho(f"Warning: A vector store for agent '{agent_name}' already exists.", fg=typer.colors.YELLOW)
+            if not typer.confirm("Do you want to overwrite it and re-deploy the agent?"):
+                typer.echo("Deployment cancelled.")
+                raise typer.Exit()
+
+            # Clean up the old directory before deploying again
+            shutil.rmtree(vectorstore_path)
+            logger.info(f"Removed existing vector store at: {vectorstore_path}")
+
         agent_config = load_agent_from_yaml_file(config_path)
         typer.echo(f"\nDeploying agent '{agent_config.name}' using embedding model '{agent_config.embedding_model}'...")
         embed_agent_data(agent_config)
+
         typer.secho("\nAgent deployment successful!", fg=typer.colors.GREEN)
-        typer.echo(f"  - Vector store created at: vectorstore/{agent_config.name}")
+        typer.echo(f"  - Vector store created at: {vectorstore_path}")
+
     except Exception as e:
         typer.secho(f"An unexpected error occurred during deployment: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
@@ -355,6 +379,7 @@ def auth_gdrive():
     except Exception as e:
         typer.secho(f"An error occurred: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
 
 
 
