@@ -55,7 +55,13 @@ class AgentConfig(BaseModel):
     description: Optional[str] = None
     persona_prompt: str
     sources: List[DataSource]
-    tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv']]] = ['retriever']
+    tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv', 'extractor']]] = ['retriever']
+
+    extraction_schema: Optional[Dict[str, str]] = Field(
+        None,
+        description="A dictionary defining the schema for the extractor tool. Key is the attribute name, value is the description."
+    )
+
 
     # Users can now specify models in their agent.yaml file.
     # Default models if they are omitted.

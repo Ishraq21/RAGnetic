@@ -21,6 +21,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
 from app.tools.arxiv_tool import get_arxiv_tool
+from app.tools.extraction_tool import get_extraction_tool
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -185,6 +186,12 @@ async def websocket_chat(ws: WebSocket):
 
         if "arxiv" in agent_config.tools:
             all_tools.extend(get_arxiv_tool())
+
+        if "extractor" in agent_config.tools:
+            try:
+                all_tools.append(get_extraction_tool(agent_config))
+            except Exception as e:
+                logger.error(f"Failed to create extraction tool for agent '{agent_name}': {e}")
 
         workflow = get_agent_workflow(all_tools)
 
