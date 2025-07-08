@@ -9,7 +9,7 @@ CONFIG_FILE = os.path.join(RAGNETIC_DIR, "config.ini")
 PROVIDER_MAP = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
-    "google": "GOOGLE_API_KEY",
+    "google_genai": "GOOGLE_API_KEY",
     "pinecone": "PINECONE_API_KEY",
     "mongodb": "MONGODB_CONN_STRING", # For MongoDB connection string
 }

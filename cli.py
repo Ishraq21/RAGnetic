@@ -49,7 +49,7 @@ CONFIG_FILE = os.path.join(RAGNETIC_DIR, "config.ini")
 MODEL_PROVIDERS = {
     "OpenAI": "OPENAI_API_KEY",
     "Anthropic": "ANTHROPIC_API_KEY",
-    "Google": "GOOGLE_API_KEY",
+    "Google (Gemini)": "GOOGLE_API_KEY",
     "Pinecone": "PINECONE_API_KEY",
     "MongoDB Atlas": "MONGODB_CONN_STRING",
     "Hugging Face": None,

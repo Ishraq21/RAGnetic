@@ -70,7 +70,7 @@ def get_extraction_tool(agent_config: AgentConfig) -> Tool:
     else:
         provider = "openai"
         if "claude" in model_name.lower(): provider = "anthropic"
-        elif "gemini" in model_name.lower(): provider = "google"
+        elif "gemini" in model_name.lower(): provider = "google_genai"
         api_key = get_api_key(provider)
         llm = init_chat_model(model_name, model_provider=provider, api_key=api_key, **model_kwargs)
 

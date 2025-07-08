@@ -11,6 +11,8 @@ from langchain_core.tools import BaseTool
 
 # LangChain's generic chat model initializer
 from langchain.chat_models import init_chat_model
+from langchain_google_genai import ChatGoogleGenerativeAI
+
 from langchain_core.documents import Document
 
 from langchain_ollama import ChatOllama
@@ -110,11 +112,18 @@ def call_model(state: AgentState, config: RunnableConfig):
             if "claude" in model_name.lower():
                 provider = "anthropic"
             elif "gemini" in model_name.lower():
-                provider = "google"
+                provider = "google_genai"
             logger.info(f"Determined model provider: '{provider}' for model '{model_name}'.")
             api_key = get_api_key(provider)
-            model = init_chat_model(model_name, model_provider=provider, streaming=True, api_key=api_key,
-                                    **model_kwargs)
+            if provider == "google_genai":
+                # Initialize the Google model directly to avoid the streaming warning.
+                # This model streams by default when using astream_events().
+                logger.info("Initializing ChatGoogleGenerativeAI directly.")
+                model = ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, **model_kwargs)
+            else:
+                logger.info("Initializing model with streaming=True.")
+                model = init_chat_model(model_name, model_provider=provider, streaming=True, api_key=api_key,
+                                        **model_kwargs)
 
         model_with_tools = model.bind_tools(tools)
 

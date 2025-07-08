@@ -26,7 +26,7 @@ def get_embedding_model(model_name: str):
             embeddings = OpenAIEmbeddings(model=model_name, api_key=api_key)
 
         elif "gemini" in model_name or model_name.startswith("models/embedding"):
-            provider = "google"
+            provider = "google_genai"
             api_key = get_api_key(provider)
             embeddings = GoogleGenerativeAIEmbeddings(model=model_name, google_api_key=api_key)
 
