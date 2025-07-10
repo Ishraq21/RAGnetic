@@ -52,6 +52,7 @@ dependencies     = [
   "langchain-qdrant",
   "pytest",
   "pytest-mock",
+  "sqlalchemy",
 ]
 scripts = { "ragnetic" = "cli:app" }
 

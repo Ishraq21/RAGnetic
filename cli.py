@@ -14,6 +14,9 @@ from app.pipelines.embed import embed_agent_data
 from app.core.config import get_api_key
 from app.watcher import start_watcher
 import pytest
+import requests
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 # Set up logging for cleaner output
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -400,6 +403,87 @@ def test():
         typer.secho("\nAll tests passed!", fg=typer.colors.GREEN)
     else:
         typer.secho(f"\n{result_code} test(s) failed.", fg=typer.colors.RED)
+
+
+@app.command(help="Validates an agent's configuration and associated files.")
+def validate_agent(
+        agent_name: str = typer.Argument(..., help="The name of the agent to validate."),
+        check_connections: bool = typer.Option(
+            False,
+            "--check-connections",
+            "-c",
+            help="Test data source connections."
+        )
+):
+    """
+    Validates an agent's configuration, checking YAML syntax and the existence
+    of its vector store. If --dry-run is specified, it will also test live
+    connections to databases and URLs.
+    """
+    typer.echo(f"Validating agent: '{agent_name}'...")
+    errors = 0
+
+    # --- Basic Validation (existing logic) ---
+    try:
+        agent_config = load_agent_config(agent_name)
+        typer.secho("  - [PASS] YAML configuration is valid.", fg=typer.colors.GREEN)
+    except Exception as e:
+        typer.secho(f"  - [FAIL] Could not load or parse YAML config: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    vectorstore_path = f"vectorstore/{agent_name}"
+    if os.path.exists(vectorstore_path) and os.path.isdir(vectorstore_path):
+        typer.secho(f"  - [PASS] Vector store directory exists at: {vectorstore_path}", fg=typer.colors.GREEN)
+    else:
+        typer.secho(f"  - [WARN] Vector store not found. Agent may need to be deployed.", fg=typer.colors.YELLOW)
+
+    memory_files = glob.glob(f"memory/{agent_name}_*.db")
+    if memory_files:
+        typer.echo(f"  - [INFO] Found {len(memory_files)} conversation memory file(s).")
+    else:
+        typer.echo("  - [INFO] No conversation memory files found (this is normal for a new agent).")
+
+    # --- Check Connections ---
+    if check_connections:
+        typer.echo("\n--- Performing Connection Check ---")
+
+        for i, source in enumerate(agent_config.sources):
+            source_info = f"Source #{i + 1} (type: {source.type})"
+
+            if source.type == 'db' and source.db_connection:
+                typer.echo(f"  - Testing {source_info}...")
+                try:
+                    engine = create_engine(source.db_connection)
+                    with engine.connect() as connection:
+                        # Execute a simple query to confirm connectivity
+                        connection.execute(text("SELECT 1"))
+                    typer.secho("    - [PASS] Database connection successful.", fg=typer.colors.GREEN)
+                except SQLAlchemyError as e:
+                    typer.secho(f"    - [FAIL] Database connection failed: {e}", fg=typer.colors.RED)
+                    errors += 1
+                except Exception as e:
+                    typer.secho(f"    - [FAIL] An unexpected error occurred with the database connection: {e}",
+                                fg=typer.colors.RED)
+                    errors += 1
+
+            elif source.type == 'url' and source.url:
+                typer.echo(f"  - Testing {source_info}...")
+                try:
+                    # Use a HEAD request to check the URL without downloading the content
+                    response = requests.head(source.url, timeout=10)
+                    response.raise_for_status()  # Raises an HTTPError for bad responses (4xx or 5xx)
+                    typer.secho(f"    - [PASS] URL is reachable (Status: {response.status_code}).",
+                                fg=typer.colors.GREEN)
+                except requests.exceptions.RequestException as e:
+                    typer.secho(f"    - [FAIL] URL is not reachable: {e}", fg=typer.colors.RED)
+                    errors += 1
+
+    typer.echo("-" * 20)
+    if errors == 0:
+        typer.secho("Validation successful. Agent appears to be configured correctly.", fg=typer.colors.GREEN)
+    else:
+        typer.secho(f"Validation failed with {errors} critical error(s).", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
