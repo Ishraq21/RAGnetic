@@ -32,7 +32,7 @@ class VectorStoreConfig(BaseModel):
 
     retrieval_strategy: Literal['hybrid', 'enhanced'] = Field(
         'hybrid',
-        description="The retrieval strategy to use. 'hybrid' is fast, 'enhanced' is more accurate but uses more compute."
+        description="The retrieval s  trategy to use. 'hybrid' is fast, 'enhanced' is more accurate but uses more compute."
     )
 
     # Qdrant specific
@@ -70,4 +70,8 @@ class AgentConfig(BaseModel):
     model_params: Optional[ModelParams] = Field(None, description="Advanced configuration parameters for the LLM.")
     vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig, description="The vector database to use for the agent.")
 
-
+# For PyTest
+    extraction_examples: Optional[List[tuple[str, Any]]] = Field(
+        None,
+        description="A list of few-shot examples (text, expected_output) for the extractor tool."
+    )
