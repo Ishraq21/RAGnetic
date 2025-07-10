@@ -50,6 +50,8 @@ dependencies     = [
   "langchain-mongodb",
   "langchain-pinecone",
   "langchain-qdrant",
+  "pytest",
+  "pytest-mock",
 ]
 scripts = { "ragnetic" = "cli:app" }
 
@@ -58,8 +60,3 @@ include-package-data = true
 packages = { find = { where = ["."], include = ["app*"], exclude = ["tests*"] } }
 py-modules = ["cli"]
 
-[project.optional-dependencies]
-test = [
-    "pytest",
-    "pytest-mock",
-]

@@ -13,6 +13,7 @@ from app.agents.config_manager import load_agent_config, load_agent_from_yaml_fi
 from app.pipelines.embed import embed_agent_data
 from app.core.config import get_api_key
 from app.watcher import start_watcher
+import pytest
 
 # Set up logging for cleaner output
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -381,6 +382,24 @@ def auth_gdrive():
         raise typer.Exit(code=1)
 
 
+@app.command(help="Runs the entire test suite using pytest.")
+def test():
+    """
+    Discovers and runs all automated tests in the 'tests/' directory.
+    """
+    typer.echo("Running the RAGnetic test suite...")
+
+    # Define the arguments for pytest.
+    # We'll add '-v' for verbose output.
+    pytest_args = ["-v", "tests/"]
+
+    # Run pytest programmatically
+    result_code = pytest.main(pytest_args)
+
+    if result_code == 0:
+        typer.secho("\nAll tests passed!", fg=typer.colors.GREEN)
+    else:
+        typer.secho(f"\n{result_code} test(s) failed.", fg=typer.colors.RED)
 
 
 if __name__ == "__main__":

@@ -19,8 +19,8 @@ class MockWrapper(BaseModel):
 
     # The formatting function calls .data.dict() on the result.
     # We need to simulate this structure correctly.
-    def dict(self):
-        return self.data.dict()
+    def model_dump(self):
+        return self.data.model_dump()
 
 
 

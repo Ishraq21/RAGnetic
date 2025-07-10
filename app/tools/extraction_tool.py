@@ -84,7 +84,7 @@ def get_extraction_tool(agent_config: AgentConfig) -> Tool:
                 "examples": example_messages,
             })
 
-            data = result.data.dict() if hasattr(result, "data") else {}
+            data = result.data.model_dump() if hasattr(result, "data") else {}
 
             output_lines = ["## Invoice Details"]
             for key, value in data.items():
