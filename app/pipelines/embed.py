@@ -12,12 +12,13 @@ from pinecone import Pinecone as PineconeClient
 
 from app.schemas.agent import AgentConfig, DataSource
 from app.core.embed_config import get_embedding_model
+# Import all the specific loaders
 from app.pipelines.loaders import (
     directory_loader,
     url_loader,
     db_loader,
     api_loader,
-    code_loader,
+    code_repository_loader,  # Using the specific name for clarity
     gdoc_loader,
     web_crawler_loader,
     notebook_loader,
@@ -32,15 +33,19 @@ logger = logging.getLogger(__name__)
 
 def load_documents_from_source(source: DataSource) -> list[Document]:
     """
-    Dispatcher function that calls the appropriate loader based on source type.
+    Dispatcher function that calls the appropriate loader based on the source type
+    defined in the agent's YAML configuration.
     """
     source_type = source.type
+    logger.info(f"Dispatching to loader for source type: '{source_type}'")
 
     if source_type == "local":
         path = source.path
         if not path or not os.path.exists(path):
             logger.warning(f"Local path not found: {path}. Skipping.")
             return []
+
+        # Dispatch to specific file loaders based on extension
         if os.path.isfile(path):
             if path.lower().endswith('.pdf'):
                 return pdf_loader.load(path)
@@ -53,14 +58,17 @@ def load_documents_from_source(source: DataSource) -> list[Document]:
             else:
                 logger.warning(f"Unsupported local file type: {path}. Skipping.")
                 return []
+        # If it's a directory, use the directory loader
         elif os.path.isdir(path):
             return directory_loader.load(path)
         else:
             return []
+
+    elif source_type == "code_repository":
+        return code_repository_loader.load(source.path)
+
     elif source_type == "url":
         return url_loader.load(source.url)
-    elif source_type == "code_repository":
-        return code_loader.load(source.path)
     elif source_type == "db":
         return db_loader.load(source.db_connection)
     elif source_type == "gdoc":
@@ -73,7 +81,7 @@ def load_documents_from_source(source: DataSource) -> list[Document]:
                                params=source.params, payload=source.payload,
                                json_pointer=source.json_pointer)
     else:
-        logger.warning(f"Unknown or unsupported source type: {source_type}. Skipping.")
+        logger.warning(f"Unknown or unsupported source type: '{source_type}'. Skipping.")
         return []
 
 
@@ -87,8 +95,7 @@ def embed_agent_data(config: AgentConfig):
     3.  It collects all loaded documents into a single list.
     4.  It splits the documents into manageable chunks for embedding.
     5.  It generates embeddings for each chunk using the specified model.
-    6.  It creates a FAISS vector store from the embeddings and saves it to disk.
-
+    6.  It creates and saves the specified vector store.
     """
     all_docs = []
     logger.info(f"Starting data embedding process for agent: '{config.name}'")
@@ -102,6 +109,7 @@ def embed_agent_data(config: AgentConfig):
 
     logger.info(f"Loaded a total of {len(all_docs)} documents from all sources.")
 
+    # Use a generic text splitter for all document types after they've been loaded.
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_documents(all_docs)
     logger.info(f"Split documents into {len(chunks)} chunks.")
@@ -110,7 +118,7 @@ def embed_agent_data(config: AgentConfig):
         embeddings = get_embedding_model(config.embedding_model)
         vs_config = config.vector_store
         db_type = vs_config.type
-        vectorstore_path = f"vectorstore/{config.name}"  # Used for local DBs
+        vectorstore_path = f"vectorstore/{config.name}"  # Used for local DBs like FAISS/Chroma
 
         logger.info(f"Creating vector store of type '{db_type}' for agent '{config.name}'.")
 
@@ -121,27 +129,27 @@ def embed_agent_data(config: AgentConfig):
         elif db_type == 'chroma':
             Chroma.from_documents(chunks, embeddings, persist_directory=vectorstore_path)
 
-
         elif db_type == 'qdrant':
             Qdrant.from_documents(
                 chunks, embeddings,
                 host=vs_config.qdrant_host, port=vs_config.qdrant_port,
-                path=None if vs_config.qdrant_host else vectorstore_path,  # Path is for local, host/port for remote
+                path=None if vs_config.qdrant_host else vectorstore_path,
                 collection_name=config.name
             )
 
         elif db_type == 'pinecone':
             pc_api_key = get_api_key("pinecone")
-            pinecone = PineconeClient(api_key=pc_api_key)
-            index = pinecone.Index(vs_config.pinecone_index_name)
+            PineconeClient(api_key=pc_api_key)  # This initializes the client
             PineconeLangChain.from_documents(chunks, embeddings, index_name=vs_config.pinecone_index_name)
 
         elif db_type == 'mongodb_atlas':
             conn_string = get_api_key("mongodb")
+            # Note: The collection object is not needed for the from_documents method
             MongoDBAtlasVectorSearch.from_documents(
                 documents=chunks,
                 embedding=embeddings,
-                collection=f"{vs_config.mongodb_db_name}.{vs_config.mongodb_collection_name}",
+                connection_string=conn_string,
+                namespace=f"{vs_config.mongodb_db_name}.{vs_config.mongodb_collection_name}",
                 index_name=vs_config.mongodb_index_name
             )
         else:
