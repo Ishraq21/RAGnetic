@@ -8,6 +8,9 @@ import configparser
 import logging
 from multiprocessing import Process
 import json
+import pandas as pd
+from app.evaluation.dataset_generator import generate_test_set
+from app.evaluation.benchmark import run_benchmark
 # Local application imports
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file, AGENTS_DIR
 from app.pipelines.embed import embed_agent_data
@@ -483,6 +486,90 @@ def validate_agent(
         typer.secho("Validation successful. Agent appears to be configured correctly.", fg=typer.colors.GREEN)
     else:
         typer.secho(f"Validation failed with {errors} critical error(s).", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+eval_app = typer.Typer(name="evaluate", help="Commands for evaluating agent performance.")
+app.add_typer(eval_app)
+@eval_app.command("generate-test", help="Generates a test set of Q&A pairs from an agent's sources.")
+def generate_test_command(
+        agent_name: str = typer.Argument(..., help="The name of the source agent to build the test set from."),
+        output_file: str = typer.Option(
+            "test_set.json",
+            "--output",
+            "-o",
+            help="The path to save the generated JSON test set file."
+        ),
+        num_questions: int = typer.Option(50, "--num-questions", "-n", help="The number of questions to generate.")
+):
+    """
+    Uses a local LLM to automatically create a test set for evaluating RAG quality.
+    """
+    typer.echo(f"--- Generating Test Set for Agent: '{agent_name}' ---")
+    try:
+        agent_config = load_agent_config(agent_name)
+
+        qa_pairs = generate_test_set(agent_config, num_questions)
+
+        if qa_pairs:
+            with open(output_file, 'w') as f:
+                json.dump(qa_pairs, f, indent=2)
+            typer.secho(f"\nSuccessfully generated {len(qa_pairs)} Q&A pairs and saved to '{output_file}'",
+                        fg=typer.colors.GREEN)
+        else:
+            typer.secho("Could not generate any Q&A pairs. Please check the agent's data sources.", fg=typer.colors.RED)
+
+    except Exception as e:
+        typer.secho(f"An unexpected error occurred during test set generation: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@eval_app.command("benchmark", help="Runs a retrieval quality benchmark on an agent.")
+def benchmark_command(
+        agent_name: str = typer.Argument(..., help="The name of the agent to benchmark."),
+        test_set_file: str = typer.Option(
+            ...,
+            "--test-set",
+            "-t",
+            help="Path to a JSON file containing the ground truth test set."
+        )
+):
+    """
+    Uses a ground truth test set to calculate objective retrieval metrics like
+    Key Fact Recall and Contextual Noise.
+    """
+    typer.echo(f"--- Running Benchmark for Agent: '{agent_name}' ---")
+
+    try:
+        agent_config = load_agent_config(agent_name)
+
+        if not os.path.exists(test_set_file):
+            typer.secho(f"Error: Test set file not found at '{test_set_file}'", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+        with open(test_set_file, 'r') as f:
+            test_set = json.load(f)
+
+        results_df = run_benchmark(agent_config, test_set)
+
+        if not results_df.empty:
+            recall_score = results_df["key_fact_recalled"].mean()
+            avg_noise = results_df[results_df["contextual_noise"] != -1]["contextual_noise"].mean()
+
+            typer.secho("\n--- Benchmark Complete ---", bold=True)
+            typer.echo("\nOverall Scores:")
+            typer.secho(f"  - Key Fact Recall: {recall_score:.2%}", fg=typer.colors.GREEN)
+            typer.secho(f"  - Average Context Size (Noise): {avg_noise:.2f} docs", fg=typer.colors.YELLOW)
+
+            typer.echo("\n(Key Fact Recall measures if the correct answer was in the retrieved documents.)")
+            typer.echo("(Lower Context Size is better, as it indicates less noise.)")
+
+            if typer.confirm("\nShow detailed results for each question?", default=False):
+                typer.echo(results_df.to_string())
+        else:
+            typer.secho("Benchmark failed to produce results.", fg=typer.colors.RED)
+
+    except Exception as e:
+        typer.secho(f"An unexpected error occurred during benchmark: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
 

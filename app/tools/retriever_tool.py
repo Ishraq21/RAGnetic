@@ -56,6 +56,15 @@ def get_retriever_tool(agent_config: AgentConfig) -> Tool:
     vs_config = agent_config.vector_store
     strategy = vs_config.retrieval_strategy
 
+    logger.info(
+        f"[RETRIEVER CONFIG for {agent_name}] "
+        f"strategy={strategy}, "
+        f"bm25_k={vs_config.bm25_k}, "
+        f"semantic_k={vs_config.semantic_k}, "
+        f"rerank_top_n={vs_config.rerank_top_n}, "
+        f"vector_store_type={vs_config.type}"
+    )
+
     logger.info(f"Configuring retriever for '{agent_name}' with strategy: '{strategy}'.")
 
     try:
@@ -107,16 +116,20 @@ def get_retriever_tool(agent_config: AgentConfig) -> Tool:
         semantic_retriever = vectorstore.as_retriever()
 
         # Set the 'k' value on the individual retrievers before creating the ensemble.
+
+        bm25_k = vs_config.bm25_k
+        sem_k  = vs_config.semantic_k
+        top_n  = vs_config.rerank_top_n
+
+        bm25_retriever.k = bm25_k
+        semantic_retriever.search_kwargs = {"k": sem_k}
+
         if strategy == 'enhanced':
             logger.info("Applying 'enhanced' retrieval strategy (with re-ranking).")
-            # For enhanced search, retrieve more documents initially to give the re-ranker more options.
-            bm25_retriever.k = 10
-            semantic_retriever.search_kwargs = {"k": 10}
-
             ensemble_retriever = EnsembleRetriever(retrievers=[bm25_retriever, semantic_retriever], weights=[0.5, 0.5])
 
             model = HuggingFaceCrossEncoder(model_name='cross-encoder/ms-marco-MiniLM-L-6-v2')
-            compressor = CrossEncoderReranker(model=model, top_n=5)
+            compressor = CrossEncoderReranker(model=model, top_n=top_n)
             final_retriever = ContextualCompressionRetriever(
                 base_compressor=compressor,
                 base_retriever=ensemble_retriever
@@ -124,8 +137,6 @@ def get_retriever_tool(agent_config: AgentConfig) -> Tool:
         else:  # Default to 'hybrid'
             logger.info("Using 'hybrid' retrieval strategy (BM25 + semantic).")
             # For standard hybrid search, retrieve fewer documents.
-            bm25_retriever.k = 5
-            semantic_retriever.search_kwargs = {"k": 5}
             final_retriever = EnsembleRetriever(retrievers=[bm25_retriever, semantic_retriever], weights=[0.5, 0.5])
 
         logger.info(f"Retriever for '{agent_name}' configured successfully.")
@@ -133,7 +144,10 @@ def get_retriever_tool(agent_config: AgentConfig) -> Tool:
         return Tool(
             name="retriever",
             func=lambda q: tool_fn(final_retriever, q),
-            description=f"Searches the knowledge base of '{agent_name}' using its configured retrieval strategy."
+            description=(
+                f"Searches the knowledge base of '{agent_name}' "
+                f"using strategy='{strategy}', bm25_k={bm25_k}, sem_k={sem_k}, rerank_top_n={top_n}."
+            )
         )
 
     except Exception as e:
