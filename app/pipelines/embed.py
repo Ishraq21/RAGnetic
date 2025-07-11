@@ -18,14 +18,15 @@ from app.pipelines.loaders import (
     url_loader,
     db_loader,
     api_loader,
-    code_repository_loader,  # Using the specific name for clarity
+    code_repository_loader,
     gdoc_loader,
     web_crawler_loader,
     notebook_loader,
     pdf_loader,
     docx_loader,
     csv_loader,
-    text_loader
+    text_loader,
+    iac_loader
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -58,6 +59,10 @@ def load_documents_from_source(source: DataSource) -> list[Document]:
                 return csv_loader.load(path)
             elif path.lower().endswith('.ipynb'):
                 return notebook_loader.load_notebook(path)
+            elif path.lower().endswith(('.tf', '.tfvars')):
+                return iac_loader.load(path)
+            elif path.lower().endswith(('.yaml', '.yml')):
+                return iac_loader.load(path)
             else:
                 logger.warning(f"Unsupported local file type: {path}. Skipping.")
                 return []
