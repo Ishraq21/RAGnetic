@@ -1,6 +1,21 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Literal
 
+class ChunkingConfig(BaseModel):
+    """Configuration for the document chunking strategy."""
+    mode: Literal['default', 'semantic'] = Field(
+        'default',
+        description="The chunking mode. 'default' for fast, recursive splitting; 'semantic' for higher quality, context-aware splitting."
+    )
+    chunk_size: int = Field(
+        1000,
+        description="The target size for each text chunk (in characters or tokens)."
+    )
+    chunk_overlap: int = Field(
+        100,
+        description="The number of characters or tokens to overlap between chunks."
+    )
+
 class DataSource(BaseModel):
     type: Literal['local', 'url', 'code_repository','db','gdoc','web_crawler','api','notebook']
     path: Optional[str] = None
@@ -32,7 +47,7 @@ class VectorStoreConfig(BaseModel):
 
     retrieval_strategy: Literal['hybrid', 'enhanced'] = Field(
         'hybrid',
-        description="The retrieval s  trategy to use. 'hybrid' is fast, 'enhanced' is more accurate but uses more compute."
+        description="The retrieval strategy to use. 'hybrid' is fast, 'enhanced' is more accurate but uses more compute."
     )
 
     # Qdrant specific
@@ -58,6 +73,11 @@ class AgentConfig(BaseModel):
     execution_prompt: Optional[str] = Field(
         None,
         description="A custom prompt template string. Use {user_query} and {retrieved_context} as placeholders."
+    )
+
+    chunking: ChunkingConfig = Field(
+        default_factory=ChunkingConfig,
+        description="The configuration for how documents are chunked before embedding."
     )
 
     sources: List[DataSource]
