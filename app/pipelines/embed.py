@@ -93,6 +93,19 @@ def embed_agent_data(config: AgentConfig):
     The main embedding pipeline for a RAGnetic agent with enhanced error handling
     and configurable chunking strategies.
     """
+
+    logger.info(
+        f"[EMBED CONFIG] chunking.mode={config.chunking.mode}, "
+        f"chunk_size={config.chunking.chunk_size}, "
+        f"chunk_overlap={config.chunking.chunk_overlap}, "
+        f"breakpoint_percentile_threshold={config.chunking.breakpoint_percentile_threshold}; "
+        f"vector_store.type={config.vector_store.type}, "
+        f"retrieval_strategy={config.vector_store.retrieval_strategy}, "
+        f"bm25_k={config.vector_store.bm25_k}, "
+        f"semantic_k={config.vector_store.semantic_k}, "
+        f"rerank_top_n={config.vector_store.rerank_top_n}"
+    )
+
     all_docs = []
     logger.info(f"Starting data embedding process for agent: '{config.name}'")
     for source in config.sources:
@@ -123,9 +136,10 @@ def embed_agent_data(config: AgentConfig):
             logger.info("Applying semantic chunking using LlamaIndex...")
             llama_embeddings = LangchainEmbedding(langchain_embeddings)
 
+            threshold = config.chunking.breakpoint_percentile_threshold
             semantic_splitter = SemanticSplitterNodeParser.from_defaults(
                 embed_model=llama_embeddings,
-                breakpoint_percentile_threshold=95,
+                breakpoint_percentile_threshold=threshold,
             )
 
             llama_docs = [LlamaDocument.from_langchain_format(doc) for doc in all_docs]

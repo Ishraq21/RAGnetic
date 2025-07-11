@@ -16,6 +16,11 @@ class ChunkingConfig(BaseModel):
         description="The number of characters or tokens to overlap between chunks."
     )
 
+    breakpoint_percentile_threshold: int = Field(
+        95,
+        description="Percentile threshold for LlamaIndex semantic split."
+    )
+
 class DataSource(BaseModel):
     type: Literal['local', 'url', 'code_repository','db','gdoc','web_crawler','api','notebook']
     path: Optional[str] = None
@@ -44,6 +49,10 @@ class ModelParams(BaseModel):
 class VectorStoreConfig(BaseModel):
     """Configuration for the vector database."""
     type: Literal['faiss', 'chroma', 'qdrant', 'pinecone', 'mongodb_atlas'] = 'faiss'
+
+    bm25_k: int = Field(5, description="k for BM25 retriever")
+    semantic_k: int = Field(5, description="k for semantic retriever")
+    rerank_top_n: int = Field(5, description="how many to keep after cross-encoder rerank")
 
     retrieval_strategy: Literal['hybrid', 'enhanced'] = Field(
         'hybrid',
