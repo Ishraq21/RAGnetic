@@ -2,6 +2,7 @@ import os
 import logging
 from typing import List
 
+# LangChain and LlamaIndex have different Document objects
 from langchain_core.documents import Document as LangChainDocument
 from llama_index.core.schema import Document as LlamaDocument
 from llama_index.core.node_parser import SemanticSplitterNodeParser
@@ -17,26 +18,24 @@ from pinecone import Pinecone as PineconeClient
 from app.schemas.agent import AgentConfig, DataSource
 from app.core.embed_config import get_embedding_model
 from app.pipelines.loaders import (
-    directory_loader,
-    url_loader,
-    db_loader,
-    api_loader,
-    code_repository_loader,
-    gdoc_loader,
-    web_crawler_loader,
-    notebook_loader,
-    pdf_loader,
-    docx_loader,
-    csv_loader,
-    text_loader,
-    iac_loader
+    directory_loader, url_loader, db_loader, api_loader,
+    code_repository_loader, gdoc_loader, web_crawler_loader,
+    notebook_loader, pdf_loader, docx_loader, csv_loader,
+    text_loader, iac_loader
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+class VectorStoreCreationError(Exception):
+    """Custom exception for errors during vector store creation."""
+    pass
+
 
 def load_documents_from_source(source: DataSource) -> list[LangChainDocument]:
+    """
+    Dispatcher function that calls the appropriate loader based on the source type.
+    """
     source_type = source.type
     logger.info(f"Dispatching to loader for source type: '{source_type}'")
 
@@ -45,7 +44,6 @@ def load_documents_from_source(source: DataSource) -> list[LangChainDocument]:
         if not path or not os.path.exists(path):
             logger.warning(f"Local path not found: {path}. Skipping.")
             return []
-
         if os.path.isfile(path):
             if path.lower().endswith('.txt'):
                 return text_loader.load(path)
@@ -68,7 +66,6 @@ def load_documents_from_source(source: DataSource) -> list[LangChainDocument]:
             return directory_loader.load(path)
         else:
             return []
-
     elif source_type == "code_repository":
         return code_repository_loader.load(source.path)
     elif source_type == "url":
@@ -76,28 +73,45 @@ def load_documents_from_source(source: DataSource) -> list[LangChainDocument]:
     elif source_type == "db":
         return db_loader.load(source.db_connection)
     elif source_type == "gdoc":
-        return gdoc_loader.load(folder_id=source.folder_id, document_ids=source.document_ids, file_types=source.file_types)
+        return gdoc_loader.load(folder_id=source.folder_id, document_ids=source.document_ids,
+                                file_types=source.file_types)
     elif source_type == "web_crawler":
         return web_crawler_loader.load(url=source.url, max_depth=source.max_depth)
     elif source_type == "api":
-        return api_loader.load(url=source.url, method=source.method, headers=source.headers, params=source.params, payload=source.payload, json_pointer=source.json_pointer)
+        return api_loader.load(url=source.url, method=source.method, headers=source.headers, params=source.params,
+                               payload=source.payload, json_pointer=source.json_pointer)
     else:
         logger.warning(f"Unknown or unsupported source type: '{source_type}'. Skipping.")
         return []
 
 
 def embed_agent_data(config: AgentConfig):
+    """
+    The main embedding pipeline for a RAGnetic agent with enhanced error handling.
+    """
     all_docs = []
     logger.info(f"Starting data embedding process for agent: '{config.name}'")
     for source in config.sources:
         loaded_docs = load_documents_from_source(source)
-        if loaded_docs:
-            all_docs.extend(loaded_docs)
+        if not loaded_docs:
+            continue
+
+        # --- START: Early Validation ---
+        validated_docs = []
+        for doc in loaded_docs:
+            if doc.page_content and doc.page_content.strip():
+                validated_docs.append(doc)
+            else:
+                logger.warning(f"Skipping empty document from source: {doc.metadata.get('source', 'N/A')}")
+        # --- END: Early Validation ---
+
+        if validated_docs:
+            all_docs.extend(validated_docs)
 
     if not all_docs:
-        raise ValueError("No valid documents found to embed from any source.")
+        raise ValueError("No valid documents with content found to embed from any source.")
 
-    logger.info(f"Loaded a total of {len(all_docs)} documents from all sources.")
+    logger.info(f"Loaded a total of {len(all_docs)} valid documents from all sources.")
 
     try:
         langchain_embeddings = get_embedding_model(config.embedding_model)
@@ -112,8 +126,6 @@ def embed_agent_data(config: AgentConfig):
         nodes = semantic_splitter.get_nodes_from_documents(llama_docs)
         logger.info(f"Semantically split documents into {len(nodes)} nodes.")
 
-        # Manually create LangChain Documents from the LlamaIndex nodes.
-        # Use node.get_content() to access the text of the node.
         chunks = [LangChainDocument(page_content=node.get_content(), metadata=node.metadata) for node in nodes]
 
         vs_config = config.vector_store
@@ -128,19 +140,32 @@ def embed_agent_data(config: AgentConfig):
         elif db_type == 'chroma':
             Chroma.from_documents(chunks, langchain_embeddings, persist_directory=vectorstore_path)
         elif db_type == 'qdrant':
-            Qdrant.from_documents(chunks, langchain_embeddings, host=vs_config.qdrant_host, port=vs_config.qdrant_port, path=None if vs_config.qdrant_host else vectorstore_path, collection_name=config.name)
+            Qdrant.from_documents(chunks, langchain_embeddings, host=vs_config.qdrant_host, port=vs_config.qdrant_port,
+                                  path=None if vs_config.qdrant_host else vectorstore_path, collection_name=config.name)
         elif db_type == 'pinecone':
             pc_api_key = get_api_key("pinecone")
             PineconeClient(api_key=pc_api_key)
             PineconeLangChain.from_documents(chunks, langchain_embeddings, index_name=vs_config.pinecone_index_name)
         elif db_type == 'mongodb_atlas':
             conn_string = get_api_key("mongodb")
-            MongoDBAtlasVectorSearch.from_documents(documents=chunks, embedding=langchain_embeddings, connection_string=conn_string, namespace=f"{vs_config.mongodb_db_name}.{vs_config.mongodb_collection_name}", index_name=vs_config.mongodb_index_name)
+            MongoDBAtlasVectorSearch.from_documents(documents=chunks, embedding=langchain_embeddings,
+                                                    connection_string=conn_string,
+                                                    namespace=f"{vs_config.mongodb_db_name}.{vs_config.mongodb_collection_name}",
+                                                    index_name=vs_config.mongodb_index_name)
         else:
             raise ValueError(f"Unsupported vector store type: {db_type}")
 
         logger.info(f"Successfully created and populated vector store for agent '{config.name}'.")
 
     except Exception as e:
-        logger.error(f"Failed to create vector store. Error: {e}", exc_info=True)
-        raise
+        error_details = (
+            f"Agent: '{config.name}', "
+            f"Vector Store Type: '{config.vector_store.type}', "
+            f"Embedding Model: '{config.embedding_model}'"
+        )
+        logger.error(
+            f"Failed to create vector store with details: {error_details}. Error: {e}",
+            exc_info=True
+        )
+        # Wrap the original exception in our custom exception type
+        raise VectorStoreCreationError(f"Vector store creation failed for agent '{config.name}'.") from e
