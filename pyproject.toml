@@ -27,6 +27,8 @@ dependencies     = [
   "langchain-google-genai",
   "langchain-huggingface",
   "langchain-openai",
+  "llama-index",
+  "llama-index-embeddings-langchain",
   "langgraph",
   "mysqlclient",
   "nbformat",
