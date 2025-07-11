@@ -24,7 +24,8 @@ from app.pipelines.loaders import (
     notebook_loader,
     pdf_loader,
     docx_loader,
-    csv_loader
+    csv_loader,
+    text_loader
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -47,7 +48,9 @@ def load_documents_from_source(source: DataSource) -> list[Document]:
 
         # Dispatch to specific file loaders based on extension
         if os.path.isfile(path):
-            if path.lower().endswith('.pdf'):
+            if path.lower().endswith('.txt'):
+                return text_loader.load(path)
+            elif path.lower().endswith('.pdf'):
                 return pdf_loader.load(path)
             elif path.lower().endswith('.docx'):
                 return docx_loader.load(path)
