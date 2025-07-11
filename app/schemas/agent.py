@@ -54,6 +54,12 @@ class AgentConfig(BaseModel):
     display_name: Optional[str] = None
     description: Optional[str] = None
     persona_prompt: str
+
+    execution_prompt: Optional[str] = Field(
+        None,
+        description="A custom prompt template string. Use {user_query} and {retrieved_context} as placeholders."
+    )
+
     sources: List[DataSource]
     tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv', 'extractor']]] = ['retriever']
 
@@ -70,7 +76,7 @@ class AgentConfig(BaseModel):
     model_params: Optional[ModelParams] = Field(None, description="Advanced configuration parameters for the LLM.")
     vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig, description="The vector database to use for the agent.")
 
-# For PyTest
+    # For PyTest
     extraction_examples: Optional[List[tuple[str, Any]]] = Field(
         None,
         description="A list of few-shot examples (text, expected_output) for the extractor tool."

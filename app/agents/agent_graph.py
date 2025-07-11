@@ -8,6 +8,7 @@ from langgraph.prebuilt import ToolNode
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
+from langchain_core.prompts import ChatPromptTemplate
 
 # LangChain's generic chat model initializer
 from langchain.chat_models import init_chat_model
@@ -74,31 +75,47 @@ def call_model(state: AgentState, config: RunnableConfig):
                 logger.error(f"Error during document retrieval: {e}", exc_info=True)
                 retrieved_docs_str = f"An error occurred while trying to retrieve relevant documents: {e}"
 
-        # Build the System Prompt
-        context_section = f"<context>\n<retrieved_documents>\n{retrieved_docs_str}\n</retrieved_documents>\n</context>"
-        persona = agent_config.persona_prompt
-        system_prompt = f"""You are RAGnetic, a professional AI assistant. Your behavior and personality are defined by the user's custom instructions below.
-                       ---
-                       **USER'S CUSTOM INSTRUCTIONS (Your Persona):**
-                       {persona}
-                       ---
-                       Your primary goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
-                       **General Instructions:**
-                       1.  Synthesize an answer from the information given in the "SOURCES" section below.
-                       2.  Do not refer to "the context provided" or "the information I have." Respond directly and authoritatively.
-                       3.  If the sources indicate an error or that no documents were found, inform the user of this fact.
-                       **Instructions for Formatting:**
-                       - Use Markdown for all your responses.
-                       - Use headings (`##`, `###`) to structure main topics.
-                       - Use bold text (`**text**`) to highlight key terms, figures, or important information.
-                       - Use bullet points (`- `) or numbered lists (`1. `) for detailed points or steps.
-                       **SOURCES:**
-                       ---
-                       {context_section}
-                       ---
-                       Based on the sources and your persona, please answer the user's query.
-                    """
-        prompt_with_history = [HumanMessage(content=system_prompt)] + messages
+        # Build the System Prompt dynamically
+
+        # If a custom execution_prompt is provided in the agent's config, use it.
+        if agent_config.execution_prompt:
+            logger.info("Using custom 'execution_prompt' from agent configuration.")
+            prompt = ChatPromptTemplate.from_template(agent_config.execution_prompt)
+
+            system_prompt_message = prompt.format(
+                user_query=query,
+                retrieved_context=retrieved_docs_str,
+                persona=agent_config.persona_prompt
+            )
+            prompt_with_history = [HumanMessage(content=system_prompt_message)] + messages
+
+        # Otherwise, fall back to the original, hardcoded prompt structure.
+        else:
+            logger.info("Using default system prompt.")
+            context_section = f"<context>\n<retrieved_documents>\n{retrieved_docs_str}\n</retrieved_documents>\n</context>"
+            system_prompt = f"""You are RAGnetic, a professional AI assistant. Your behavior and personality are defined by the user's custom instructions below.
+                                   ---
+                                   **USER'S CUSTOM INSTRUCTIONS (Your Persona):**
+                                   {agent_config.persona_prompt}
+                                   ---
+                                   Your primary goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
+                                   **General Instructions:**
+                                   1.  Synthesize an answer from the information given in the "SOURCES" section below.
+                                   2.  Do not refer to "the context provided" or "the information I have." Respond directly and authoritatively.
+                                   3.  If the sources indicate an error or that no documents were found, inform the user of this fact.
+                                   **Instructions for Formatting:**
+                                   - Use Markdown for all your responses.
+                                   - Use headings (`##`, `###`) to structure main topics.
+                                   - Use bold text (`**text**`) to highlight key terms, figures, or important information.
+                                   - Use bullet points (`- `) or numbered lists (`1. `) for detailed points or steps.
+                                   **SOURCES:**
+                                   ---
+                                   {context_section}
+                                   ---
+                                   Based on the sources and your persona, please answer the user's query.
+                                """
+            prompt_with_history = [HumanMessage(content=system_prompt)] + messages
+
 
         # Model Initialization Logic
         model_kwargs = agent_config.model_params.model_dump(exclude_unset=True) if agent_config.model_params else {}
