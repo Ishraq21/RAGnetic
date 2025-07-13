@@ -1,0 +1,23 @@
+[
+  {
+    "question": "What is the name of the security group defined in the Terraform configuration?",
+    "answer": "tf-test",
+    "type": "Factoid",
+    "retrieval_ground_truth_chunk_id": "566370bbacab9113bef46b52d7f3eefc95c85fedac4e9339e8a58c9f1c0dee27-0-fc2eeead",
+    "source_text": "terraform {\n  required_providers {\n    aws = {\n      source = \"hashicorp/aws\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  alias   = \"user\"\n  region  = var.region\n  profile = var.profile\n}\n\nresource \"aws_security_group\" \"instance\" {\n  name = \"tf-test\"\n\n  # Inbound HTTP from anywhere\n  ingress {\n    from_port   = var.server_port\n    to_port     = var.server_port\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n\n  # Inbound SSH from management ip\n  ingress {\n    from_port   = 22\n    to_port     = 22\n    protocol    = \"tcp\"\n    cidr_blocks = [var.mgmt_ip]\n  }\n\n  # Outbound web for package downloading\n  egress {\n    from_port   = 80\n    to_port     = 80\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n\n  # Outbound web for package downloading\n  egress {\n    from_port   = 443\n    to_port     = 443\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }"
+  },
+  {
+    "question": "What is the protocol used for the egress rules?",
+    "answer": "tcp",
+    "type": "Factoid",
+    "retrieval_ground_truth_chunk_id": "5c14e6bace8b875b5427ff831bbcf0e22f0c9012d1efbc461da92c3c1da2995e-1-5bf93b61",
+    "source_text": "egress {\n    from_port   = var.server_port\n    to_port     = var.server_port\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n\n  egress {\n    from_port   = 22\n    to_port     = 22\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n}\n\n\nresource \"aws_instance\" \"example\" {\n  ami           = var.ami_tamu_ubuntu\n  instance_type = var.instance_type\n  vpc_security_group_ids = [aws_security_group.instance.id]\n\n\n  tags = {\n    Name = \"EC2EXAMPLE\"\n  }\n\n}"
+  },
+  {
+    "question": "What is the instance type for the aws_instance resource?",
+    "answer": "UNANSWERABLE: The answer is not contained in the provided text.",
+    "type": "Out-of-scope",
+    "retrieval_ground_truth_chunk_id": "5c14e6bace8b875b5427ff831bbcf0e22f0c9012d1efbc461da92c3c1da2995e-1-5bf93b61",
+    "source_text": "egress {\n    from_port   = var.server_port\n    to_port     = var.server_port\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n\n  egress {\n    from_port   = 22\n    to_port     = 22\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n}\n\n\nresource \"aws_instance\" \"example\" {\n  ami           = var.ami_tamu_ubuntu\n  instance_type = var.instance_type\n  vpc_security_group_ids = [aws_security_group.instance.id]\n\n\n  tags = {\n    Name = \"EC2EXAMPLE\"\n  }\n\n}"
+  }
+]
