@@ -3,7 +3,7 @@ import logging
 import json
 from uuid import uuid4
 from typing import Optional, List, Dict, Any
-
+from multiprocessing import Process  # NEW: Import Process for watcher
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,9 +11,7 @@ from dotenv import load_dotenv
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.core.validation import validate_agent_name
-from app.agents.config_manager import AGENTS_DIR
-
-
+# AGENTS_DIR will come from centralized paths
 from app.schemas.agent import AgentConfig
 from app.agents.config_manager import save_agent_config, load_agent_config, get_agent_configs
 from app.pipelines.embed import embed_agent_data
@@ -24,21 +22,28 @@ from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
 from app.tools.arxiv_tool import get_arxiv_tool
 from app.tools.extraction_tool import get_extraction_tool
+from app.watcher import start_watcher
+from app.core.config import get_path_settings
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
+# --- Centralized Path Configuration ---
+_APP_PATHS = get_path_settings()
+_DATA_DIR = _APP_PATHS["DATA_DIR"]
+_AGENTS_DIR = _APP_PATHS["AGENTS_DIR"]
+_MEMORY_DIR = _APP_PATHS["MEMORY_DIR"]  # For memory_path in websocket_chat
+# --- End Centralized Configuration ---
 
+allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
 
 app = FastAPI(
     title="RAGnetic API",
     version="0.1.0",
     description="API for managing and interacting with RAGnetic agents."
 )
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,12 +54,12 @@ app.add_middleware(
 )
 
 if "*" in allowed_origins:
-    logger.warning("="*80)
+    logger.warning("=" * 80)
     logger.warning("!!! SECURITY WARNING: CORS is configured to allow all origins ('*').")
     logger.warning("!!! This is convenient for local development but is INSECURE for production.")
     logger.warning("!!! For production, set the 'CORS_ALLOWED_ORIGINS' environment variable.")
     logger.warning("!!! Example: export CORS_ALLOWED_ORIGINS='https://your.domain.com,https://another.domain'")
-    logger.warning("="*80)
+    logger.warning("=" * 80)
 
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -78,15 +83,53 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+_watcher_process: Optional[Process] = None
+
+
+@app.on_event("startup")
+async def startup_event():  # MODIFIED: Changed to async def for app.on_event
+    global _watcher_process
+    logger.info("Application startup event: Initializing RAGnetic components.")
+
+    # Start the file watcher process
+    # Use centralized _DATA_DIR
+    if not os.path.exists(_DATA_DIR):  # MODIFIED
+        logger.error(
+            f"Error: The '{_DATA_DIR}' directory does not exist. Please run 'ragnetic init' first.")  # MODIFIED
+        # Consider raising HTTPException if this is critical for startup
+        return  # Do not start watcher if data dir is missing
+
+    # Only start watcher if not in reload mode (Uvicorn handles reloads)
+    # The --reload flag is handled by Uvicorn externally, so this startup only runs once per app instance.
+    _watcher_process = Process(target=start_watcher, args=(_DATA_DIR,), daemon=True)  # MODIFIED
+    _watcher_process.start()
+    logger.info("Automated file watcher started in the background (via startup event).")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():  # MODIFIED: Changed to async def for app.on_event
+    global _watcher_process
+    logger.info("Application shutdown event: Terminating RAGnetic components.")
+    # Gracefully terminate the watcher process
+    if _watcher_process and _watcher_process.is_alive():
+        _watcher_process.terminate()
+        _watcher_process.join(timeout=5)  # Give watcher a bit of time to shut down
+        if _watcher_process.is_alive():
+            logger.warning("Watcher process did not terminate gracefully. Forcing kill.")
+            _watcher_process.kill()
+        logger.info("File watcher process stopped (via shutdown event).")
+    else:
+        logger.info("No active watcher process to stop.")
+
 
 # --- API Endpoints ---
 @app.get("/health", tags=["Application"])
 def health_check():
-    # A simple readiness check: Does the essential agents directory exist?
-    if not os.path.exists(AGENTS_DIR):
+    # Use centralized _AGENTS_DIR for readiness check
+    if not os.path.exists(_AGENTS_DIR):  # MODIFIED
         raise HTTPException(
             status_code=503,
-            detail=f"Service Unavailable: Agents directory not found at '{AGENTS_DIR}'."
+            detail=f"Service Unavailable: Agents directory not found at '{_AGENTS_DIR}'."  # MODIFIED
         )
     return JSONResponse(content={"status": "ok", "message": "Service is healthy."})
 
@@ -96,6 +139,8 @@ async def home(request: Request):
     agents_list = []
     seen_agent_names = set()
     try:
+        # Use centralized _AGENTS_DIR for get_agent_configs
+        # get_agent_configs implicitly uses AGENTS_DIR, so no change needed here directly
         agent_configs = get_agent_configs()
         for config in agent_configs:
             if config.name not in seen_agent_names:
@@ -111,11 +156,12 @@ async def home(request: Request):
 @app.get("/history/{thread_id}", tags=["Memory"])
 async def get_history(thread_id: str, agent_name: str, user_id: str):
     validate_agent_name(agent_name)
-    db_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
+    # Use centralized _MEMORY_DIR
+    db_path = _MEMORY_DIR / f"{agent_name}_{user_id}_{thread_id}.db"  # MODIFIED
     if not os.path.exists(db_path):
         raise HTTPException(status_code=404, detail="History not found.")
     try:
-        async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
+        async with AsyncSqliteSaver.from_conn_string(str(db_path)) as saver:  # MODIFIED
             config = {"configurable": {"thread_id": thread_id}}
             checkpoint_tuple = await saver.aget_tuple(config)
             if not checkpoint_tuple:
@@ -134,9 +180,14 @@ async def get_history(thread_id: str, agent_name: str, user_id: str):
 
 
 @app.post("/create-agent", tags=["Agents"])
+# Note: create_agent is currently synchronous. If embed_agent_data becomes async,
+# this needs to change to async def and await embed_agent_data.
 def create_agent(config: AgentConfig):
     try:
         save_agent_config(config)
+        # Assuming embed_agent_data will be called in an asyncio.run context in cli.py if needed.
+        # If this endpoint is used directly, embed_agent_data would need to be async or run in thread.
+        # For now, it's typically called by cli.py's deploy command.
         embed_agent_data(config)
         return JSONResponse(content={"status": "Agent configuration saved successfully.", "agent": config.name})
     except Exception as e:
@@ -190,7 +241,6 @@ async def websocket_chat(ws: WebSocket):
         if "sql_toolkit" in agent_config.tools:
             db_source = next((s for s in agent_config.sources if s.type == 'db'), None)
             if db_source:
-                # MODIFIED: Pass llm_model and model_params from agent_config
                 all_tools.extend(create_sql_toolkit(
                     db_connection_string=db_source.db_connection,
                     llm_model_name=agent_config.llm_model,
@@ -200,10 +250,11 @@ async def websocket_chat(ws: WebSocket):
         if "extractor" in agent_config.tools: all_tools.append(get_extraction_tool(agent_config))
 
         workflow = get_agent_workflow(all_tools)
-        memory_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
-        os.makedirs("memory", exist_ok=True)
+        # Use centralized _MEMORY_DIR
+        memory_path = _MEMORY_DIR / f"{agent_name}_{user_id}_{thread_id}.db"  # MODIFIED
+        os.makedirs(_MEMORY_DIR, exist_ok=True)  # MODIFIED
 
-        async with AsyncSqliteSaver.from_conn_string(memory_path) as saver:
+        async with AsyncSqliteSaver.from_conn_string(str(memory_path)) as saver:  # MODIFIED
             langgraph_agent = workflow.compile(checkpointer=saver)
 
             # --- Initial Query ---

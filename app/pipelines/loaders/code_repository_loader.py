@@ -7,7 +7,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 import asyncio
 
-# NEW: Import get_path_settings from centralized config
 from app.core.config import get_path_settings
 
 from git import Repo, InvalidGitRepositoryError, NoSuchPathError, GitCommandError
