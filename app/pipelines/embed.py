@@ -74,14 +74,12 @@ def _get_chunks_from_documents(
         try:
             langchain_embeddings = get_embedding_model(embedding_model_name)
             llama_embeddings = LangchainEmbedding(langchain_embeddings)
-
             semantic_splitter = SemanticSplitterNodeParser.from_defaults(
                 embed_model=llama_embeddings,
                 breakpoint_percentile_threshold=chunking_config.breakpoint_percentile_threshold,
             )
             llama_docs = [LlamaDocument(text=doc.page_content, metadata=doc.metadata) for doc in documents]
             nodes = semantic_splitter.get_nodes_from_documents(llama_docs)
-
             for node in nodes:
                 original_doc_id = node.metadata.get("original_doc_id", "")
                 content = node.get_content()
@@ -90,14 +88,11 @@ def _get_chunks_from_documents(
                     generated_chunk_id = f"{original_doc_id}-{content_hash[:8]}"
                 else:
                     generated_chunk_id = str(uuid.uuid4())
-
                 metadata = {**node.metadata, "chunk_id": generated_chunk_id}
                 new_doc = LangChainDocument(page_content=content, metadata=metadata)
                 new_doc.id = generated_chunk_id
                 chunks.append(new_doc)
-
             logger.info(f"Successfully applied semantic chunking. Resulted in {len(chunks)} chunks.")
-
         except Exception as e:
             logger.error(f"Semantic chunking failed: {e}. Falling back to default recursive splitting.", exc_info=True)
             chunking_mode = 'default'
@@ -118,7 +113,6 @@ def _get_chunks_from_documents(
                 generated_chunk_id = f"{original_doc_id}-{idx}-{content_hash[:8]}"
             else:
                 generated_chunk_id = str(uuid.uuid4())
-
             chunk.id = generated_chunk_id
             chunk.metadata["chunk_id"] = generated_chunk_id
             chunks.append(chunk)
@@ -126,21 +120,17 @@ def _get_chunks_from_documents(
 
     if not chunks:
         raise ValueError("No chunks were generated after document splitting.")
-
     return chunks
 
 
 def load_documents_from_source(source: DataSource, reproducible_ids: bool = False) -> list[LangChainDocument]:
     """
     Dispatcher function that calls the appropriate loader based on the source type.
-    Assigns a unique 'original_doc_id' to each loaded document for traceability.
     """
     source_type = source.type
     logger.info(f"Dispatching to loader for source type: '{source_type}'")
-
     loaded_docs: List[LangChainDocument] = []
 
-    # --- Comprehensive loading logic for all supported types ---
     if source_type == "local":
         path = source.path
         if not path or not os.path.exists(path):
@@ -181,39 +171,33 @@ def load_documents_from_source(source: DataSource, reproducible_ids: bool = Fals
         logger.warning(f"Unknown or unsupported source type: '{source_type}'. Skipping.")
         return []
 
-    # Assign a unique and deterministic 'original_doc_id' to each loaded document.
     for idx, doc in enumerate(loaded_docs):
         source_identifier = doc.metadata.get('source', source.path or source.url or source.type)
         if reproducible_ids:
-            # Create a hash based on source, index, and content for a stable ID.
             hash_input = f"{source_identifier}-{idx}-{doc.page_content}"
             doc.metadata['original_doc_id'] = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
         else:
             doc.metadata['original_doc_id'] = str(uuid.uuid4())
-
     return loaded_docs
 
 
 def embed_agent_data(config: AgentConfig):
     """
-    The main embedding pipeline for a RAGnetic agent. This function orchestrates
-    loading, chunking, and storing documents in a vector database.
+    Main embedding pipeline. Loads, chunks, stores documents, and saves a
+    raw text copy of chunks for scalable BM25 initialization.
     """
     logger.info(f"[EMBED CONFIG] chunking.mode={config.chunking.mode}, vector_store.type={config.vector_store.type}")
     logger.info(f"Starting data embedding process for agent: '{config.name}'")
-    logger.info(f"Reproducible IDs enabled for embedding: {config.reproducible_ids}")
 
     all_docs = []
     for source in config.sources:
         loaded_docs = load_documents_from_source(source, config.reproducible_ids)
-        # Filter out any documents that might be empty after loading
         validated_docs = [doc for doc in loaded_docs if doc.page_content and doc.page_content.strip()]
         all_docs.extend(validated_docs)
 
     if not all_docs:
-        raise ValueError("No valid documents with content were found to embed from any of the specified sources.")
+        raise ValueError("No valid documents with content found to embed from any of the specified sources.")
 
-    # Sort documents by their unique ID to ensure the chunking order is always the same.
     all_docs.sort(key=lambda d: d.metadata.get("original_doc_id", ""))
     logger.info(f"Loaded a total of {len(all_docs)} valid documents from all sources.")
 
@@ -257,6 +241,16 @@ def embed_agent_data(config: AgentConfig):
             raise ValueError(f"Unsupported vector store type: {db_type}")
 
         logger.info(f"Successfully created and populated vector store for agent '{config.name}'.")
+
+        # Save raw chunks for BM25
+        bm25_docs_path = os.path.join(vectorstore_path, "bm25_documents.jsonl")
+        with open(bm25_docs_path, 'w', encoding='utf-8') as f:
+            for chunk in chunks:
+                # We only need page_content and the ID for BM25 retrieval and downstream evaluation.
+                f.write(json.dumps({"id": chunk.id, "page_content": chunk.page_content}) + "\n")
+        logger.info(f"Saved {len(chunks)} chunks for scalable BM25 retrieval at {bm25_docs_path}")
+
+        logger.info(f"Successfully created vector store and BM25 source for agent '{config.name}'.")
 
     except Exception as e:
         logger.error(f"Failed to create vector store for agent '{config.name}'. Error: {e}", exc_info=True)
