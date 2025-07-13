@@ -6,8 +6,7 @@ from typing import Dict, Any, Optional
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_community.llms.ollama import Ollama
-
+from langchain_ollama import ChatOllama
 from app.schemas.agent import ModelParams
 
 # --- Constants ---
@@ -29,7 +28,7 @@ MODEL_PROVIDER_MAPPING = {
     "gpt-": (ChatOpenAI, "openai"),
     "claude-": (ChatAnthropic, "anthropic"),
     "gemini-": (ChatGoogleGenerativeAI, "google"),
-    "ollama/": (Ollama, None),  # Local models don't need a key
+    "ollama/": (ChatOllama, None),  # Local models don't need a key
 }
 
 # --- Logging ---
