@@ -57,6 +57,7 @@ dependencies     = [
   "pytest",
   "pytest-mock",
   "sqlalchemy",
+  "tiktoken",
 ]
 scripts = { "ragnetic" = "cli:app" }
 

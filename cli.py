@@ -9,8 +9,12 @@ import logging
 from multiprocessing import Process
 import json
 import pandas as pd
+from datetime import datetime
+
+from app.core.structured_logging import JSONFormatter
 from app.evaluation.dataset_generator import generate_test_set
 from app.evaluation.benchmark import run_benchmark
+
 # Local application imports
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file, AGENTS_DIR
 from app.pipelines.embed import embed_agent_data
@@ -21,22 +25,50 @@ import requests
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-# Set up logging for cleaner output
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+# Logging Setup
+def setup_logging(json_format: bool = False):
+    """Configures the root logger for either human-readable or JSON output."""
+    # Create logs directory if it doesn't exist
+    if not os.path.exists("logs"):
+        os.makedirs("logs")
+
+    # Get the root logger
+    root_logger = logging.getLogger()
+    # Remove any existing handlers to avoid duplicate logs
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+
+    # Add a handler to print to the console
+    console_handler = logging.StreamHandler()
+
+    if json_format:
+        # For production, use the JSON formatter for console and file
+        formatter = JSONFormatter()
+        console_handler.setFormatter(formatter)
+
+        # Also add a file handler to save structured logs
+        log_file = f"logs/ragnetic_app_{datetime.now().strftime('%Y-%m-%d')}.log.jsonl"
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+    else:
+        # For local development, use a simple, readable format
+        formatter = logging.Formatter('%(levelname)s: %(message)s')
+        console_handler.setFormatter(formatter)
+
+    root_logger.addHandler(console_handler)
+    root_logger.setLevel(logging.INFO)
+
+
+# Initialize a default logger for CLI startup
 logger = logging.getLogger(__name__)
 
+# --- CLI App Definition ---
 cli_help = """
 RAGnetic: Your on-premise, plug-and-play AI agent framework.
 
 Provides a CLI for initializing projects, managing agents, and running the server.
-
-Examples:
-\n- Initialize a new project:
-  $ ragnetic init
-\n- Deploy an agent by its name:
-  $ ragnetic deploy your-agent-name
-\n- Start the server and automated file watcher:
-  $ ragnetic start-server
 """
 
 app = typer.Typer(
@@ -52,7 +84,7 @@ app.add_typer(auth_app)
 eval_app = typer.Typer(name="evaluate", help="Commands for evaluating agent performance.")
 app.add_typer(eval_app)
 
-# Define constants for the config directory and file
+# --- Constants ---
 RAGNETIC_DIR = ".ragnetic"
 CONFIG_FILE = os.path.join(RAGNETIC_DIR, "config.ini")
 
@@ -70,10 +102,11 @@ MODEL_PROVIDERS = {
 @app.command(help="Initialize a new RAGnetic project in the current directory.")
 def init():
     """
-    Creates the necessary folders (agents_data, data, .ragnetic) and a default config.ini file.
+    Creates the necessary folders and a default config.ini file.
     """
+    setup_logging()
     logger.info("Initializing new RAGnetic project...")
-    folders_to_create = ["agents_data", "data", "vectorstore", "memory", RAGNETIC_DIR]
+    folders_to_create = ["agents_data", "data", "vectorstore", "memory", "logs", RAGNETIC_DIR]
     for folder in folders_to_create:
         if not os.path.exists(folder):
             os.makedirs(folder)
@@ -85,15 +118,12 @@ def init():
             '# For local development, you can set keys here.': '',
             '# For production, it is strongly recommended to use environment variables.': '',
             'OPENAI_API_KEY': '...',
-            'ANTHROPIC_API_KEY': '...',
-            'GOOGLE_API_KEY': '...',
         }
         with open(CONFIG_FILE, 'w') as configfile:
             config.write(configfile)
         logger.info(f"  - Created config file at: {CONFIG_FILE}")
 
     logger.info("\nProject initialized successfully.")
-    logger.info("Next step: Use the 'ragnetic set-api' command to configure your API keys for local development.")
 
 
 @app.command(help="Set and save API keys for local development.")
@@ -101,6 +131,7 @@ def set_api():
     """
     Guides the user through setting API keys in the local config.ini file.
     """
+    setup_logging()
     typer.secho("--- API Key Configuration for Local Development ---", bold=True)
     typer.secho(
         "This wizard saves keys to the local .ragnetic/config.ini file.\n"
@@ -114,14 +145,11 @@ def set_api():
         provider_menu = list(MODEL_PROVIDERS.keys())
         for i, provider in enumerate(provider_menu, 1):
             typer.echo(f"  [{i}] {provider}")
-
         try:
             choice_str = typer.prompt("Enter the number of your choice")
             choice_index = int(choice_str) - 1
-            if not 0 <= choice_index < len(provider_menu):
-                raise ValueError
+            if not 0 <= choice_index < len(provider_menu): raise ValueError
             selected_provider = provider_menu[choice_index]
-
             if MODEL_PROVIDERS[selected_provider] is None:
                 typer.secho(f"\n{selected_provider} models run locally and do not require an API key.",
                             fg=typer.colors.GREEN)
@@ -131,22 +159,17 @@ def set_api():
                 if not api_key:
                     typer.secho("Error: API Key cannot be empty.", fg=typer.colors.RED)
                     continue
-
                 config = configparser.ConfigParser()
                 config.read(CONFIG_FILE)
-                if 'API_KEYS' not in config:
-                    config['API_KEYS'] = {}
+                if 'API_KEYS' not in config: config['API_KEYS'] = {}
                 config['API_KEYS'][config_key_name] = api_key
                 with open(CONFIG_FILE, 'w') as configfile:
                     config.write(configfile)
                 typer.secho(f"Successfully saved {selected_provider} API key to {CONFIG_FILE}.", fg=typer.colors.GREEN)
-
         except (ValueError, IndexError):
             typer.secho("Error: Invalid selection.", fg=typer.colors.RED)
-
         if not typer.confirm("Do you want to set another API key?", default=False):
             break
-
     typer.echo("\nLocal API key configuration complete.")
 
 
@@ -154,14 +177,14 @@ def set_api():
 def start_server(
         host: str = typer.Option("127.0.0.1", help="The host to bind the server to."),
         port: int = typer.Option(8000, help="The port to run the server on."),
-        reload: bool = typer.Option(False, "--reload",
-                                    help="Enable auto-reloading for development (disables watcher)."),
+        reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
         no_watcher: bool = typer.Option(False, "--no-watcher", help="Do not start the file watcher process."),
+        json_logs: bool = typer.Option(False, "--json-logs",
+                                       help="Output logs in structured JSON format for production."),
 ):
-    """
-    Starts the Uvicorn server and, by default, a background process to watch for
-    data file changes.
-    """
+    """Starts the Uvicorn server."""
+    setup_logging(json_logs)
+
     if reload:
         logger.warning("Running in --reload mode. The file watcher will be disabled.")
         uvicorn.run("app.main:app", host=host, port=port, reload=True)
@@ -173,14 +196,12 @@ def start_server(
         if not os.path.exists(data_directory):
             logger.error(f"Error: The '{data_directory}' directory does not exist. Please run 'ragnetic init' first.")
             raise typer.Exit(code=1)
-
         watcher_process = Process(target=start_watcher, args=(data_directory,), daemon=True)
         watcher_process.start()
         logger.info("Automated file watcher started in the background.")
 
     logger.info(f"Starting RAGnetic server on http://{host}:{port}")
     try:
-        # Check for a key to provide a helpful warning if none are set
         get_api_key("openai")
     except ValueError as e:
         logger.warning(f"{e} - some models may not work.")
@@ -197,6 +218,7 @@ def start_server(
 
 @app.command(help="Lists all configured agents.")
 def list_agents():
+    setup_logging()
     if not os.path.exists(AGENTS_DIR):
         logger.error("Error: Directory 'agents_data' not found. Have you run 'ragnetic init'?")
         raise typer.Exit(code=1)
@@ -211,10 +233,12 @@ def list_agents():
 
 @app.command(name="deploy", help="Deploys an agent by its name, processing its data sources.")
 def deploy_agent_by_name(
-        agent_name: str = typer.Argument(..., help="The name of the agent to deploy (must match the YAML filename)."),
+        agent_name: str = typer.Argument(..., help="The name of the agent to deploy."),
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation and overwrite existing data."),
+        json_logs: bool = typer.Option(False, "--json-logs", help="Output logs in structured JSON format."),
 ):
     """Loads an agent config from YAML and creates a vector store."""
+    setup_logging(json_logs)
     try:
         config_path = os.path.join(AGENTS_DIR, f"{agent_name}.yaml")
         logger.info(f"Loading agent configuration from: {config_path}")
@@ -228,7 +252,6 @@ def deploy_agent_by_name(
             if not typer.confirm("Do you want to overwrite it and re-deploy the agent?"):
                 typer.echo("Deployment cancelled.")
                 raise typer.Exit()
-
             shutil.rmtree(vectorstore_path)
             logger.info(f"Removed existing vector store at: {vectorstore_path}")
 
@@ -240,7 +263,7 @@ def deploy_agent_by_name(
         typer.echo(f"  - Vector store created at: {vectorstore_path}")
 
     except Exception as e:
-        typer.secho(f"An unexpected error occurred during deployment: {e}", fg=typer.colors.RED, err=True)
+        logger.error(f"An unexpected error occurred during deployment: {e}", exc_info=True)
         raise typer.Exit(code=1)
 
 
@@ -248,6 +271,7 @@ def deploy_agent_by_name(
 def inspect_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to inspect.")
 ):
+    setup_logging()
     try:
         typer.echo(f"Inspecting configuration for agent: '{agent_name}'")
         config = load_agent_config(agent_name)
@@ -260,16 +284,10 @@ def inspect_agent(
 @app.command(help="Validates an agent's configuration and associated files.")
 def validate_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to validate."),
-        check_connections: bool = typer.Option(
-            False,
-            "--check-connections",
-            "-c",
-            help="Test data source connections."
-        )
+        check_connections: bool = typer.Option(False, "--check-connections", "-c", help="Test data source connections.")
 ):
-    """
-    Validates an agent's configuration, checking YAML syntax, file existence, and external connections.
-    """
+    """Validates an agent's configuration, checking YAML syntax, file existence, and external connections."""
+    setup_logging()
     typer.echo(f"Validating agent: '{agent_name}'...")
     errors = 0
     try:
@@ -285,7 +303,6 @@ def validate_agent(
     else:
         typer.secho(f"  - [WARN] Vector store not found. Agent may need to be deployed.", fg=typer.colors.YELLOW)
 
-    # --- Connection Check Logic ---
     if check_connections:
         typer.echo("\n--- Performing Connection Check ---")
         for i, source in enumerate(agent_config.sources):
@@ -299,7 +316,7 @@ def validate_agent(
 
     typer.echo("-" * 20)
     if errors == 0:
-        typer.secho("Validation successful. Agent appears to be configured correctly.", fg=typer.colors.GREEN)
+        typer.secho("Validation successful.", fg=typer.colors.GREEN)
     else:
         typer.secho(f"Validation failed with {errors} critical error(s).", fg=typer.colors.RED)
         raise typer.Exit(code=1)
@@ -310,6 +327,7 @@ def reset_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to reset."),
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
 ):
+    setup_logging()
     vectorstore_path = f"vectorstore/{agent_name}"
     memory_pattern = f"memory/{agent_name}_*.db"
     typer.secho(f"Warning: This will reset agent '{agent_name}' by deleting its generated data:",
@@ -334,6 +352,7 @@ def delete_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to permanently delete."),
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
 ):
+    setup_logging()
     vectorstore_path = f"vectorstore/{agent_name}"
     memory_pattern = f"memory/{agent_name}_*.db"
     config_path = os.path.join(AGENTS_DIR, f"{agent_name}.yaml")
@@ -354,13 +373,38 @@ def delete_agent(
 
 @auth_app.command("gdrive", help="Authenticate with Google Drive.")
 def auth_gdrive():
-    # ... (gdrive authentication logic) ...
-    pass
+    setup_logging()
+    typer.echo("Google Drive Authentication Setup")
+    typer.echo("Please provide the path to your service account JSON key file.")
+    json_path = typer.prompt("Path to service account .json file")
+    if not os.path.exists(json_path) or not json_path.endswith('.json'):
+        typer.secho(f"Error: File not found or not a .json file at '{json_path}'", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    try:
+        with open(json_path, 'r') as f:
+            credentials_json_str = f.read()
+        json.loads(credentials_json_str)
+        config = configparser.ConfigParser()
+        config.read(CONFIG_FILE)
+        if 'GOOGLE_CREDENTIALS' not in config:
+            config.add_section('GOOGLE_CREDENTIALS')
+        safe_credentials_str = credentials_json_str.replace('%', '%%')
+        config.set('GOOGLE_CREDENTIALS', 'json_key', safe_credentials_str)
+        with open(CONFIG_FILE, 'w') as configfile:
+            config.write(configfile)
+        typer.secho("Google Drive credentials saved successfully!", fg=typer.colors.GREEN)
+    except json.JSONDecodeError:
+        typer.secho("Error: The provided file is not a valid JSON file.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.secho(f"An error occurred: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
 
 @app.command(help="Runs the entire test suite using pytest.")
 def test():
     """Discovers and runs all automated tests in the 'tests/' directory."""
+    setup_logging()
     typer.echo("Running the RAGnetic test suite...")
     result_code = pytest.main(["-v", "tests/"])
     if result_code == 0:
@@ -375,19 +419,21 @@ def generate_test_command(
         output_file: str = typer.Option("test_set.json", "--output", "-o",
                                         help="Path to save the generated JSON file."),
         num_questions: int = typer.Option(50, "--num-questions", "-n", help="Number of questions to generate."),
+        json_logs: bool = typer.Option(False, "--json-logs", help="Output logs in structured JSON format."),
 ):
-    typer.echo(f"--- Generating Test Set for Agent: '{agent_name}' ---")
+    setup_logging(json_logs)
+    logger.info(f"--- Generating Test Set for Agent: '{agent_name}' ---")
     try:
         agent_config = load_agent_config(agent_name)
         qa_pairs = generate_test_set(agent_config, num_questions)
         if qa_pairs:
             with open(output_file, 'w') as f:
                 json.dump(qa_pairs, f, indent=2)
-            typer.secho(f"\nSuccessfully generated {len(qa_pairs)} Q&A pairs to '{output_file}'", fg=typer.colors.GREEN)
+            logger.info(f"\nSuccessfully generated {len(qa_pairs)} Q&A pairs to '{output_file}'")
         else:
-            typer.secho("Could not generate any Q&A pairs.", fg=typer.colors.RED)
+            logger.error("Could not generate any Q&A pairs.")
     except Exception as e:
-        typer.secho(f"An error occurred during test set generation: {e}", fg=typer.colors.RED, err=True)
+        logger.error(f"An error occurred during test set generation: {e}", exc_info=True)
         raise typer.Exit(code=1)
 
 
@@ -395,8 +441,14 @@ def generate_test_command(
 def benchmark_command(
         agent_name: str = typer.Argument(..., help="The agent to benchmark."),
         test_set_file: str = typer.Option(..., "--test-set", "-t", help="Path to a JSON test set file."),
+        json_logs: bool = typer.Option(False, "--json-logs", help="Output logs in structured JSON format."),
 ):
-    typer.echo(f"--- Running Benchmark for Agent: '{agent_name}' ---")
+    """
+    Uses a ground truth test set to calculate metrics, including token usage and cost.
+    """
+    setup_logging(json_logs)
+    logger.info(f"--- Running Benchmark for Agent: '{agent_name}' ---")
+
     try:
         agent_config = load_agent_from_yaml_file(os.path.join(AGENTS_DIR, f"{agent_name}.yaml"))
         with open(test_set_file, 'r') as f:
@@ -405,18 +457,33 @@ def benchmark_command(
         results_df = run_benchmark(agent_config, test_set)
 
         if not results_df.empty:
+            results_filename = f"logs/benchmark_{agent_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            results_df.to_csv(results_filename, index=False)
+            logger.info(f"Full benchmark results saved to: {results_filename}")
+
             recall_score = results_df["key_fact_recalled"].mean()
             avg_noise = results_df["contextual_noise"].mean()
+            total_cost = results_df["estimated_cost_usd"].sum()
+
             typer.secho("\n--- Benchmark Complete ---", bold=True)
             typer.echo("\nOverall Scores:")
             typer.secho(f"  - Key Fact Recall: {recall_score:.2%}", fg=typer.colors.GREEN)
             typer.secho(f"  - Average Context Size (Noise): {avg_noise:.2f} docs", fg=typer.colors.YELLOW)
-            if typer.confirm("\nShow detailed results?", default=False):
-                typer.echo(results_df.to_string())
+            typer.secho(f"  - Total Estimated Cost: ${total_cost:.6f} USD", fg=typer.colors.BLUE)
+            typer.secho(f"\nDetailed results saved to: {results_filename}", fg=typer.colors.BLUE)
+
+            if typer.confirm("\nShow detailed results in console?", default=False):
+                display_columns = [
+                    "question", "generated_answer", "key_fact_recalled", "faithfulness",
+                    "total_tokens", "estimated_cost_usd", "retrieval_f1"
+                ]
+                existing_columns = [col for col in display_columns if col in results_df.columns]
+                typer.echo(results_df[existing_columns].to_string())
         else:
-            typer.secho("Benchmark failed to produce results.", fg=typer.colors.RED)
+            logger.error("Benchmark failed to produce results.")
+
     except Exception as e:
-        typer.secho(f"An unexpected error during benchmark: {e}", fg=typer.colors.RED, err=True)
+        logger.error(f"An unexpected error occurred during benchmark: {e}", exc_info=True)
         raise typer.Exit(code=1)
 
 
