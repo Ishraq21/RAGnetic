@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
+
+
 app = FastAPI(
     title="RAGnetic API",
     version="0.1.0",
@@ -37,11 +40,19 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if "*" in allowed_origins:
+    logger.warning("="*80)
+    logger.warning("!!! SECURITY WARNING: CORS is configured to allow all origins ('*').")
+    logger.warning("!!! This is convenient for local development but is INSECURE for production.")
+    logger.warning("!!! For production, set the 'CORS_ALLOWED_ORIGINS' environment variable.")
+    logger.warning("!!! Example: export CORS_ALLOWED_ORIGINS='https://your.domain.com,https://another.domain'")
+    logger.warning("="*80)
 
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
