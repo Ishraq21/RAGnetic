@@ -540,7 +540,11 @@ def benchmark_command(
     typer.echo(f"--- Running Benchmark for Agent: '{agent_name}' ---")
 
     try:
-        agent_config = load_agent_config(agent_name)
+        config_path = os.path.join(AGENTS_DIR, f"{agent_name}.yaml")
+        if not os.path.exists(config_path):
+            typer.secho(f"Error: Configuration file not found at {config_path}", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        agent_config = load_agent_from_yaml_file(config_path)
 
         if not os.path.exists(test_set_file):
             typer.secho(f"Error: Test set file not found at '{test_set_file}'", fg=typer.colors.RED)
