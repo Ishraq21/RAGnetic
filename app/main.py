@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from app.core.validation import validate_agent_name
+
 
 from app.schemas.agent import AgentConfig
 from app.agents.config_manager import save_agent_config, load_agent_config, get_agent_configs
@@ -102,6 +104,7 @@ async def home(request: Request):
 
 @app.get("/history/{thread_id}", tags=["Memory"])
 async def get_history(thread_id: str, agent_name: str, user_id: str):
+    validate_agent_name(agent_name)
     db_path = f"memory/{agent_name}_{user_id}_{thread_id}.db"
     if not os.path.exists(db_path):
         raise HTTPException(status_code=404, detail="History not found.")
@@ -169,6 +172,7 @@ async def websocket_chat(ws: WebSocket):
     try:
         initial_data = await ws.receive_json()
         agent_name = initial_data["agent"]
+        validate_agent_name(agent_name)
         query = initial_data["query"]
         user_id = initial_data.get("user_id") or f"user-{uuid4().hex[:8]}"
         thread_id = initial_data.get("thread_id") or f"thread-{uuid4().hex[:8]}"
