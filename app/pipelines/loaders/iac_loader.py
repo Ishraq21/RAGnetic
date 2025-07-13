@@ -1,11 +1,12 @@
 import os
 import logging
 from typing import List
-from pathlib import Path # Added import
+from pathlib import Path
+import asyncio # NEW: Added import for asynchronous operations
 
 from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter, Language
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +44,11 @@ def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
 
     return resolved_path
 
-def load(file_path: str) -> List[Document]:
+async def load(file_path: str) -> List[Document]: # MODIFIED: Changed to async def
     """
     Loads Infrastructure-as-Code (IaC) files like Terraform and Kubernetes YAML,
     then splits them into syntax-aware chunks, with path safety validation.
+    Now supports asynchronous loading.
     """
     try:
         # First, validate the file_path itself
@@ -86,10 +88,10 @@ def load(file_path: str) -> List[Document]:
         # Load the raw text content of the file
         # TextLoader should handle the safe_file_path as a string
         loader = TextLoader(str(safe_file_path), encoding="utf-8")
-        raw_docs = loader.load()
+        raw_docs = await asyncio.to_thread(loader.load) # MODIFIED: Use asyncio.to_thread
 
         # Use the appropriate splitter
-        chunks = splitter.split_documents(raw_docs)
+        chunks = splitter.split_documents(raw_docs) # This is CPU-bound, no need for to_thread
 
         # Add metadata to each chunk
         for chunk in chunks:
@@ -99,9 +101,9 @@ def load(file_path: str) -> List[Document]:
         logger.info(f"Successfully chunked {safe_file_path.name} into {len(chunks)} IaC chunks.")
         return chunks
 
-    except ValueError as e: # Catch validation errors from _is_path_safe_and_within_allowed_dirs or file checks
+    except ValueError as e:
         logger.error(f"Security or validation error during IaC file loading: {e}")
         return []
     except Exception as e:
-        logger.error(f"Failed to load or process IaC file {file_path}: {e}", exc_info=True) # Added exc_info=True
+        logger.error(f"Failed to load or process IaC file {file_path}: {e}", exc_info=True)
         return []

@@ -10,6 +10,7 @@ from multiprocessing import Process
 import json
 import pandas as pd
 from datetime import datetime
+import asyncio
 
 from app.core.structured_logging import JSONFormatter
 from app.evaluation.dataset_generator import generate_test_set
@@ -239,7 +240,7 @@ def list_agents():
 
 
 @app.command(name="deploy", help="Deploys an agent by its name, processing its data sources.")
-def deploy_agent_by_name(
+def deploy_agent_by_name( # MODIFIED: Removed async
         agent_name: str = typer.Argument(..., help="The name of the agent to deploy."),
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation and overwrite existing data."),
         json_logs: bool = typer.Option(False, "--json-logs", help="Output logs in structured JSON format."),
@@ -265,7 +266,7 @@ def deploy_agent_by_name(
 
         agent_config = load_agent_from_yaml_file(config_path)
         typer.echo(f"\nDeploying agent '{agent_config.name}' using embedding model '{agent_config.embedding_model}'...")
-        embed_agent_data(agent_config)
+        asyncio.run(embed_agent_data(agent_config)) # MODIFIED: Wrap with asyncio.run
 
         typer.secho("\nAgent deployment successful!", fg=typer.colors.GREEN)
         typer.echo(f"  - Vector store created at: {vectorstore_path}")
@@ -427,7 +428,7 @@ def test():
 
 
 @eval_app.command("generate-test", help="Generates a test set from an agent's sources.")
-def generate_test_command(
+def generate_test_command( # MODIFIED: Changed to def (removed async)
         agent_name: str = typer.Argument(..., help="The agent to build the test set from."),
         output_file: str = typer.Option("test_set.json", "--output", "-o",
                                         help="Path to save the generated JSON file."),
@@ -439,7 +440,8 @@ def generate_test_command(
     logger.info(f"--- Generating Test Set for Agent: '{agent_name}' ---")
     try:
         agent_config = load_agent_config(agent_name)
-        qa_pairs = generate_test_set(agent_config, num_questions)
+        # MODIFIED: Wrap with asyncio.run()
+        qa_pairs = asyncio.run(generate_test_set(agent_config, num_questions))
         if qa_pairs:
             with open(output_file, 'w') as f:
                 json.dump(qa_pairs, f, indent=2)
@@ -449,7 +451,6 @@ def generate_test_command(
     except Exception as e:
         logger.error(f"An error occurred during test set generation: {e}", exc_info=True)
         raise typer.Exit(code=1)
-
 
 @eval_app.command("benchmark", help="Runs a retrieval quality benchmark on an agent.")
 def benchmark_command(

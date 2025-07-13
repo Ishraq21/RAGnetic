@@ -1,9 +1,10 @@
 import logging
-import os  # Added import
-from pathlib import Path  # Added import
+import os
+from pathlib import Path
 from typing import List
 from langchain_core.documents import Document
 from langchain_community.document_loaders import NotebookLoader
+import asyncio  # NEW: Added import for asynchronous operations
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +45,11 @@ def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
     return resolved_path
 
 
-def load_notebook(path: str) -> List[Document]:
+async def load_notebook(path: str) -> List[Document]:  # MODIFIED: Changed to async def
     """
     Loads a Jupyter Notebook (.ipynb) file from the given path,
     with path safety validation and standardized error logging.
+    Now supports asynchronous loading.
     """
     try:
         # First, validate the path itself for safety
@@ -72,10 +74,12 @@ def load_notebook(path: str) -> List[Document]:
             max_output_length=100,
             remove_newline=True
         )
-        documents = loader.load()
+        # MODIFIED: Run loader.load() in a separate thread because it's blocking I/O
+        documents = await asyncio.to_thread(loader.load)
+
         logger.info(f"Successfully loaded {len(documents)} cells from notebook: {safe_path.name}")
         return documents
-    except ValueError as e:  # Catches validation errors from _is_path_safe_and_within_allowed_dirs or file checks
+    except ValueError as e:
         logger.error(f"Security or validation error during notebook loading: {e}")
         return []
     except Exception as e:
