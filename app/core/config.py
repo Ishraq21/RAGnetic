@@ -1,8 +1,8 @@
 import os
 import configparser
 import logging
-from typing import Dict, Any, Optional, List  # Added List for get_path_settings return type
-from pathlib import Path  # NEW: Added import
+from typing import Dict, Any, Optional, List
+from pathlib import Path
 
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -11,8 +11,7 @@ from langchain_ollama import ChatOllama
 from app.schemas.agent import ModelParams
 
 # --- Constants ---
-RAGNETIC_DIR = ".ragnetic"
-CONFIG_FILE = os.path.join(RAGNETIC_DIR, "config.ini")
+# REMOVED: RAGNETIC_DIR and CONFIG_FILE will now be derived and centralized
 
 # --- Mappings ---
 # Maps service names to their environment variable and config.ini key names
@@ -39,76 +38,99 @@ logger = logging.getLogger(__name__)
 _llm_cache: Dict[str, Any] = {}
 
 # --- Path Settings Cache ---
-_path_settings_cache: Dict[str, Any] = {}  # NEW: Cache for path settings
+_path_settings_cache: Dict[str, Any] = {}
 
 
-def get_path_settings() -> Dict[str, Path | List[Path]]:  # MODIFIED: Return type hint to include List[Path]
+def get_path_settings() -> Dict[str, Path | List[Path]]:
     """
-    Retrieves project root and allowed data directories, prioritizing environment variables
-    over config.ini. Caches the result.
+    Retrieves project root and various application directories (logs, data, vectorstore, etc.),
+    prioritizing environment variables over config.ini. Caches the result.
     """
     if _path_settings_cache:
         return _path_settings_cache
 
     is_production = os.environ.get("ENVIRONMENT", "development").lower() == "production"
-    settings: Dict[str, Path | List[Path]] = {}  # Initialize with correct type hint
+    settings: Dict[str, Path | List[Path]] = {}
 
-    # 1. Prioritize Environment Variables
-    env_project_root = os.environ.get("RAGNETIC_PROJECT_ROOT")
-    env_allowed_dirs = os.environ.get("RAGNETIC_ALLOWED_DATA_DIRS")
+    # Define relative paths used within the project for various folders
+    # These are defaults that can be overridden by config.ini/env vars
+    DEFAULT_RAGNETIC_DIR_NAME = ".ragnetic"
+    DEFAULT_LOGS_DIR_NAME = "logs"
+    DEFAULT_DATA_DIR_NAME = "data"
+    DEFAULT_AGENTS_DIR_NAME = "agents_data"
+    DEFAULT_VECTORSTORE_DIR_NAME = "vectorstore"
+    DEFAULT_MEMORY_DIR_NAME = "memory"
+    DEFAULT_TEMP_CLONES_DIR_NAME = ".ragnetic_temp_clones"  # For code_repository_loader
 
-    if env_project_root:
-        settings["PROJECT_ROOT"] = Path(env_project_root).resolve()
+    # 1. Determine PROJECT_ROOT
+    env_project_root_str = os.environ.get("RAGNETIC_PROJECT_ROOT")
+    if env_project_root_str:
+        settings["PROJECT_ROOT"] = Path(env_project_root_str).resolve()
         logger.info("Loaded PROJECT_ROOT from environment variable.")
-    if env_allowed_dirs:
-        # Resolve each path in the comma-separated list
-        settings["ALLOWED_DATA_DIRS"] = [Path(d).resolve() for d in env_allowed_dirs.split(",")]
-        logger.info("Loaded ALLOWED_DATA_DIRS from environment variable.")
-
-    # 2. Fallback to config.ini if env vars not set (for development or defaults)
-    if not settings.get("PROJECT_ROOT") or not settings.get("ALLOWED_DATA_DIRS"):
-        if os.path.exists(CONFIG_FILE):
+    else:
+        # Fallback to config.ini or current working directory
+        config_file_path_relative_to_cwd = os.path.join(DEFAULT_RAGNETIC_DIR_NAME, "config.ini")
+        if os.path.exists(config_file_path_relative_to_cwd):
             config = configparser.ConfigParser()
-            config.read(CONFIG_FILE)
-
+            config.read(config_file_path_relative_to_cwd)
             if 'PATH_SETTINGS' in config:
-                if "PROJECT_ROOT" not in settings:  # Check if not already set by env var
-                    config_project_root = config.get("PATH_SETTINGS", "PROJECT_ROOT", fallback=".")
-                    # Resolve relative to the directory where config.ini is assumed to be or current working directory
-                    settings["PROJECT_ROOT"] = (Path(os.getcwd()) / config_project_root).resolve()
-                    logger.info("Loaded PROJECT_ROOT from config.ini (development fallback).")
-
-                if "ALLOWED_DATA_DIRS" not in settings:  # Check if not already set by env var
-                    config_allowed_dirs_str = config.get("PATH_SETTINGS", "ALLOWED_DATA_DIRS",
-                                                         fallback="data,agents_data")
-                    # Resolve relative to PROJECT_ROOT or current working directory for flexibility
-                    project_base = settings.get("PROJECT_ROOT",
-                                                Path(os.getcwd()).resolve())  # Use loaded PROJECT_ROOT or CWD
-                    settings["ALLOWED_DATA_DIRS"] = [(Path(project_base) / d).resolve() for d in
-                                                     config_allowed_dirs_str.split(",")]
-                    logger.info("Loaded ALLOWED_DATA_DIRS from config.ini (development fallback).")
+                config_project_root_str = config.get("PATH_SETTINGS", "PROJECT_ROOT", fallback=".")
+                settings["PROJECT_ROOT"] = (Path(os.getcwd()) / config_project_root_str).resolve()
+                logger.info("Loaded PROJECT_ROOT from config.ini (development fallback).")
             else:
                 logger.warning(
-                    f"No '[PATH_SETTINGS]' section found in {CONFIG_FILE}. Using defaults if not set by env vars.")
+                    f"No '[PATH_SETTINGS]' section found in {config_file_path_relative_to_cwd}. Using defaults for PROJECT_ROOT.")
         else:
-            logger.warning(
-                f"Config file not found at {CONFIG_FILE}. Path settings will use defaults if not in env vars.")
+            logger.warning(f"Config file not found at {config_file_path_relative_to_cwd}. Using default PROJECT_ROOT.")
 
-    # 3. Apply sensible defaults if nothing loaded (for cases where config.ini or env vars are incomplete)
-    if "PROJECT_ROOT" not in settings:
-        settings["PROJECT_ROOT"] = Path(os.getcwd()).resolve()
-        logger.warning(f"Using default PROJECT_ROOT: {settings['PROJECT_ROOT']}")
-    if "ALLOWED_DATA_DIRS" not in settings:
-        settings["ALLOWED_DATA_DIRS"] = [
-            settings["PROJECT_ROOT"] / "data",
-            settings["PROJECT_ROOT"] / "agents_data",
-            settings["PROJECT_ROOT"] / ".ragnetic_temp_clones"
-            # Include this default temp dir from code_repository_loader
-        ]
-        logger.warning(f"Using default ALLOWED_DATA_DIRS: {[str(d) for d in settings['ALLOWED_DATA_DIRS']]}")
+        if "PROJECT_ROOT" not in settings:  # Final fallback if not set by env or config.ini
+            settings["PROJECT_ROOT"] = Path(os.getcwd()).resolve()
+            logger.warning(f"Using default PROJECT_ROOT: {settings['PROJECT_ROOT']}")
+
+    # 2. Derive ALL other absolute paths based on PROJECT_ROOT
+    project_root = settings["PROJECT_ROOT"]
+
+    settings["RAGNETIC_DIR"] = (project_root / DEFAULT_RAGNETIC_DIR_NAME).resolve()
+    settings["CONFIG_FILE_PATH"] = (settings["RAGNETIC_DIR"] / "config.ini").resolve()  # Absolute path to config.ini
+    settings["LOGS_DIR"] = (project_root / DEFAULT_LOGS_DIR_NAME).resolve()
+    settings["DATA_DIR"] = (project_root / DEFAULT_DATA_DIR_NAME).resolve()
+    settings["AGENTS_DIR"] = (project_root / DEFAULT_AGENTS_DIR_NAME).resolve()
+    settings["VECTORSTORE_DIR"] = (project_root / DEFAULT_VECTORSTORE_DIR_NAME).resolve()
+    settings["MEMORY_DIR"] = (project_root / DEFAULT_MEMORY_DIR_NAME).resolve()
+    settings["TEMP_CLONES_DIR"] = (project_root / DEFAULT_TEMP_CLONES_DIR_NAME).resolve()
+
+    # 3. Determine ALLOWED_DATA_DIRS (for path validation)
+    env_allowed_dirs_str = os.environ.get("RAGNETIC_ALLOWED_DATA_DIRS")
+    if env_allowed_dirs_str:
+        # Resolve each path relative to PROJECT_ROOT
+        settings["ALLOWED_DATA_DIRS"] = [(project_root / d).resolve() for d in env_allowed_dirs_str.split(",")]
+        logger.info("Loaded ALLOWED_DATA_DIRS from environment variable.")
+    else:
+        # Fallback to config.ini or sensible defaults
+        config = configparser.ConfigParser()
+        # Use the derived absolute CONFIG_FILE_PATH here
+        if os.path.exists(settings["CONFIG_FILE_PATH"]):
+            config.read(settings["CONFIG_FILE_PATH"])
+            if 'PATH_SETTINGS' in config:
+                config_allowed_dirs_str = config.get("PATH_SETTINGS", "ALLOWED_DATA_DIRS", fallback="data,agents_data")
+                settings["ALLOWED_DATA_DIRS"] = [(project_root / d).resolve() for d in
+                                                 config_allowed_dirs_str.split(",")]
+                logger.info("Loaded ALLOWED_DATA_DIRS from config.ini (development fallback).")
+            else:
+                logger.warning(
+                    f"No '[PATH_SETTINGS]' section found in {settings['CONFIG_FILE_PATH']}. Using defaults for ALLOWED_DATA_DIRS.")
+        else:
+            logger.warning(f"Config file not found at {settings['CONFIG_FILE_PATH']}. Using default ALLOWED_DATA_DIRS.")
+
+        if "ALLOWED_DATA_DIRS" not in settings:  # Final fallback if not set by env or config.ini
+            settings["ALLOWED_DATA_DIRS"] = [
+                settings["DATA_DIR"],  # Use derived DATA_DIR
+                settings["AGENTS_DIR"],  # Use derived AGENTS_DIR
+                settings["TEMP_CLONES_DIR"]  # Use derived TEMP_CLONES_DIR
+            ]
+            logger.warning(f"Using default ALLOWED_DATA_DIRS: {[str(d) for d in settings['ALLOWED_DATA_DIRS']]}")
 
     # Ensure all paths in ALLOWED_DATA_DIRS are resolved absolute paths
-    # This step is already done during loading, but a final ensure for safety.
     settings["ALLOWED_DATA_DIRS"] = [d.resolve() for d in settings["ALLOWED_DATA_DIRS"]]
 
     _path_settings_cache.update(settings)
@@ -137,9 +159,13 @@ def get_api_key(service_name: str) -> Optional[str]:
         raise ValueError(f"Missing required environment variable: {key_name}")
 
     # 3. Fallback to config.ini in development
-    if os.path.exists(CONFIG_FILE):
+    # MODIFIED: Use centralized CONFIG_FILE_PATH
+    path_settings = get_path_settings()  # Get path settings to access CONFIG_FILE_PATH
+    config_file_path = path_settings["CONFIG_FILE_PATH"]
+
+    if os.path.exists(config_file_path):
         config = configparser.ConfigParser()
-        config.read(CONFIG_FILE)
+        config.read(config_file_path)
         api_key = config.get("API_KEYS", key_name, fallback=None)
         if api_key and api_key != "...":
             logger.info(f"Loaded API key for '{service_name}' from config file (development fallback).")
