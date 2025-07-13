@@ -3,7 +3,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from langchain_core.documents import Document
 from typing import List
-import asyncio  # NEW: Added import for asynchronous operations
+import asyncio
 
 logger = logging.getLogger(__name__)
 
