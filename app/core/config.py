@@ -1,7 +1,8 @@
 import os
 import configparser
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List  # Added List for get_path_settings return type
+from pathlib import Path  # NEW: Added import
 
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -36,6 +37,82 @@ logger = logging.getLogger(__name__)
 
 # --- Cache ---
 _llm_cache: Dict[str, Any] = {}
+
+# --- Path Settings Cache ---
+_path_settings_cache: Dict[str, Any] = {}  # NEW: Cache for path settings
+
+
+def get_path_settings() -> Dict[str, Path | List[Path]]:  # MODIFIED: Return type hint to include List[Path]
+    """
+    Retrieves project root and allowed data directories, prioritizing environment variables
+    over config.ini. Caches the result.
+    """
+    if _path_settings_cache:
+        return _path_settings_cache
+
+    is_production = os.environ.get("ENVIRONMENT", "development").lower() == "production"
+    settings: Dict[str, Path | List[Path]] = {}  # Initialize with correct type hint
+
+    # 1. Prioritize Environment Variables
+    env_project_root = os.environ.get("RAGNETIC_PROJECT_ROOT")
+    env_allowed_dirs = os.environ.get("RAGNETIC_ALLOWED_DATA_DIRS")
+
+    if env_project_root:
+        settings["PROJECT_ROOT"] = Path(env_project_root).resolve()
+        logger.info("Loaded PROJECT_ROOT from environment variable.")
+    if env_allowed_dirs:
+        # Resolve each path in the comma-separated list
+        settings["ALLOWED_DATA_DIRS"] = [Path(d).resolve() for d in env_allowed_dirs.split(",")]
+        logger.info("Loaded ALLOWED_DATA_DIRS from environment variable.")
+
+    # 2. Fallback to config.ini if env vars not set (for development or defaults)
+    if not settings.get("PROJECT_ROOT") or not settings.get("ALLOWED_DATA_DIRS"):
+        if os.path.exists(CONFIG_FILE):
+            config = configparser.ConfigParser()
+            config.read(CONFIG_FILE)
+
+            if 'PATH_SETTINGS' in config:
+                if "PROJECT_ROOT" not in settings:  # Check if not already set by env var
+                    config_project_root = config.get("PATH_SETTINGS", "PROJECT_ROOT", fallback=".")
+                    # Resolve relative to the directory where config.ini is assumed to be or current working directory
+                    settings["PROJECT_ROOT"] = (Path(os.getcwd()) / config_project_root).resolve()
+                    logger.info("Loaded PROJECT_ROOT from config.ini (development fallback).")
+
+                if "ALLOWED_DATA_DIRS" not in settings:  # Check if not already set by env var
+                    config_allowed_dirs_str = config.get("PATH_SETTINGS", "ALLOWED_DATA_DIRS",
+                                                         fallback="data,agents_data")
+                    # Resolve relative to PROJECT_ROOT or current working directory for flexibility
+                    project_base = settings.get("PROJECT_ROOT",
+                                                Path(os.getcwd()).resolve())  # Use loaded PROJECT_ROOT or CWD
+                    settings["ALLOWED_DATA_DIRS"] = [(Path(project_base) / d).resolve() for d in
+                                                     config_allowed_dirs_str.split(",")]
+                    logger.info("Loaded ALLOWED_DATA_DIRS from config.ini (development fallback).")
+            else:
+                logger.warning(
+                    f"No '[PATH_SETTINGS]' section found in {CONFIG_FILE}. Using defaults if not set by env vars.")
+        else:
+            logger.warning(
+                f"Config file not found at {CONFIG_FILE}. Path settings will use defaults if not in env vars.")
+
+    # 3. Apply sensible defaults if nothing loaded (for cases where config.ini or env vars are incomplete)
+    if "PROJECT_ROOT" not in settings:
+        settings["PROJECT_ROOT"] = Path(os.getcwd()).resolve()
+        logger.warning(f"Using default PROJECT_ROOT: {settings['PROJECT_ROOT']}")
+    if "ALLOWED_DATA_DIRS" not in settings:
+        settings["ALLOWED_DATA_DIRS"] = [
+            settings["PROJECT_ROOT"] / "data",
+            settings["PROJECT_ROOT"] / "agents_data",
+            settings["PROJECT_ROOT"] / ".ragnetic_temp_clones"
+            # Include this default temp dir from code_repository_loader
+        ]
+        logger.warning(f"Using default ALLOWED_DATA_DIRS: {[str(d) for d in settings['ALLOWED_DATA_DIRS']]}")
+
+    # Ensure all paths in ALLOWED_DATA_DIRS are resolved absolute paths
+    # This step is already done during loading, but a final ensure for safety.
+    settings["ALLOWED_DATA_DIRS"] = [d.resolve() for d in settings["ALLOWED_DATA_DIRS"]]
+
+    _path_settings_cache.update(settings)
+    return settings
 
 
 def get_api_key(service_name: str) -> Optional[str]:
@@ -74,11 +151,11 @@ def get_api_key(service_name: str) -> Optional[str]:
 
 
 def get_llm_model(
-    model_name: str,
-    model_params: Optional[ModelParams] = None,
-    retries: int = 0,
-    timeout: Optional[int] = 60,
-    temperature: Optional[float] = None,  # Override for deterministic evaluation
+        model_name: str,
+        model_params: Optional[ModelParams] = None,
+        retries: int = 0,
+        timeout: Optional[int] = 60,
+        temperature: Optional[float] = None,  # Override for deterministic evaluation
 ) -> Any:
     """
     Initializes (and caches) an LLM instance based on the model name and params.
