@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.core.validation import validate_agent_name
+from app.agents.config_manager import AGENTS_DIR
 
 
 from app.schemas.agent import AgentConfig
@@ -82,7 +83,13 @@ manager = ConnectionManager()
 # --- API Endpoints ---
 @app.get("/health", tags=["Application"])
 def health_check():
-    return JSONResponse(content={"status": "ok"})
+    # A simple readiness check: Does the essential agents directory exist?
+    if not os.path.exists(AGENTS_DIR):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service Unavailable: Agents directory not found at '{AGENTS_DIR}'."
+        )
+    return JSONResponse(content={"status": "ok", "message": "Service is healthy."})
 
 
 @app.get("/", tags=["Application"])
