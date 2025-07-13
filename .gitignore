@@ -32,3 +32,7 @@ data/
 
 # Generated log files and benchmark results
 /logs/
+
+
+# Temporary repository clones
+.ragnetic_temp_clones/

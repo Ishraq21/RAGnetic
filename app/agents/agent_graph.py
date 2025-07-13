@@ -144,10 +144,10 @@ def call_model(state: AgentState, config: RunnableConfig):
             if "claude" in model_name.lower():
                 provider = "anthropic"
             elif "gemini" in model_name.lower():
-                provider = "google_genai"
+                provider = "google"
             logger.info(f"Determined model provider: '{provider}' for model '{model_name}'.")
             api_key = get_api_key(provider)
-            if provider == "google_genai":
+            if provider == "google":
                 logger.info("Initializing ChatGoogleGenerativeAI directly.")
                 model = ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, **model_kwargs)
             else:
