@@ -111,7 +111,8 @@ def get_faiss_chunk_ids(agent_name: str, vectorstore_base_path: Path) -> set[str
 
 
 # This test will run once per module due to the fixture scope
-def test_reproducible_embedding_ids(setup_test_environment_for_reproducibility):
+@pytest.mark.asyncio
+async def test_reproducible_embedding_ids(setup_test_environment_for_reproducibility): # MODIFIED: Add async
     """
     Tests that chunk IDs are reproducible when reproducible_ids is set to True.
     """
@@ -121,7 +122,7 @@ def test_reproducible_embedding_ids(setup_test_environment_for_reproducibility):
 
     # --- First embedding pass ---
     print(f"Running first embedding pass for agent '{TEST_AGENT_NAME}'...")
-    embed_agent_data(agent_config_1)
+    await embed_agent_data(agent_config_1) # MODIFIED: Add await
 
     # Assert vectorstore exists
     vectorstore_path_agent = Path(TEST_VECTORSTORE_DIR) / TEST_AGENT_NAME
@@ -142,7 +143,7 @@ def test_reproducible_embedding_ids(setup_test_environment_for_reproducibility):
     # Reload config to simulate a fresh run, though content should be identical
     agent_config_2 = load_agent_config(TEST_AGENT_NAME)
     print(f"Running second embedding pass for agent '{TEST_AGENT_NAME}'...")
-    embed_agent_data(agent_config_2)
+    await embed_agent_data(agent_config_2) # MODIFIED: Add await
 
     # Assert vectorstore exists for second pass
     assert vectorstore_path_agent.exists(), "Vector store was not created in the second pass."

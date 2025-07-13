@@ -5,6 +5,7 @@ import subprocess
 from typing import List, Optional
 from pathlib import Path
 from urllib.parse import urlparse
+import asyncio  # NEW: Added import for asynchronous operations
 
 from git import Repo, InvalidGitRepositoryError, NoSuchPathError, GitCommandError
 from langchain_community.document_loaders import GitLoader
@@ -16,17 +17,21 @@ logger = logging.getLogger(__name__)
 # --- Configuration for Allowed Data Directories ---
 # IMPORTANT: Adjust these paths to correctly reflect where your 'data' and 'agents_data'
 # directories are located relative to your project's root when the application runs.
+# os.getcwd() assumes the script is run from the project root.
 _PROJECT_ROOT = Path(os.getcwd())
 # Define a specific, allowed temporary directory for repository clones
-_CLONE_TEMP_DIR = _PROJECT_ROOT / ".ragnetic_temp_clones" # NEW: Dedicated temp clones directory
+_CLONE_TEMP_DIR = _PROJECT_ROOT / ".ragnetic_temp_clones"
 _ALLOWED_DATA_DIRS = [
     _PROJECT_ROOT / "data",
     _PROJECT_ROOT / "agents_data",
-    _CLONE_TEMP_DIR # ADDED: Ensure our new temporary cloning directory is allowed
+    _CLONE_TEMP_DIR
 ]
 # Resolve all allowed directories to their absolute, canonical form once at startup
 _ALLOWED_DATA_DIRS_RESOLVED = [d.resolve() for d in _ALLOWED_DATA_DIRS]
-logger.info(f"Configured allowed data directories for code repository loader: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
+logger.info(
+    f"Configured allowed data directories for code repository loader: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
+
+
 # --- End Configuration ---
 
 def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
@@ -48,10 +53,12 @@ def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
 
     return resolved_path
 
-def load(repo_path: str) -> List[Document]:
+
+async def load(repo_path: str) -> List[Document]:  # MODIFIED: async def
     """
     Smart loader that handles both remote GitHub URLs and local file paths.
     Includes input validation for both types and robust error handling.
+    Now supports asynchronous loading.
     """
     try:
         if not repo_path:
@@ -69,27 +76,25 @@ def load(repo_path: str) -> List[Document]:
                     logger.error(f"Invalid URL format for code repository: missing domain/host in {repo_path}.")
                     raise ValueError("Invalid URL format.")
 
-            # Ensure the dedicated temporary directory exists before creating a tempfile within it
-            os.makedirs(_CLONE_TEMP_DIR, exist_ok=True) # NEW: Ensure parent temp dir exists
+            os.makedirs(_CLONE_TEMP_DIR, exist_ok=True)
 
-            # Use tempfile.TemporaryDirectory with the explicitly allowed directory
-            with tempfile.TemporaryDirectory(dir=str(_CLONE_TEMP_DIR)) as temp_dir: # MODIFIED
+            with tempfile.TemporaryDirectory(dir=str(_CLONE_TEMP_DIR)) as temp_dir:
                 try:
-                    # `temp_dir` from TemporaryDirectory is already within `_CLONE_TEMP_DIR`,
-                    # so `_is_path_safe_and_within_allowed_dirs` should now pass.
-                    # This line (safe_temp_dir = _is_path_safe_and_within_allowed_dirs(temp_dir))
-                    # is now technically redundant if `dir` arg is used correctly, but keeping
-                    # it as an extra safety check is harmless.
                     safe_temp_dir = _is_path_safe_and_within_allowed_dirs(temp_dir)
 
                     logger.info(f"Cloning {repo_path} → {safe_temp_dir}")
-                    repo = Repo.clone_from(repo_path, to_path=str(safe_temp_dir))
-                    default_branch = _get_default_branch(str(safe_temp_dir))
+                    # MODIFIED: Run Repo.clone_from in a separate thread
+                    repo = await asyncio.to_thread(Repo.clone_from, repo_path, to_path=str(safe_temp_dir))
+
+                    # MODIFIED: Await the async _get_default_branch
+                    default_branch = await _get_default_branch(str(safe_temp_dir))
                     if not default_branch:
                         logger.error(f"Can't determine default branch for {repo_path}. Skipping.")
                         return []
                     logger.info(f"Default branch detected: '{default_branch}' for {repo_path}.")
-                    return _load_and_chunk(str(safe_temp_dir), branch=default_branch)
+
+                    # MODIFIED: Await the async _load_and_chunk
+                    return await _load_and_chunk(str(safe_temp_dir), branch=default_branch)
 
                 except (GitCommandError, InvalidGitRepositoryError, NoSuchPathError) as git_e:
                     logger.error(f"Git operation failed for {repo_path}: {git_e}", exc_info=True)
@@ -101,7 +106,8 @@ def load(repo_path: str) -> List[Document]:
             # --- Local filesystem path Validation ---
             logger.info(f"Processing local code repository at: {repo_path}")
             safe_local_repo_path = _is_path_safe_and_within_allowed_dirs(repo_path)
-            return _load_and_chunk(str(safe_local_repo_path), branch=None)
+            # MODIFIED: Await the async _load_and_chunk
+            return await _load_and_chunk(str(safe_local_repo_path), branch=None)
 
     except ValueError as e:
         logger.error(f"Code repository loader validation error: {e}")
@@ -111,33 +117,36 @@ def load(repo_path: str) -> List[Document]:
         return []
 
 
-def _get_default_branch(repo_path: str) -> Optional[str]:
+async def _get_default_branch(repo_path: str) -> Optional[str]:  # MODIFIED: async def
     """
     Run `git symbolic-ref refs/remotes/origin/HEAD` to discover the default branch name.
-    Returns e.g. 'main' or 'master', or None on error.
+    Now supports asynchronous execution.
     """
     try:
-        result = subprocess.run(
-            ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
+        # MODIFIED: Run subprocess.run in a separate thread
+        result = await asyncio.to_thread(subprocess.run,
+                                         ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+                                         cwd=repo_path,
+                                         capture_output=True,
+                                         text=True,
+                                         check=True
+                                         )
         return result.stdout.strip().split("/")[-1]
     except subprocess.CalledProcessError as sub_e:
-        logger.warning(f"Git command failed to determine default branch in {repo_path}: {sub_e.stderr.strip()}", exc_info=True)
+        logger.warning(f"Git command failed to determine default branch in {repo_path}: {sub_e.stderr.strip()}",
+                       exc_info=True)
         return None
     except Exception as e:
         logger.error(f"Failed to determine default branch in {repo_path}: {e}", exc_info=True)
         return None
 
 
-def _load_and_chunk(repo_path: str, branch: Optional[str]) -> List[Document]:
+async def _load_and_chunk(repo_path: str, branch: Optional[str]) -> List[Document]:  # MODIFIED: async def
     """
     Load via GitLoader (if branch provided, checkout that branch first),
     then split all files matching EXTENSION_MAP into code-language chunks.
     Assumes repo_path is already validated as safe.
+    Now supports asynchronous loading.
     """
     try:
         if not Path(repo_path).is_dir():
@@ -162,7 +171,8 @@ def _load_and_chunk(repo_path: str, branch: Optional[str]) -> List[Document]:
             loader_kwargs["branch"] = branch
 
         loader = GitLoader(**loader_kwargs)
-        raw_docs = loader.load()
+        # MODIFIED: Run loader.load() in a separate thread
+        raw_docs = await asyncio.to_thread(loader.load)
         chunked = []
 
         for doc in raw_docs:
@@ -172,6 +182,7 @@ def _load_and_chunk(repo_path: str, branch: Optional[str]) -> List[Document]:
                 logger.debug(f"Skipping file {doc.metadata.get('file_path')} due to unsupported extension {ext}.")
                 continue
 
+            # RecursiveCharacterTextSplitter.from_language and split_documents are CPU-bound
             splitter = RecursiveCharacterTextSplitter.from_language(
                 language=lang, chunk_size=1000, chunk_overlap=100
             )
@@ -183,7 +194,8 @@ def _load_and_chunk(repo_path: str, branch: Optional[str]) -> List[Document]:
         return chunked
 
     except (InvalidGitRepositoryError, NoSuchPathError) as git_loader_e:
-        logger.error(f"GitLoader error for '{repo_path}': {git_loader_e}. Ensure path is a valid git repo.", exc_info=True)
+        logger.error(f"GitLoader error for '{repo_path}': {git_loader_e}. Ensure path is a valid git repo.",
+                     exc_info=True)
         return []
     except Exception as e:
         logger.error(f"Error loading or chunking '{repo_path}': {e}", exc_info=True)

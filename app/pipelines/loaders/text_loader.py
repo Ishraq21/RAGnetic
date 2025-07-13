@@ -1,9 +1,10 @@
 import logging
-import os  # Added import
-from pathlib import Path  # Added import
+import os
+from pathlib import Path
 from typing import List
 from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document
+import asyncio  # NEW: Added import for asynchronous operations
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,10 @@ def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
     return resolved_path
 
 
-def load(file_path: str) -> List[Document]:
+async def load(file_path: str) -> List[Document]:  # MODIFIED: Changed to async def
     """
     Loads a plain text file, with path safety validation and standardized error logging.
+    Now supports asynchronous loading.
     """
     try:
         # First, validate the file_path itself
@@ -65,13 +67,15 @@ def load(file_path: str) -> List[Document]:
 
         logger.info(f"Attempting to load text file: {safe_file_path}")
 
-        loader = TextLoader(str(safe_file_path), encoding="utf-8")  # Ensure path is string for TextLoader
-        documents = loader.load()
+        # The TextLoader.load() method is blocking, so run it in a separate thread
+        loader = TextLoader(str(safe_file_path), encoding="utf-8")
+        documents = await asyncio.to_thread(loader.load)  # MODIFIED: Use asyncio.to_thread
+
         logger.info(f"Successfully loaded text file: {safe_file_path.name}")
         return documents
-    except ValueError as e:  # Catches validation errors from _is_path_safe_and_within_allowed_dirs or file checks
+    except ValueError as e:
         logger.error(f"Security or validation error during text file loading: {e}")
         return []
     except Exception as e:
-        logger.error(f"Failed to load text file {file_path}: {e}", exc_info=True)  # Added exc_info=True
+        logger.error(f"Failed to load text file {file_path}: {e}", exc_info=True)
         return []
