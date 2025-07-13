@@ -59,7 +59,9 @@ def calculate_document_uniqueness(docs: List[Document]) -> float:
     return len(unique) / len(docs)
 
 
-_JUDGE_CACHE: Dict[str, Dict[str, Any]] = {}
+# REMOVED: _JUDGE_CACHE: Dict[str, Dict[str, Any]] = {} # This global declaration is removed
+
+
 LLM_AS_JUDGE_PROMPT = """
 You are an impartial AI evaluator. Assess the quality of the generated answer.
 Return exactly one JSON object with keys:
@@ -84,6 +86,9 @@ def run_benchmark(agent_config: AgentConfig, test_set: List[Dict[str, Any]]) -> 
     Execute retrieval, generation, and evaluation, including token and cost tracking.
     """
     logger.info("Starting benchmark for '%s'", agent_config.name)
+
+    # NEW: Initialize judge_cache locally for each benchmark run
+    judge_cache: Dict[str, Dict[str, Any]] = {}
 
     # Initialize components
     retriever_tool = get_retriever_tool(agent_config)
@@ -125,8 +130,8 @@ def run_benchmark(agent_config: AgentConfig, test_set: List[Dict[str, Any]]) -> 
 
         # Evaluation
         cache_key = hashlib.sha256(f"{q}|{context_str}|{answer}".encode()).hexdigest()
-        if cache_key in _JUDGE_CACHE:
-            ev = _JUDGE_CACHE[cache_key]
+        if cache_key in judge_cache: # MODIFIED: Use local judge_cache
+            ev = judge_cache[cache_key] # MODIFIED: Use local judge_cache
         else:
             t2 = time.perf_counter()
             try:
@@ -146,7 +151,7 @@ def run_benchmark(agent_config: AgentConfig, test_set: List[Dict[str, Any]]) -> 
                       "coherence_score": int(fb.get("coherence_score", -1)), "reasoning": fb.get("reasoning", "")}
             judge_time = time.perf_counter() - t2
             ev["llm_judge_time_s"] = judge_time
-            _JUDGE_CACHE[cache_key] = ev
+            judge_cache[cache_key] = ev # MODIFIED: Use local judge_cache
 
         total_duration = time.perf_counter() - start_time
 
