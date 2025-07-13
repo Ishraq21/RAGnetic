@@ -21,9 +21,16 @@ from app.pipelines.embed import embed_agent_data
 from app.core.config import get_api_key
 from app.watcher import start_watcher
 import pytest
-import requests
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
+from app.core.validation import is_valid_agent_name_cli
+
+def _validate_agent_name_cli(agent_name: str):
+    if not is_valid_agent_name_cli(agent_name):
+        error_message = (
+            f"Error: Invalid agent_name '{agent_name}'. Name must be 3-50 characters "
+            "and can only contain letters, numbers, underscores, and hyphens."
+        )
+        typer.secho(error_message, fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
 
 # Logging Setup
@@ -237,6 +244,7 @@ def deploy_agent_by_name(
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation and overwrite existing data."),
         json_logs: bool = typer.Option(False, "--json-logs", help="Output logs in structured JSON format."),
 ):
+    _validate_agent_name_cli(agent_name)
     """Loads an agent config from YAML and creates a vector store."""
     setup_logging(json_logs)
     try:
@@ -271,6 +279,7 @@ def deploy_agent_by_name(
 def inspect_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to inspect.")
 ):
+    _validate_agent_name_cli(agent_name)
     setup_logging()
     try:
         typer.echo(f"Inspecting configuration for agent: '{agent_name}'")
@@ -286,6 +295,8 @@ def validate_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to validate."),
         check_connections: bool = typer.Option(False, "--check-connections", "-c", help="Test data source connections.")
 ):
+    _validate_agent_name_cli(agent_name)
+
     """Validates an agent's configuration, checking YAML syntax, file existence, and external connections."""
     setup_logging()
     typer.echo(f"Validating agent: '{agent_name}'...")
@@ -327,6 +338,7 @@ def reset_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to reset."),
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
 ):
+    _validate_agent_name_cli(agent_name)
     setup_logging()
     vectorstore_path = f"vectorstore/{agent_name}"
     memory_pattern = f"memory/{agent_name}_*.db"
@@ -352,6 +364,7 @@ def delete_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to permanently delete."),
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
 ):
+    _validate_agent_name_cli(agent_name)
     setup_logging()
     vectorstore_path = f"vectorstore/{agent_name}"
     memory_pattern = f"memory/{agent_name}_*.db"
@@ -421,6 +434,7 @@ def generate_test_command(
         num_questions: int = typer.Option(50, "--num-questions", "-n", help="Number of questions to generate."),
         json_logs: bool = typer.Option(False, "--json-logs", help="Output logs in structured JSON format."),
 ):
+    _validate_agent_name_cli(agent_name)
     setup_logging(json_logs)
     logger.info(f"--- Generating Test Set for Agent: '{agent_name}' ---")
     try:
@@ -443,6 +457,7 @@ def benchmark_command(
         test_set_file: str = typer.Option(..., "--test-set", "-t", help="Path to a JSON test set file."),
         json_logs: bool = typer.Option(False, "--json-logs", help="Output logs in structured JSON format."),
 ):
+    _validate_agent_name_cli(agent_name)
     """
     Uses a ground truth test set to calculate metrics, including token usage and cost.
     """
