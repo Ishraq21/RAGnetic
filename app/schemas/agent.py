@@ -54,6 +54,11 @@ class VectorStoreConfig(BaseModel):
     semantic_k: int = Field(5, description="k for semantic retriever")
     rerank_top_n: int = Field(5, description="how many to keep after cross-encoder rerank")
 
+    hit_rate_k_value: int = Field(
+        5,
+        description="K for Hit Rate@K (how many top docs to consider in the metric)"
+    )
+
     retrieval_strategy: Literal['hybrid', 'enhanced'] = Field(
         'hybrid',
         description="The retrieval strategy to use. 'hybrid' is fast, 'enhanced' is more accurate but uses more compute."
@@ -72,12 +77,14 @@ class VectorStoreConfig(BaseModel):
     mongodb_index_name: Optional[str] = Field("vector_search_index",
                                               description="The name of the Atlas Vector Search index.")
 
+    # id_key field has been removed as per simplification. Document.id will be used.
+
 
 class AgentConfig(BaseModel):
     name: str
     display_name: Optional[str] = None
     description: Optional[str] = None
-    persona_prompt: str
+    persona_prompt: str = "You are a helpful assistant."
 
     execution_prompt: Optional[str] = Field(
         None,
@@ -109,4 +116,21 @@ class AgentConfig(BaseModel):
     extraction_examples: Optional[List[tuple[str, Any]]] = Field(
         None,
         description="A list of few-shot examples (text, expected_output) for the extractor tool."
+    )
+    evaluation_llm_model: Optional[str] = Field(
+        None,
+        description="Optional LLM to use specifically for evaluation tasks (e.g., test set generation, LLM-as-a-judge)."
+    )
+    reproducible_ids: Optional[bool] = Field(
+        False,
+        description="If true, generates IDs based on content hash for reproducibility; otherwise, uses random UUIDs."
+    )
+
+    llm_retries: Optional[int] = Field(
+        0, # Default to no retries unless specified
+        description="Number of times to retry LLM calls on transient errors. Defaults to 0 (no retries)."
+    )
+    llm_timeout: Optional[int] = Field(
+        60, # Default to 60 seconds
+        description="Timeout in seconds for LLM calls. Defaults to 60 seconds."
     )
