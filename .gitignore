@@ -29,3 +29,6 @@ agents_data/
 memory/
 data_source/
 data/
+
+# Generated log files and benchmark results
+/logs/
