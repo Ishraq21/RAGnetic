@@ -3,9 +3,9 @@ from typing import List, Optional, Dict, Any, Literal
 
 class ChunkingConfig(BaseModel):
     """Configuration for the document chunking strategy."""
-    mode: Literal['default', 'semantic'] = Field(
+    mode: Literal['default', 'semantic', 'none'] = Field(
         'default',
-        description="The chunking mode. 'default' for fast, recursive splitting; 'semantic' for higher quality, context-aware splitting."
+        description="The chunking mode. 'default' for recursive splitting, 'semantic' for context-aware splitting, or 'none' if the loader handles chunking."
     )
     chunk_size: int = Field(
         1000,
