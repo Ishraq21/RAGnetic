@@ -1,7 +1,9 @@
 import os
 import logging
-from typing import List, TypedDict, Annotated
+from typing import List, TypedDict, Annotated, Optional
 from operator import add
+import time
+import uuid
 
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
@@ -9,38 +11,51 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.documents import Document
 
 # LangChain's generic chat model initializer
 from langchain.chat_models import init_chat_model
 from langchain_google_genai import ChatGoogleGenerativeAI
-
-from langchain_core.documents import Document
-
 from langchain_ollama import ChatOllama
+from ollama import ResponseError
 
 # Local application imports
 from app.tools.retriever_tool import get_retriever_tool
-from app.core.config import get_api_key
-from ollama import ResponseError
+from app.core.config import get_api_key, get_llm_model
+from app.core.cost_calculator import calculate_cost
 
 logger = logging.getLogger(__name__)
 
 
 class AgentState(TypedDict):
+    """
+    Represents the state of our agent. It's expanded to carry metrics
+    through the workflow for logging.
+    """
     messages: Annotated[List[BaseMessage], add]
     tool_calls: List[dict]
+
+    # Metrics to be logged for each request
+    request_id: str
+    agent_name: str
+    retrieval_time_s: float
+    generation_time_s: float
+    total_duration_s: float
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    estimated_cost_usd: float
+    retrieved_chunk_ids: List[str]
 
 
 def call_model(state: AgentState, config: RunnableConfig):
     """
-    This is the core reasoning step of the agent. It is responsible for:
-    1. Retrieving context using the RAG retriever.
-    2. Constructing a detailed prompt with the retrieved context.
-    3. Invoking the language model with robust error handling.
+    Core reasoning step of the agent. Now also responsible for calculating
+    and populating all performance and cost metrics into the state.
     """
     try:
-        # Configuration and State Validation
-        logger.info("Agent 'call_model' node executing...")
+        # Start total timer and get initial state
+        start_time = time.perf_counter()
         agent_config = config['configurable']['agent_config']
         tools = config['configurable'].get('tools', [])
         messages = state['messages']
@@ -54,8 +69,11 @@ def call_model(state: AgentState, config: RunnableConfig):
         model_name = agent_config.llm_model
         logger.info(f"Processing query for agent '{agent_config.name}' using model '{model_name}'.")
 
-        # RAG Retrieval
+        # RAG Retrieval and Timing
         retrieved_docs_str = ""
+        retrieved_chunk_ids = []
+        retrieved_docs = []
+        t0 = time.perf_counter()
         if "retriever" in agent_config.tools:
             try:
                 logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
@@ -67,6 +85,8 @@ def call_model(state: AgentState, config: RunnableConfig):
                     logger.error(f"Retriever tool returned an error string: {retrieved_docs}")
                 elif retrieved_docs:
                     retrieved_docs_str = "\n\n".join([doc.page_content for doc in retrieved_docs])
+                    # Correctly capture the list of chunk IDs if they exist
+                    retrieved_chunk_ids = [doc.id for doc in retrieved_docs if hasattr(doc, 'id')]
                     logger.info(f"Successfully retrieved {len(retrieved_docs)} documents.")
                 else:
                     retrieved_docs_str = "No documents were found matching the query."
@@ -74,22 +94,18 @@ def call_model(state: AgentState, config: RunnableConfig):
             except Exception as e:
                 logger.error(f"Error during document retrieval: {e}", exc_info=True)
                 retrieved_docs_str = f"An error occurred while trying to retrieve relevant documents: {e}"
+        retrieval_time = time.perf_counter() - t0
 
-        # Build the System Prompt dynamically
 
-        # If a custom execution_prompt is provided in the agent's config, use it.
         if agent_config.execution_prompt:
             logger.info("Using custom 'execution_prompt' from agent configuration.")
             prompt = ChatPromptTemplate.from_template(agent_config.execution_prompt)
-
             system_prompt_message = prompt.format(
                 user_query=query,
                 retrieved_context=retrieved_docs_str,
                 persona=agent_config.persona_prompt
             )
             prompt_with_history = [HumanMessage(content=system_prompt_message)] + messages
-
-        # Otherwise, fall back to the original, hardcoded prompt structure.
         else:
             logger.info("Using default system prompt.")
             context_section = f"<context>\n<retrieved_documents>\n{retrieved_docs_str}\n</retrieved_documents>\n</context>"
@@ -116,8 +132,7 @@ def call_model(state: AgentState, config: RunnableConfig):
                                 """
             prompt_with_history = [HumanMessage(content=system_prompt)] + messages
 
-
-        # Model Initialization Logic
+        # Model Initialization and Invocation
         model_kwargs = agent_config.model_params.model_dump(exclude_unset=True) if agent_config.model_params else {}
 
         if model_name.startswith("ollama/"):
@@ -133,8 +148,6 @@ def call_model(state: AgentState, config: RunnableConfig):
             logger.info(f"Determined model provider: '{provider}' for model '{model_name}'.")
             api_key = get_api_key(provider)
             if provider == "google_genai":
-                # Initialize the Google model directly to avoid the streaming warning.
-                # This model streams by default when using astream_events().
                 logger.info("Initializing ChatGoogleGenerativeAI directly.")
                 model = ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, **model_kwargs)
             else:
@@ -145,25 +158,45 @@ def call_model(state: AgentState, config: RunnableConfig):
         model_with_tools = model.bind_tools(tools)
 
         logger.info("Invoking the language model...")
+        t1 = time.perf_counter()
         try:
-            # Attempt to invoke the model with the tool-binding
             response = model_with_tools.invoke(prompt_with_history)
-
         except ResponseError as e:
             if "does not support tools" in str(e):
                 logger.warning(f"Model '{model_name}' does not support tools. Retrying without tools.")
-                # If the model doesn't support tools, invoke it again without them
                 response = model.invoke(prompt_with_history)
             else:
                 raise e
+        generation_time = time.perf_counter() - t1
         logger.info("Model invocation successful.")
 
-        return {"messages": [response]}
+        # --- Metric Calculation and State Update ---
+        token_usage = response.response_metadata.get("token_usage", {})
+        prompt_tokens = token_usage.get("prompt_tokens", 0)
+        completion_tokens = token_usage.get("completion_tokens", 0)
+        total_tokens = prompt_tokens + completion_tokens
+        cost = calculate_cost(agent_config.llm_model, prompt_tokens, completion_tokens)
+
+        # This will update the original state dictionary with the new values
+        state.update({
+            "messages": [response],
+            "retrieval_time_s": retrieval_time,
+            "generation_time_s": generation_time,
+            "total_duration_s": time.perf_counter() - start_time,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": cost,
+            "retrieved_chunk_ids": retrieved_chunk_ids
+        })
+
+        return state
 
     except Exception as e:
         logger.critical(f"A critical error occurred in the 'call_model' node: {e}", exc_info=True)
         error_message = AIMessage(content=f"I'm sorry, but I encountered an unexpected error. Error: {e}")
-        return {"messages": [error_message]}
+        state.update({"messages": [error_message]})
+        return state
 
 
 def should_continue(state: AgentState) -> str:
