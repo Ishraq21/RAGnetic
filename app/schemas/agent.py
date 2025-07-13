@@ -1,5 +1,10 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Literal
+from pydantic import BaseModel, Field, field_validator # Added field_validator
+from typing import List, Optional, Dict, Any, Literal
+from urllib.parse import urlparse # Added for URL validation
+import os # Added for path validation
+from pathlib import Path # Added for path validation
 
 class ChunkingConfig(BaseModel):
     """Configuration for the document chunking strategy."""
@@ -38,6 +43,37 @@ class DataSource(BaseModel):
     method: Optional[Literal['GET', 'POST']] = 'GET'
     payload: Optional[Dict[str, Any]] = None
     json_pointer: Optional[str] = None
+
+    @field_validator('url')
+    @classmethod
+    def validate_url_scheme_and_form(cls, v: Optional[str]) -> Optional[str]:
+        if v:
+            try:
+                parsed_url = urlparse(v)
+                # Only allow http and https schemes for web-based sources
+                if parsed_url.scheme not in ['http', 'https']:
+                    raise ValueError(f"URL must use 'http' or 'https' scheme, got '{parsed_url.scheme}'.")
+                # Basic check for a network location (domain)
+                if not parsed_url.netloc:
+                    raise ValueError('Invalid URL format: missing domain/host.')
+            except ValueError as e: # Catch ValueError from urlparse or our custom checks
+                raise ValueError(f"Invalid URL: {v} - {e}")
+            except Exception as e: # Catch any other unexpected errors during parsing/validation
+                raise ValueError(f"An unexpected error occurred during URL validation for {v}: {e}")
+        return v
+
+    @field_validator('path')
+    @classmethod
+    def validate_local_path_for_traversal(cls, v: Optional[str]) -> Optional[str]:
+        if v:
+            # Basic check to prevent explicit '..' in the path string at schema level.
+            # This doesn't replace the robust check in the loader, but adds a layer.
+            # Allow '~' for home directory expansion, if you intend to support it.
+            if ".." in v and not v.startswith("~"):
+                raise ValueError(f"Relative path traversal ('..') is not allowed in path: {v}. "
+                                 "Paths must be within designated data directories.")
+            # Normalization might be done here but security enforcement happens in loader.
+        return v
 
 class ModelParams(BaseModel):
 
@@ -134,3 +170,4 @@ class AgentConfig(BaseModel):
         60, # Default to 60 seconds
         description="Timeout in seconds for LLM calls. Defaults to 60 seconds."
     )
+

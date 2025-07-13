@@ -3,7 +3,6 @@ import logging
 import json
 from uuid import uuid4
 from typing import Optional, List, Dict, Any
-from fastapi.responses import Response
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.templating import Jinja2Templates
@@ -39,14 +38,7 @@ app = FastAPI(
     version="0.1.0",
     description="API for managing and interacting with RAGnetic agents."
 )
-@app.middleware("http")
-async def add_security_headers(request: Request, call_next):
-    response: Response = await call_next(request)
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none';"
-    return response
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -197,7 +189,13 @@ async def websocket_chat(ws: WebSocket):
         if "retriever" in agent_config.tools: all_tools.append(get_retriever_tool(agent_config))
         if "sql_toolkit" in agent_config.tools:
             db_source = next((s for s in agent_config.sources if s.type == 'db'), None)
-            if db_source: all_tools.extend(create_sql_toolkit(db_source.db_connection))
+            if db_source:
+                # MODIFIED: Pass llm_model and model_params from agent_config
+                all_tools.extend(create_sql_toolkit(
+                    db_connection_string=db_source.db_connection,
+                    llm_model_name=agent_config.llm_model,
+                    llm_model_params=agent_config.model_params
+                ))
         if "arxiv" in agent_config.tools: all_tools.extend(get_arxiv_tool())
         if "extractor" in agent_config.tools: all_tools.append(get_extraction_tool(agent_config))
 
