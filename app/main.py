@@ -1,10 +1,9 @@
 import os
-import pickle
-import aiosqlite
 import logging
 import json
 from uuid import uuid4
 from typing import Optional, List, Dict, Any
+from fastapi.responses import Response
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.templating import Jinja2Templates
@@ -40,6 +39,14 @@ app = FastAPI(
     version="0.1.0",
     description="API for managing and interacting with RAGnetic agents."
 )
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response: Response = await call_next(request)
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none';"
+    return response
 
 app.add_middleware(
     CORSMiddleware,
