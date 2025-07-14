@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
-from app.core.validation import validate_agent_name
+from app.core.validation import validate_agent_name, sanitize_for_path
 from app.schemas.agent import AgentConfig
 from app.agents.config_manager import save_agent_config, load_agent_config, get_agent_configs
 from app.pipelines.embed import embed_agent_data
@@ -34,7 +34,6 @@ TURN_TIMEOUT = 300.0  # 5-minute master timeout for an entire turn
 
 load_dotenv()
 
-# ... (Boilerplate code remains the same)
 _APP_PATHS = get_path_settings()
 _DATA_DIR = _APP_PATHS["DATA_DIR"]
 _AGENTS_DIR = _APP_PATHS["AGENTS_DIR"]
@@ -111,13 +110,20 @@ async def home(request: Request):
 
 @app.get("/history/{thread_id}", tags=["Memory"])
 async def get_history(thread_id: str, agent_name: str, user_id: str):
-    validate_agent_name(agent_name)
-    db_path = _MEMORY_DIR / f"{agent_name}_{user_id}_{thread_id}.db"
+    # Sanitize all inputs used to construct the file path for security.
+    safe_agent_name = sanitize_for_path(agent_name)
+    safe_user_id = sanitize_for_path(user_id)
+    safe_thread_id = sanitize_for_path(thread_id)
+
+    if not all([safe_agent_name, safe_user_id, safe_thread_id]):
+        raise HTTPException(status_code=400, detail="Invalid characters in agent_name, user_id, or thread_id.")
+
+    db_path = _MEMORY_DIR / f"{safe_agent_name}_{safe_user_id}_{safe_thread_id}.db"
     if not os.path.exists(db_path):
         raise HTTPException(status_code=404, detail="History not found.")
     try:
         async with AsyncSqliteSaver.from_conn_string(str(db_path)) as saver:
-            config = {"configurable": {"thread_id": thread_id}}
+            config = {"configurable": {"thread_id": safe_thread_id}}
             checkpoint_tuple = await saver.aget_tuple(config)
             if not checkpoint_tuple:
                 return JSONResponse(content=[])
@@ -170,7 +176,7 @@ async def _run_one_turn(
         ws: WebSocket, langgraph_agent, cfg: dict, query_payload: dict, thread_id: str
 ) -> Tuple[Optional[Dict], Optional[Dict]]:
     """
-    Runs a single turn, handling generation and interruption.
+    Runs a single turn with a timeout, handling generation and interruption.
     Returns the final state and the next message to process.
     """
     query = query_payload["query"]
@@ -185,24 +191,39 @@ async def _run_one_turn(
     gen_task = asyncio.create_task(handle_query_streaming(initial_state, cfg, langgraph_agent, ws, thread_id))
     listen_task = asyncio.create_task(ws.receive_json())
 
-    done, pending = await asyncio.wait([gen_task, listen_task], return_when=asyncio.FIRST_COMPLETED)
-
+    done, pending = set(), {gen_task, listen_task}
     final_state, next_message = {"request_id": request_id}, None
 
-    if listen_task in done:
-        next_message = listen_task.result()
-        logger.info(f"[{thread_id}] Interrupt or new query received, cancelling generation for request {request_id}.")
+    try:
+        done, pending = await asyncio.wait_for(
+            asyncio.wait({gen_task, listen_task}, return_when=asyncio.FIRST_COMPLETED),
+            timeout=TURN_TIMEOUT
+        )
 
-    if gen_task in done:
-        final_state.update(gen_task.result() or {})
+        if listen_task in done:
+            next_message = listen_task.result()
+            logger.info(
+                f"[{thread_id}] Interrupt or new query received, cancelling generation for request {request_id}.")
+        if gen_task in done:
+            final_state.update(gen_task.result() or {})
 
-    # This is the critical change that prevents the "recv already locked" error.
-    for task in pending:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass  # This is the expected outcome of awaiting a cancelled task.
+    except asyncio.TimeoutError:
+        logger.warning(f"[{thread_id}] Turn timed out after {TURN_TIMEOUT} seconds for request {request_id}.")
+        final_state.update({"error": True, "errorMessage": "The request timed out as it took too long to process."})
+
+    except Exception as e:
+        logger.error(f"[{thread_id}] An unexpected error occurred in _run_one_turn: {e}", exc_info=True)
+        final_state.update({"error": True, "errorMessage": "An unexpected server error occurred."})
+
+    finally:
+        # This ensures cleanup on normal completion, interruption, or timeout.
+        all_tasks = pending.union(done)
+        for task in all_tasks:
+            if not task.done():
+                task.cancel()
+
+        # Await all tasks to allow them to process the cancellation and prevent warnings.
+        await asyncio.gather(*all_tasks, return_exceptions=True)
 
     return final_state, next_message
 
@@ -211,10 +232,11 @@ async def _initialize_agent_session(initial_payload: dict) -> Optional[Dict]:
     """Loads agent config, tools, and workflow based on the first message."""
     try:
         agent_name = initial_payload.get("agent", "unknown_agent")
+        # Use the validator for agent_name and sanitize other path components.
         validate_agent_name(agent_name)
 
-        user_id = initial_payload.get("user_id") or f"user-{uuid4().hex[:8]}"
-        thread_id = initial_payload.get("thread_id") or f"thread-{uuid4().hex[:8]}"
+        user_id = sanitize_for_path(initial_payload.get("user_id")) or f"user-{uuid4().hex[:8]}"
+        thread_id = sanitize_for_path(initial_payload.get("thread_id")) or f"thread-{uuid4().hex[:8]}"
 
         agent_config = load_agent_config(agent_name)
         all_tools = []
@@ -229,6 +251,7 @@ async def _initialize_agent_session(initial_payload: dict) -> Optional[Dict]:
 
         workflow = get_agent_workflow(all_tools)
 
+        # Return the safe, sanitized values.
         return {"workflow": workflow, "agent_config": agent_config, "all_tools": all_tools, "user_id": user_id,
                 "thread_id": thread_id}
     except Exception as e:
@@ -254,6 +277,7 @@ async def websocket_chat(ws: WebSocket):
             return
 
         thread_id = session["thread_id"]
+        # This path construction is now safe because its components have been sanitized.
         memory_path = _MEMORY_DIR / f"{session['agent_config'].name}_{session['user_id']}_{thread_id}.db"
         os.makedirs(_MEMORY_DIR, exist_ok=True)
 
@@ -262,7 +286,6 @@ async def websocket_chat(ws: WebSocket):
             is_first_message = True
 
             while True:
-                # The _run_one_turn function will now handle getting the next message
                 cfg = {"configurable": {"thread_id": thread_id, "agent_config": session["agent_config"],
                                         "tools": session["all_tools"]}}
 

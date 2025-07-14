@@ -1,4 +1,16 @@
 import re
+from fastapi import HTTPException
+
+def sanitize_for_path(filename: str) -> str:
+    """
+    Sanitizes a string to be safe for use as a file path component.
+    - Removes characters that could lead to path traversal (e.g., '/', '..').
+    - Keeps only alphanumeric characters, underscores, and hyphens.
+    This is a strict allow-list approach.
+    """
+    if not isinstance(filename, str):
+        return ""
+    return re.sub(r'[^a-zA-Z0-9_-]', '', filename)
 
 def validate_agent_name(agent_name: str):
     """
@@ -9,10 +21,7 @@ def validate_agent_name(agent_name: str):
     Raises:
         HTTPException: If the agent name is invalid.
     """
-    # This regex matches strings that contain only a-z, A-Z, 0-9, _, and -
-    # and are between 3 and 50 characters long.
     if not re.match(r"^[a-zA-Z0-9_-]{3,50}$", agent_name):
-        from fastapi import HTTPException
         raise HTTPException(
             status_code=400,
             detail=(
@@ -21,7 +30,6 @@ def validate_agent_name(agent_name: str):
             )
         )
 
-# Create a separate helper for the CLI to avoid the HTTPException dependency
 def is_valid_agent_name_cli(agent_name: str) -> bool:
     """
     CLI-safe version for validation. Returns True or False.
