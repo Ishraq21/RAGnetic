@@ -316,10 +316,15 @@ def deploy_agent_by_name(
 
         agent_config = load_agent_from_yaml_file(config_path)
         typer.echo(f"\nDeploying agent '{agent_config.name}' using embedding model '{agent_config.embedding_model}'...")
-        asyncio.run(embed_agent_data(agent_config))
+
+        # MODIFIED: Check return value from embed_agent_data
+        vector_store_created = asyncio.run(embed_agent_data(agent_config))
 
         typer.secho("\nAgent deployment successful!", fg=typer.colors.GREEN)
-        typer.echo(f"  - Vector store created at: {vectorstore_path}")
+        if vector_store_created:  # NEW: Conditional check
+            typer.echo(f"  - Vector store created at: {vectorstore_path}")
+        else:  # NEW: Message for no vector store
+            typer.echo("  - No vector store created (no sources provided or no valid documents found).")
 
     except Exception as e:
         logger.error(f"An unexpected error occurred during deployment: {e}", exc_info=True)
