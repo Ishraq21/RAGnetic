@@ -318,14 +318,23 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            const savedAgent = localStorage.getItem('ragnetic_agent');
-            const savedThreadId = localStorage.getItem('ragnetic_thread_id');
-            const savedUserId = localStorage.getItem('ragnetic_user_id');
-            if (savedAgent) agentSelect.value = savedAgent;
-            agent = agentSelect.value;
-            if (savedAgent && savedThreadId && savedUserId) loadHistory(savedAgent, savedThreadId, savedUserId);
-            else renderEmptyState();
-            openWebSocket();
+          const savedAgent    = localStorage.getItem('ragnetic_agent');
+          const savedThreadId = localStorage.getItem('ragnetic_thread_id');
+          const savedUserId   = localStorage.getItem('ragnetic_user_id');
+
+          if (savedAgent) agentSelect.value = savedAgent;
+          agent = agentSelect.value;
+
+          if (savedAgent && savedThreadId && savedUserId) {
+            // re‐hydrate** globals
+            user_id   = savedUserId;
+            thread_id = savedThreadId;
+            loadHistory(agent, thread_id, user_id);
+          } else {
+            renderEmptyState();
+          }
+
+          openWebSocket();
         });
 
         newChatButton.addEventListener('click', () => showConfirmationModal(startNewSession));
