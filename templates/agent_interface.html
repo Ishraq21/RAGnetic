@@ -7,19 +7,26 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono&display=swap" rel="stylesheet" />
+
+  <!-- MathJax for LaTeX rendering -->
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+        processEscapes: true
+      },
+      svg: { fontCache: 'global' }
+    };
+  </script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
     <link rel="stylesheet" href="{{ url_for('static', path='css/style.css') }}">
 </head>
 <body>
     <div id="toast-notification"></div>
-
     <div id="confirmation-modal">
-        <div class="modal-content">
-            <p id="modal-text">Are you sure? Your current chat history will be cleared.</p>
-            <div class="modal-buttons">
-                <button id="modal-cancel-btn" class="modal-btn cancel">Cancel</button>
-                <button id="modal-confirm-btn" class="modal-btn confirm">Start New</button>
-            </div>
-        </div>
+        <div class="modal-content"><p id="modal-text">Are you sure? Your current chat history will be cleared.</p><div class="modal-buttons"><button id="modal-cancel-btn" class="modal-btn cancel">Cancel</button><button id="modal-confirm-btn" class="modal-btn confirm">Start New</button></div></div>
     </div>
 
     <div id="chat-container">
@@ -28,32 +35,31 @@
                 {% for a in agents %}
                 <option value="{{ a.name }}" {% if a.name == agent %}selected{% endif %}>{{ a.display_name }}</option>
                 {% endfor %}
-                </select>
+            </select>
             <button id="new-chat-btn" title="New Chat">New Chat</button>
         </header>
 
-        <div id="messages">
-            </div>
+        <div id="messages"></div>
 
         <div id="input-form-container">
-            <div id="typing-indicator" style="opacity: 0; display:none;">
-                <div class="dot"></div><div class="dot"></div><div class="dot"></div>
-            </div>
-            <form id="input-form" onsubmit="sendMessage(event)">
+            <div id="typing-indicator" style="opacity: 0; display:none;"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+            <form id="input-form" onsubmit="handleFormSubmit(event)">
                 <textarea name="query" id="query-input" placeholder="Ask RAGnetic…" rows="1"></textarea>
-                <button type="submit" id="send-btn" disabled>
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" /></svg>
+                <button type="submit" id="send-stop-btn">
+                    <span id="send-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" /></svg></span>
+                    <span id="stop-icon" style="display: none;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M6 6h12v12H6V6z"></path></svg></span>
                 </button>
             </form>
         </div>
     </div>
 
     <script>
-        // All const declarations
         const agentSelect = document.getElementById('agent-select');
         const messagesDiv = document.getElementById('messages');
         const inputField = document.getElementById('query-input');
-        const sendButton = document.getElementById('send-btn');
+        const sendStopButton = document.getElementById('send-stop-btn');
+        const sendIcon = document.getElementById('send-icon');
+        const stopIcon = document.getElementById('stop-icon');
         const typingIndicator = document.getElementById('typing-indicator');
         const newChatButton = document.getElementById('new-chat-btn');
         const toastNotification = document.getElementById('toast-notification');
@@ -61,15 +67,21 @@
         const modalConfirmBtn = document.getElementById('modal-confirm-btn');
         const modalCancelBtn = document.getElementById('modal-cancel-btn');
 
-        // All let declarations
         let agent, user_id, thread_id, socket;
         let isFirstMessage = true;
         let confirmCallback = null;
+        let isGenerating = false;
         const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
         const svgs = {
             copy: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M7.5 3a.75.75 0 00-.75.75v13.5a.75.75 0 00.75.75h9a.75.75 0 00.75-.75V3.75A.75.75 0 0016.5 3h-9zM8.25 4.5h7.5v12h-7.5V4.5z" /><path d="M6 1.5a.75.75 0 00-.75.75V16.5a.75.75 0 00.75.75h.008a.75.75 0 00.75-.75V2.25A.75.75 0 006.008 1.5H6z" /></svg>`,
             copied: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clip-rule="evenodd" /></svg>`
         };
+
+        function renderMath(element) {
+            if (window.MathJax) {
+                window.MathJax.typesetPromise(element ? [element] : []).catch((err) => console.error('MathJax typesetting error:', err));
+            }
+        }
 
         function showToast(message, isError = true) {
             toastNotification.textContent = message;
@@ -79,30 +91,46 @@
         }
 
         function scrollToBottom() {
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            const scrollThreshold = 100;
+            const isScrolledNearBottom = messagesDiv.scrollHeight - messagesDiv.clientHeight <= messagesDiv.scrollTop + scrollThreshold;
+            if (isScrolledNearBottom) {
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+        }
+
+        function setGeneratingState(generating) {
+            isGenerating = generating;
+            sendIcon.style.display = generating ? 'none' : 'inline';
+            stopIcon.style.display = generating ? 'inline' : 'none';
+            inputField.disabled = generating;
+            sendStopButton.classList.toggle('stop-active', generating);
+            if (!generating) {
+                typingIndicator.style.display = 'none';
+                inputField.focus();
+            }
         }
 
         function renderEmptyState() {
-            messagesDiv.innerHTML = `
-                <div id="empty-state">
-                    <h1>RAG<span>netic</span></h1>
-                    <p>Your on-premise AI assistant. Select an agent and ask a question to begin.</p>
-                </div>
-            `;
+            messagesDiv.innerHTML = `<div id="empty-state"><h1>RAG<span>netic</span></h1><p>Your on-premise AI assistant. Select an agent and ask a question to begin.</p></div>`;
         }
 
-        function openWebSocket() {
+        function openWebSocket(onOpenCallback) {
             if (socket && socket.readyState !== WebSocket.CLOSED) {
                 socket.close(1000, "Starting new session");
             }
             socket = new WebSocket(`${protocol}://${location.host}/ws`);
             isFirstMessage = true;
 
-            socket.onopen = () => sendButton.disabled = false;
+            socket.onopen = () => {
+                sendStopButton.disabled = false;
+                if (onOpenCallback) {
+                    onOpenCallback();
+                }
+            };
             socket.onerror = () => showToast("Connection error.");
-            socket.onclose = (event) => {
-                sendButton.disabled = true;
-                console.log("WebSocket closed.", event.reason);
+            socket.onclose = () => {
+                sendStopButton.disabled = true;
+                if (isGenerating) setGeneratingState(false);
             };
             socket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
@@ -111,8 +139,8 @@
                     appendAgentToken(data.token);
                 }
                 if (data.done) {
-                    typingIndicator.style.display = 'none';
-                    if (isFirstMessage) {
+                    setGeneratingState(false);
+                    if (data.is_first_message) {
                         user_id = data.user_id;
                         thread_id = data.thread_id;
                         localStorage.setItem('ragnetic_user_id', user_id);
@@ -124,37 +152,49 @@
                     if (lastMessage && lastMessage.classList.contains('agent')) {
                         lastMessage.dataset.streaming = 'false';
                         renderCodeblocks(lastMessage);
+                        renderMath(lastMessage);
                     }
                 }
             };
         }
 
-        function sendMessage(event) {
+        function handleFormSubmit(event) {
             if (event) event.preventDefault();
+            if (isGenerating) {
+                socket.send(JSON.stringify({ type: 'interrupt' }));
+                setGeneratingState(false);
+            } else {
+                sendMessage();
+            }
+        }
+
+        function sendMessage() {
             const query = inputField.value.trim();
             if (!query) return;
 
+            const payload = { agent, user_id, thread_id, query };
+            const message = { type: 'query', payload: payload };
+
+            const doSend = () => {
+                socket.send(JSON.stringify(message));
+                const emptyState = document.getElementById('empty-state');
+                if (emptyState) emptyState.remove();
+                appendUserMessage(query);
+                setGeneratingState(true);
+                typingIndicator.style.display = 'flex';
+                typingIndicator.style.opacity = '1';
+                scrollToBottom();
+                inputField.value = '';
+                inputField.style.height = 'auto';
+            };
+
             if (!socket || socket.readyState !== WebSocket.OPEN) {
                 showToast("Connecting... Please try again shortly.", false);
-                openWebSocket();
-                setTimeout(() => sendMessage(), 1000);
-                return;
+                // Open a new connection and pass the sending action as a callback
+                openWebSocket(doSend);
+            } else {
+                doSend();
             }
-
-            const emptyState = document.getElementById('empty-state');
-            if(emptyState) emptyState.remove();
-
-            appendUserMessage(query);
-            typingIndicator.style.display = 'flex';
-            typingIndicator.style.opacity = '1';
-            scrollToBottom();
-
-            const payload = isFirstMessage ? { agent, user_id, thread_id, query } : { query };
-            socket.send(JSON.stringify(payload));
-
-            inputField.value = '';
-            inputField.style.height = 'auto';
-            inputField.focus();
         }
 
         function appendUserMessage(text) {
@@ -171,22 +211,19 @@
             const contentDiv = document.createElement('div');
             contentDiv.className = 'content';
             bubble.appendChild(contentDiv);
-
             const copyBtn = document.createElement('button');
             copyBtn.className = 'copy-btn';
             copyBtn.innerHTML = svgs.copy;
             copyBtn.onclick = (e) => {
-                const btn = e.currentTarget;
-                const rawMarkdown = btn.closest('.message.agent').dataset.rawMarkdown;
+                const rawMarkdown = e.currentTarget.closest('.message.agent').dataset.rawMarkdown;
                 if (rawMarkdown) {
                     navigator.clipboard.writeText(rawMarkdown).then(() => {
-                        btn.innerHTML = svgs.copied;
-                        setTimeout(() => { btn.innerHTML = svgs.copy; }, 2000);
+                        e.currentTarget.innerHTML = svgs.copied;
+                        setTimeout(() => { e.currentTarget.innerHTML = svgs.copy; }, 2000);
                     });
                 }
             };
             bubble.appendChild(copyBtn);
-
             bubble.dataset.rawMarkdown = '';
             messagesDiv.appendChild(bubble);
             return bubble;
@@ -196,14 +233,11 @@
             scopeElement.querySelectorAll('pre > code').forEach((codeBlock) => {
                 const pre = codeBlock.parentElement;
                 if (pre.querySelector('.code-header')) return;
-
                 const lang = codeBlock.className.split('-')[1] || 'text';
                 const header = document.createElement('div');
                 header.className = 'code-header';
-
                 const langSpan = document.createElement('span');
                 langSpan.textContent = lang;
-
                 const copyBtn = document.createElement('button');
                 copyBtn.className = 'code-copy-btn';
                 copyBtn.textContent = 'Copy';
@@ -213,7 +247,6 @@
                         setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
                     });
                 };
-
                 header.appendChild(langSpan);
                 header.appendChild(copyBtn);
                 pre.insertBefore(header, codeBlock);
@@ -247,20 +280,18 @@
                 const history = await response.json();
                 messagesDiv.innerHTML = '';
                 history.forEach(msg => {
-                    if (msg.type === 'human') {
-                        appendUserMessage(msg.content);
-                    } else if (msg.type === 'ai') {
+                    if (msg.type === 'human') appendUserMessage(msg.content);
+                    else if (msg.type === 'ai') {
                         const agentMsgBubble = createAgentMessageBubble();
                         agentMsgBubble.dataset.rawMarkdown = msg.content;
                         const contentDiv = agentMsgBubble.querySelector('.content');
                         contentDiv.innerHTML = marked.parse(msg.content);
                         agentMsgBubble.dataset.streaming = 'false';
                         renderCodeblocks(contentDiv);
+                        renderMath(contentDiv);
                     }
                 });
-                setTimeout(() => {
-                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
-                }, 100);
+                setTimeout(scrollToBottom, 100);
             } catch (error) {
                 console.error("Failed to fetch history:", error);
                 showToast("Could not connect to server to load session.", true);
@@ -283,59 +314,40 @@
             user_id = "";
             thread_id = "";
             renderEmptyState();
-            if (openConnection) {
-                openWebSocket();
-            }
+            if (openConnection) openWebSocket();
         }
 
         document.addEventListener('DOMContentLoaded', () => {
             const savedAgent = localStorage.getItem('ragnetic_agent');
             const savedThreadId = localStorage.getItem('ragnetic_thread_id');
             const savedUserId = localStorage.getItem('ragnetic_user_id');
-
             if (savedAgent) agentSelect.value = savedAgent;
             agent = agentSelect.value;
-
-            if (savedAgent && savedThreadId && savedUserId) {
-                loadHistory(savedAgent, savedThreadId, savedUserId);
-            } else {
-                renderEmptyState();
-            }
-
+            if (savedAgent && savedThreadId && savedUserId) loadHistory(savedAgent, savedThreadId, savedUserId);
+            else renderEmptyState();
             openWebSocket();
         });
 
-        newChatButton.addEventListener('click', () => {
-            showConfirmationModal(startNewSession);
-        });
-
-        agentSelect.addEventListener('change', () => {
-            showConfirmationModal(() => {
-                agent = agentSelect.value;
-                startNewSession();
-            });
-        });
-
+        newChatButton.addEventListener('click', () => showConfirmationModal(startNewSession));
+        agentSelect.addEventListener('change', () => showConfirmationModal(() => {
+            agent = agentSelect.value;
+            startNewSession();
+        }));
         modalCancelBtn.addEventListener('click', () => {
             confirmationModal.style.display = 'none';
             confirmCallback = null;
         });
-
         modalConfirmBtn.addEventListener('click', () => {
-            if (confirmCallback) {
-                confirmCallback();
-            }
+            if (confirmCallback) confirmCallback();
             confirmationModal.style.display = 'none';
             confirmCallback = null;
         });
-
         inputField.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                sendMessage();
+                handleFormSubmit();
             }
         });
-
         inputField.addEventListener('input', () => {
             inputField.style.height = 'auto';
             inputField.style.height = `${inputField.scrollHeight}px`;

@@ -124,6 +124,21 @@ def call_model(state: AgentState, config: RunnableConfig):
                                    - Use headings (`##`, `###`) to structure main topics.
                                    - Use bold text (`**text**`) to highlight key terms, figures, or important information.
                                    - Use bullet points (`- `) or numbered lists (`1. `) for detailed points or steps.
+                                   
+                                   IMPORTANT: When explaining any mathematical expressions, YOU MUST USE LaTeX SYNTAX.
+                                   IMPORTANT: Wrap inline equations in `$...$`, and display equations in `$$...$$`. 
+                                   IMPORTANT: DO NOT use <pre><code> or similar tags for mathematical explanations or calculations.
+                                   
+                                   - Surround only the actual code snippets with <pre><code> tags. Do not wrap non-code content.
+                                   - Do NOT use <pre><code> tags for math or calculations.
+                                   - Do NOT use <pre><code> tags for Physics and Chemistry calculations. Use LaTex instead.
+                                   
+                                   I REPEAT! When explaining or showing any mathematical expressions or equations, YOU MUST USE LaTeX SYNTAX.
+    
+                                   - Use LaTeX syntax for all mathematical expressions.
+                                   - Inline math must be wrapped in `\\( ... \\)`.
+                                   - Block math must be wrapped in `$$ ... $$`.
+                                        
                                    **SOURCES:**
                                    ---
                                    {context_section}

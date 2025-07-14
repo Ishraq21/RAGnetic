@@ -80,12 +80,8 @@ header {
 .message.agent tr:last-child td { border-bottom: none; }
 
 #empty-state {
-    height: 100%; /* Use height to fill the space */
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
+    height: 100%; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
 }
 #empty-state h1 { font-size: 2.5em; margin: 0; }
 #empty-state h1 span { color: var(--accent-color); }
@@ -97,11 +93,15 @@ header {
     flex: 1; padding: 0.75rem; background: transparent; border: none; outline: none; color: var(--text-color);
     font-size: 1em; font-family: 'Inter', sans-serif; resize: none; line-height: 1.5;
 }
-#send-btn {
+#query-input:disabled { color: var(--muted-text); }
+
+#send-stop-btn {
     background: var(--button-background); border: none; border-radius: 8px; color: white; cursor: pointer; font-weight: bold; width: 44px; height: 44px; display: flex;
     align-items: center; justify-content: center; transition: background-color 0.2s;
 }
-#send-btn:disabled { background: var(--border-color); cursor: not-allowed; }
+#send-stop-btn:disabled { background: var(--border-color); cursor: not-allowed; }
+#send-stop-btn.stop-active { background-color: var(--border-color); }
+#send-stop-btn.stop-active:hover { background-color: var(--error-color); }
 
 #typing-indicator {
     display: flex; align-items: center; gap: 5px; padding: 0.5rem;

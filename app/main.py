@@ -1,22 +1,25 @@
 import os
 import logging
 import json
+import asyncio
 from uuid import uuid4
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from multiprocessing import Process
-# Ensure BackgroundTasks is imported
+
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.websockets import WebSocketState
+
 from app.core.validation import validate_agent_name
 from app.schemas.agent import AgentConfig
 from app.agents.config_manager import save_agent_config, load_agent_config, get_agent_configs
 from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow, AgentState
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
@@ -24,45 +27,23 @@ from app.tools.arxiv_tool import get_arxiv_tool
 from app.tools.extraction_tool import get_extraction_tool
 from app.watcher import start_watcher
 from app.core.config import get_path_settings
-import asyncio # Still needed if other parts of main.py use asyncio.run, but not for bg.add_task directly
-
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+TURN_TIMEOUT = 300.0  # 5-minute master timeout for an entire turn
 
 load_dotenv()
 
-# --- Centralized Path Configuration ---
+# ... (Boilerplate code remains the same)
 _APP_PATHS = get_path_settings()
 _DATA_DIR = _APP_PATHS["DATA_DIR"]
 _AGENTS_DIR = _APP_PATHS["AGENTS_DIR"]
 _MEMORY_DIR = _APP_PATHS["MEMORY_DIR"]
-# --- End Centralized Configuration ---
-
 allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
-
-app = FastAPI(
-    title="RAGnetic API",
-    version="0.1.0",
-    description="API for managing and interacting with RAGnetic agents."
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-if "*" in allowed_origins:
-    logger.warning("=" * 80)
-    logger.warning("!!! SECURITY WARNING: CORS is configured to allow all origins ('*').")
-    logger.warning("!!! This is convenient for local development but is INSECURE for production.")
-    logger.warning("!!! For production, set the 'CORS_ALLOWED_ORIGINS' environment variable.")
-    logger.warning("!!! Example: export CORS_ALLOWED_ORIGINS='https://your.domain.com,https://another.domain'")
-    logger.warning("=" * 80)
-
+app = FastAPI(title="RAGnetic API", version="0.1.0",
+              description="API for managing and interacting with RAGnetic agents.")
+app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"],
+                   allow_headers=["*"])
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -80,11 +61,13 @@ class ConnectionManager:
             self.active.remove(ws)
 
     async def send(self, msg: Dict, ws: WebSocket):
-        await ws.send_json(msg)
+        if ws.client_state is WebSocketState.CONNECTED:
+            await ws.send_json(msg)
+        else:
+            logger.warning("Attempted to send message on a closed or disconnected websocket.")
 
 
 manager = ConnectionManager()
-
 _watcher_process: Optional[Process] = None
 
 
@@ -92,11 +75,9 @@ _watcher_process: Optional[Process] = None
 async def startup_event():
     global _watcher_process
     logger.info("Application startup event: Initializing RAGnetic components.")
-
     if not os.path.exists(_DATA_DIR):
         logger.error(f"Error: The '{_DATA_DIR}' directory does not exist. Please run 'ragnetic init' first.")
         return
-
     _watcher_process = Process(target=start_watcher, args=(_DATA_DIR,), daemon=True)
     _watcher_process.start()
     logger.info("Automated file watcher started in the background (via startup event).")
@@ -110,34 +91,17 @@ async def shutdown_event():
         _watcher_process.terminate()
         _watcher_process.join(timeout=5)
         if _watcher_process.is_alive():
-            logger.warning("Watcher process did not terminate gracefully. Forcing kill.")
             _watcher_process.kill()
         logger.info("File watcher process stopped (via shutdown event).")
-    else:
-        logger.info("No active watcher process to stop.")
-
-
-# --- API Endpoints ---
-@app.get("/health", tags=["Application"])
-def health_check():
-    if not os.path.exists(_AGENTS_DIR):
-        raise HTTPException(
-            status_code=503,
-            detail=f"Service Unavailable: Agents directory not found at '{_AGENTS_DIR}'."
-        )
-    return JSONResponse(content={"status": "ok", "message": "Service is healthy."})
 
 
 @app.get("/", tags=["Application"])
 async def home(request: Request):
     agents_list = []
-    seen_agent_names = set()
     try:
         agent_configs = get_agent_configs()
         for config in agent_configs:
-            if config.name not in seen_agent_names:
-                agents_list.append({"name": config.name, "display_name": config.display_name or config.name})
-                seen_agent_names.add(config.name)
+            agents_list.append({"name": config.name, "display_name": config.display_name or config.name})
     except Exception as e:
         logger.error(f"Could not load agent configs: {e}")
     default_agent = agents_list[0]['name'] if agents_list else ""
@@ -158,12 +122,8 @@ async def get_history(thread_id: str, agent_name: str, user_id: str):
             if not checkpoint_tuple:
                 return JSONResponse(content=[])
             messages = checkpoint_tuple.checkpoint["channel_values"]["messages"]
-            history = []
-            for msg in messages:
-                if isinstance(msg, HumanMessage):
-                    history.append({"type": "human", "content": msg.content})
-                elif isinstance(msg, AIMessage):
-                    history.append({"type": "ai", "content": msg.content})
+            history = [{"type": "human" if isinstance(msg, HumanMessage) else "ai", "content": msg.content} for msg in
+                       messages]
             return JSONResponse(content=history)
     except Exception as e:
         logger.error(f"Error loading history from {db_path}: {e}")
@@ -171,150 +131,177 @@ async def get_history(thread_id: str, agent_name: str, user_id: str):
 
 
 @app.post("/create-agent", tags=["Agents"])
-# MODIFIED: Changed to async def and added BackgroundTasks
 async def create_agent(config: AgentConfig, bg: BackgroundTasks):
     try:
         save_agent_config(config)
-        # MODIFIED: Use bg.add_task with the coroutine directly
         bg.add_task(embed_agent_data, config)
-        return JSONResponse(content={"status": "Agent configuration saved and embedding started in background.", "agent": config.name})
+        return JSONResponse(
+            content={"status": "Agent configuration saved and embedding started in background.", "agent": config.name})
     except Exception as e:
         logger.error(f"Error creating agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def handle_query(
-        initial_state: AgentState,
-        cfg: dict,
-        langgraph_agent: Any,
-        user_id: str,
-        thread_id: str,
-        ws: WebSocket
-) -> Optional[AgentState]:
-    """
-    Handles a single user query, streams the response, and returns the final state with metrics.
-    """
+async def handle_query_streaming(
+        initial_state: AgentState, cfg: dict, langgraph_agent: Any, ws: WebSocket, thread_id: str
+) -> Optional[Dict]:
+    """Streams a single response. Returns final state on success, or an error dict on failure."""
     final_state = None
-    async for event in langgraph_agent.astream_events(initial_state, cfg, version="v2"):
-        kind = event["event"]
-        if kind == "on_chat_model_stream":
-            token = event["data"]["chunk"].content
-            if token: await manager.send({"token": token}, ws)
-        elif kind == "on_graph_end":
-            final_state = event['data']['output']
+    try:
+        async for event in langgraph_agent.astream_events(initial_state, cfg, version="v2"):
+            kind = event["event"]
+            if kind == "on_chat_model_stream":
+                token = event["data"]["chunk"].content
+                if token: await manager.send({"token": token}, ws)
+            elif kind == "on_graph_end":
+                final_state = event['data']['output']
+        return final_state
+    except asyncio.CancelledError:
+        logger.info(f"[{thread_id}] Generation task was cancelled.")
+        return None
+    except Exception as e:
+        error_message = f"An error occurred during generation: {e}"
+        logger.error(f"[{thread_id}] {error_message}", exc_info=True)
+        await manager.send({"token": f"\n\n{error_message}"}, ws)
+        return {"error": True, "errorMessage": error_message}
 
-    await manager.send({"done": True, "user_id": user_id, "thread_id": thread_id, "citations": []}, ws)
-    return final_state
+
+async def _run_one_turn(
+        ws: WebSocket, langgraph_agent, cfg: dict, query_payload: dict, thread_id: str
+) -> Tuple[Optional[Dict], Optional[Dict]]:
+    """
+    Runs a single turn, handling generation and interruption.
+    Returns the final state and the next message to process.
+    """
+    query = query_payload["query"]
+    request_id = str(uuid4())
+    logger.info(f"[{thread_id}] Processing request. RequestID: {request_id}")
+    initial_state: AgentState = {"messages": [HumanMessage(content=query)], "request_id": request_id,
+                                 "agent_name": cfg["configurable"]["agent_config"].name, "tool_calls": [],
+                                 "retrieval_time_s": 0.0, "generation_time_s": 0.0, "total_duration_s": 0.0,
+                                 "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+                                 "estimated_cost_usd": 0.0, "retrieved_chunk_ids": []}
+
+    gen_task = asyncio.create_task(handle_query_streaming(initial_state, cfg, langgraph_agent, ws, thread_id))
+    listen_task = asyncio.create_task(ws.receive_json())
+
+    done, pending = await asyncio.wait([gen_task, listen_task], return_when=asyncio.FIRST_COMPLETED)
+
+    final_state, next_message = {"request_id": request_id}, None
+
+    if listen_task in done:
+        next_message = listen_task.result()
+        logger.info(f"[{thread_id}] Interrupt or new query received, cancelling generation for request {request_id}.")
+
+    if gen_task in done:
+        final_state.update(gen_task.result() or {})
+
+    # This is the critical change that prevents the "recv already locked" error.
+    for task in pending:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass  # This is the expected outcome of awaiting a cancelled task.
+
+    return final_state, next_message
+
+
+async def _initialize_agent_session(initial_payload: dict) -> Optional[Dict]:
+    """Loads agent config, tools, and workflow based on the first message."""
+    try:
+        agent_name = initial_payload.get("agent", "unknown_agent")
+        validate_agent_name(agent_name)
+
+        user_id = initial_payload.get("user_id") or f"user-{uuid4().hex[:8]}"
+        thread_id = initial_payload.get("thread_id") or f"thread-{uuid4().hex[:8]}"
+
+        agent_config = load_agent_config(agent_name)
+        all_tools = []
+        if "retriever" in agent_config.tools: all_tools.append(get_retriever_tool(agent_config))
+        if "sql_toolkit" in agent_config.tools:
+            db_source = next((s for s in agent_config.sources if s.type == 'db'), None)
+            if db_source: all_tools.extend(
+                create_sql_toolkit(db_connection_string=db_source.db_connection, llm_model_name=agent_config.llm_model,
+                                   llm_model_params=agent_config.model_params))
+        if "arxiv" in agent_config.tools: all_tools.extend(get_arxiv_tool())
+        if "extractor" in agent_config.tools: all_tools.append(get_extraction_tool(agent_config))
+
+        workflow = get_agent_workflow(all_tools)
+
+        return {"workflow": workflow, "agent_config": agent_config, "all_tools": all_tools, "user_id": user_id,
+                "thread_id": thread_id}
+    except Exception as e:
+        logger.error(f"Failed to initialize agent session: {e}", exc_info=True)
+        return None
 
 
 @app.websocket("/ws")
 async def websocket_chat(ws: WebSocket):
     await manager.connect(ws)
     thread_id = "uninitialized"
-    user_id = "uninitialized"
-    agent_name = "uninitialized"
-
     try:
-        initial_data = await ws.receive_json()
-        agent_name = initial_data["agent"]
-        validate_agent_name(agent_name)
-        query = initial_data["query"]
-        user_id = initial_data.get("user_id") or f"user-{uuid4().hex[:8]}"
-        thread_id = initial_data.get("thread_id") or f"thread-{uuid4().hex[:8]}"
+        message_data = await ws.receive_json()
+        if not (isinstance(message_data, dict) and message_data.get("type") == "query" and "payload" in message_data):
+            reason = f"Protocol violation: First message must be a valid query object. Got: {message_data}"
+            logger.warning(reason)
+            await ws.close(code=1003, reason=reason)
+            return
 
-        agent_config = load_agent_config(agent_name)
+        session = await _initialize_agent_session(message_data["payload"])
+        if not session:
+            await ws.close(code=1011, reason="Agent initialization failed.")
+            return
 
-        all_tools = []
-        if "retriever" in agent_config.tools: all_tools.append(get_retriever_tool(agent_config))
-        if "sql_toolkit" in agent_config.tools:
-            db_source = next((s for s in agent_config.sources if s.type == 'db'), None)
-            if db_source:
-                all_tools.extend(create_sql_toolkit(
-                    db_connection_string=db_source.db_connection,
-                    llm_model_name=agent_config.llm_model,
-                    llm_model_params=agent_config.model_params
-                ))
-        if "arxiv" in agent_config.tools: all_tools.extend(get_arxiv_tool())
-        if "extractor" in agent_config.tools: all_tools.append(get_extraction_tool(agent_config))
-
-        workflow = get_agent_workflow(all_tools)
-        memory_path = _MEMORY_DIR / f"{agent_name}_{user_id}_{thread_id}.db"
+        thread_id = session["thread_id"]
+        memory_path = _MEMORY_DIR / f"{session['agent_config'].name}_{session['user_id']}_{thread_id}.db"
         os.makedirs(_MEMORY_DIR, exist_ok=True)
 
-        async with AsyncSqliteSaver.from_conn_string(str(memory_path)) as saver:
-            langgraph_agent = workflow.compile(checkpointer=saver)
+        async with AsyncSqliteSaver.from_conn_string(str(memory_path)) as memory:
+            langgraph_agent = session["workflow"].compile(checkpointer=memory)
+            is_first_message = True
 
-            # --- Initial Query ---
-            request_id = str(uuid4())
-            logger.info(
-                f"New chat session started. RequestID: {request_id}, Agent: {agent_name}, ThreadID: {thread_id}")
-
-            initial_state: AgentState = {
-                "messages": [HumanMessage(content=query)], "tool_calls": [], "request_id": request_id,
-                "agent_name": agent_name, "retrieval_time_s": 0.0, "generation_time_s": 0.0,
-                "total_duration_s": 0.0, "prompt_tokens": 0, "completion_tokens": 0,
-                "total_tokens": 0, "estimated_cost_usd": 0.0, "retrieved_chunk_ids": []
-            }
-
-            final_state = await handle_query(initial_state, {
-                "configurable": {"thread_id": thread_id, "agent_config": agent_config, "tools": all_tools}},
-                                             langgraph_agent, user_id, thread_id, ws)
-
-            if final_state:
-                log_payload = {
-                    "request_id": request_id, "agent_name": agent_name, "thread_id": thread_id,
-                    "metrics": {
-                        "retrieval_time_s": round(final_state.get("retrieval_time_s", 0), 4),
-                        "generation_time_s": round(final_state.get("generation_time_s", 0), 4),
-                        "total_duration_s": round(final_state.get("total_duration_s", 0), 4),
-                        "prompt_tokens": final_state.get("prompt_tokens", 0),
-                        "completion_tokens": final_state.get("completion_tokens", 0),
-                        "total_tokens": final_state.get("total_tokens", 0),
-                        "estimated_cost_usd": final_state.get("estimated_cost_usd", 0.0),
-                    },
-                    "retrieved_chunk_ids": final_state.get("retrieved_chunk_ids", []),
-                    "user_question_preview": f"{query[:80]}..."
-                }
-                logger.info(json.dumps({"RAGneticTrace": log_payload}))
-
-            # --- Loop for subsequent queries in the same session ---
             while True:
-                data = await ws.receive_json()
-                query = data["query"]
-                request_id = str(uuid4())
-                logger.info(f"Continuing chat. RequestID: {request_id}, ThreadID: {thread_id}")
+                # The _run_one_turn function will now handle getting the next message
+                cfg = {"configurable": {"thread_id": thread_id, "agent_config": session["agent_config"],
+                                        "tools": session["all_tools"]}}
 
-                initial_state: AgentState = {
-                    "messages": [HumanMessage(content=query)], "tool_calls": [], "request_id": request_id,
-                    "agent_name": agent_name, "retrieval_time_s": 0.0, "generation_time_s": 0.0,
-                    "total_duration_s": 0.0, "prompt_tokens": 0, "completion_tokens": 0,
-                    "total_tokens": 0, "estimated_cost_usd": 0.0, "retrieved_chunk_ids": []
-                }
+                final_state, next_message = await _run_one_turn(ws, langgraph_agent, cfg, message_data["payload"],
+                                                                thread_id)
 
-                final_state = await handle_query(initial_state, {
-                    "configurable": {"thread_id": thread_id, "agent_config": agent_config, "tools": all_tools}},
-                                                 langgraph_agent, user_id, thread_id, ws)
+                has_error = final_state is not None and final_state.get("error", False)
+                error_message = final_state.get("errorMessage") if has_error else None
+                await manager.send({"done": True, "error": has_error, "errorMessage": error_message,
+                                    "request_id": final_state.get("request_id"), "user_id": session["user_id"],
+                                    "thread_id": thread_id, "is_first_message": is_first_message}, ws)
+                is_first_message = False
 
-                if final_state:
-                    log_payload = {
-                        "request_id": request_id, "agent_name": agent_name, "thread_id": thread_id,
-                        "metrics": {
-                            "retrieval_time_s": round(final_state.get("retrieval_time_s", 0), 4),
-                            "generation_time_s": round(final_state.get("generation_time_s", 0), 4),
-                            "total_duration_s": round(final_state.get("total_duration_s", 0), 4),
-                            "prompt_tokens": final_state.get("prompt_tokens", 0),
-                            "completion_tokens": final_state.get("completion_tokens", 0),
-                            "total_tokens": final_state.get("total_tokens", 0),
-                            "estimated_cost_usd": final_state.get("estimated_cost_usd", 0.0),
-                        },
-                        "retrieved_chunk_ids": final_state.get("retrieved_chunk_ids", []),
-                        "user_question_preview": f"{query[:80]}..."
-                    }
-                    logger.info(json.dumps({"RAGneticTrace": log_payload}))
+                if final_state and not has_error:
+                    query = message_data["payload"]["query"]
+                    log_payload = {"request_id": final_state.get("request_id", "N/A"),
+                                   "agent_name": session["agent_config"].name, "thread_id": thread_id,
+                                   "metrics": {"retrieval_time_s": round(final_state.get("retrieval_time_s", 0), 4),
+                                               "generation_time_s": round(final_state.get("generation_time_s", 0), 4),
+                                               "total_duration_s": round(final_state.get("total_duration_s", 0), 4),
+                                               "prompt_tokens": final_state.get("prompt_tokens", 0),
+                                               "completion_tokens": final_state.get("completion_tokens", 0),
+                                               "total_tokens": final_state.get("total_tokens", 0),
+                                               "estimated_cost_usd": final_state.get("estimated_cost_usd", 0.0), },
+                                   "retrieved_chunk_ids": final_state.get("retrieved_chunk_ids", []),
+                                   "user_question_preview": f"{query[:80]}..."}
+                    logger.info(f"[{thread_id}] " + json.dumps({"RAGneticTrace": log_payload}))
+
+                message_data = next_message
+
+                while not (isinstance(message_data, dict) and message_data.get("type") == "query" and message_data.get(
+                        "payload", {}).get("query")):
+                    logger.info(
+                        f"[{thread_id}] Received non-query message: {message_data}. Waiting for next valid query.")
+                    message_data = await ws.receive_json()
 
     except WebSocketDisconnect:
-        logger.info(f"Client disconnected for thread_id: {thread_id}")
+        logger.info(f"[{thread_id}] Client disconnected.")
     except Exception as e:
-        logger.error(f"WebSocket Error for thread_id {thread_id}: {e}", exc_info=True)
+        logger.error(f"[{thread_id}] Unhandled WebSocket Error: {e}", exc_info=True)
     finally:
         manager.disconnect(ws)
