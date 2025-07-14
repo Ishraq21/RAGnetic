@@ -5,6 +5,10 @@ from app.schemas.agent import AgentConfig, VectorStoreConfig
 from app.tools.retriever_tool import get_retriever_tool
 from langchain_core.documents import Document
 
+# ADD these imports to get the centralized path settings for the test
+from app.core.config import get_path_settings
+import os
+
 @pytest.fixture
 def sample_agent_config():
     """Provides a sample AgentConfig for testing the retriever tool with FAISS."""
@@ -31,7 +35,7 @@ def test_get_retriever_tool_faiss_hybrid(sample_agent_config, mocker):
     mock_vectorstore.as_retriever.return_value = MagicMock()
     mocker.patch("app.tools.retriever_tool.FAISS.load_local", return_value=mock_vectorstore)
 
-    # --- FIX: Mock the new, scalable document loader instead of the old function ---
+    # Mock the new, scalable document loader instead of the old function
     mock_documents = [Document(page_content="This is a test document.")]
     mocker.patch(
         "app.tools.retriever_tool._load_bm25_documents",
@@ -43,9 +47,12 @@ def test_get_retriever_tool_faiss_hybrid(sample_agent_config, mocker):
 
     # Mock the final EnsembleRetriever
     mock_ensemble_retriever = MagicMock()
-    # The tool now calls .invoke(), so we need to mock that.
     mock_ensemble_retriever.invoke = MagicMock()
     mocker.patch("app.tools.retriever_tool.EnsembleRetriever", return_value=mock_ensemble_retriever)
+
+    # Mock HuggingFaceCrossEncoder (needed for 'enhanced' strategy, though not directly tested here, good practice)
+    mocker.patch("app.tools.retriever_tool.HuggingFaceCrossEncoder", return_value=MagicMock())
+
 
     # ACT: Run the function we want to test
     tool = get_retriever_tool(sample_agent_config)
@@ -59,9 +66,19 @@ def test_get_retriever_tool_faiss_hybrid(sample_agent_config, mocker):
     from app.tools.retriever_tool import _load_bm25_documents
     _load_bm25_documents.assert_called_once_with("test-retriever-agent")
 
-    # Check that the FAISS loader was called correctly
+    # MODIFIED: Calculate the expected absolute path using the same logic as the app
+    _APP_PATHS_TEST = get_path_settings()
+    _VECTORSTORE_DIR_TEST = _APP_PATHS_TEST["VECTORSTORE_DIR"]
+    expected_absolute_vectorstore_path = os.path.join(_VECTORSTORE_DIR_TEST, sample_agent_config.name)
+
+
+    # Check that the FAISS loader was called correctly with the absolute path
     from app.tools.retriever_tool import FAISS
-    FAISS.load_local.assert_called_with("vectorstore/test-retriever-agent", mocker.ANY, allow_dangerous_deserialization=True)
+    FAISS.load_local.assert_called_with(
+        expected_absolute_vectorstore_path, # Use the calculated absolute path
+        mocker.ANY,
+        allow_dangerous_deserialization=True
+    )
 
     # Check that the EnsembleRetriever was initialized
     from app.tools.retriever_tool import EnsembleRetriever
