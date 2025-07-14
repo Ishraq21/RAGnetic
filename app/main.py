@@ -3,15 +3,15 @@ import logging
 import json
 from uuid import uuid4
 from typing import Optional, List, Dict, Any
-from multiprocessing import Process  # NEW: Import Process for watcher
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from multiprocessing import Process
+# Ensure BackgroundTasks is imported
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.core.validation import validate_agent_name
-# AGENTS_DIR will come from centralized paths
 from app.schemas.agent import AgentConfig
 from app.agents.config_manager import save_agent_config, load_agent_config, get_agent_configs
 from app.pipelines.embed import embed_agent_data
@@ -24,6 +24,8 @@ from app.tools.arxiv_tool import get_arxiv_tool
 from app.tools.extraction_tool import get_extraction_tool
 from app.watcher import start_watcher
 from app.core.config import get_path_settings
+import asyncio # Still needed if other parts of main.py use asyncio.run, but not for bg.add_task directly
+
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -34,7 +36,7 @@ load_dotenv()
 _APP_PATHS = get_path_settings()
 _DATA_DIR = _APP_PATHS["DATA_DIR"]
 _AGENTS_DIR = _APP_PATHS["AGENTS_DIR"]
-_MEMORY_DIR = _APP_PATHS["MEMORY_DIR"]  # For memory_path in websocket_chat
+_MEMORY_DIR = _APP_PATHS["MEMORY_DIR"]
 # --- End Centralized Configuration ---
 
 allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
@@ -87,33 +89,26 @@ _watcher_process: Optional[Process] = None
 
 
 @app.on_event("startup")
-async def startup_event():  # MODIFIED: Changed to async def for app.on_event
+async def startup_event():
     global _watcher_process
     logger.info("Application startup event: Initializing RAGnetic components.")
 
-    # Start the file watcher process
-    # Use centralized _DATA_DIR
-    if not os.path.exists(_DATA_DIR):  # MODIFIED
-        logger.error(
-            f"Error: The '{_DATA_DIR}' directory does not exist. Please run 'ragnetic init' first.")  # MODIFIED
-        # Consider raising HTTPException if this is critical for startup
-        return  # Do not start watcher if data dir is missing
+    if not os.path.exists(_DATA_DIR):
+        logger.error(f"Error: The '{_DATA_DIR}' directory does not exist. Please run 'ragnetic init' first.")
+        return
 
-    # Only start watcher if not in reload mode (Uvicorn handles reloads)
-    # The --reload flag is handled by Uvicorn externally, so this startup only runs once per app instance.
-    _watcher_process = Process(target=start_watcher, args=(_DATA_DIR,), daemon=True)  # MODIFIED
+    _watcher_process = Process(target=start_watcher, args=(_DATA_DIR,), daemon=True)
     _watcher_process.start()
     logger.info("Automated file watcher started in the background (via startup event).")
 
 
 @app.on_event("shutdown")
-async def shutdown_event():  # MODIFIED: Changed to async def for app.on_event
+async def shutdown_event():
     global _watcher_process
     logger.info("Application shutdown event: Terminating RAGnetic components.")
-    # Gracefully terminate the watcher process
     if _watcher_process and _watcher_process.is_alive():
         _watcher_process.terminate()
-        _watcher_process.join(timeout=5)  # Give watcher a bit of time to shut down
+        _watcher_process.join(timeout=5)
         if _watcher_process.is_alive():
             logger.warning("Watcher process did not terminate gracefully. Forcing kill.")
             _watcher_process.kill()
@@ -125,11 +120,10 @@ async def shutdown_event():  # MODIFIED: Changed to async def for app.on_event
 # --- API Endpoints ---
 @app.get("/health", tags=["Application"])
 def health_check():
-    # Use centralized _AGENTS_DIR for readiness check
-    if not os.path.exists(_AGENTS_DIR):  # MODIFIED
+    if not os.path.exists(_AGENTS_DIR):
         raise HTTPException(
             status_code=503,
-            detail=f"Service Unavailable: Agents directory not found at '{_AGENTS_DIR}'."  # MODIFIED
+            detail=f"Service Unavailable: Agents directory not found at '{_AGENTS_DIR}'."
         )
     return JSONResponse(content={"status": "ok", "message": "Service is healthy."})
 
@@ -139,8 +133,6 @@ async def home(request: Request):
     agents_list = []
     seen_agent_names = set()
     try:
-        # Use centralized _AGENTS_DIR for get_agent_configs
-        # get_agent_configs implicitly uses AGENTS_DIR, so no change needed here directly
         agent_configs = get_agent_configs()
         for config in agent_configs:
             if config.name not in seen_agent_names:
@@ -156,12 +148,11 @@ async def home(request: Request):
 @app.get("/history/{thread_id}", tags=["Memory"])
 async def get_history(thread_id: str, agent_name: str, user_id: str):
     validate_agent_name(agent_name)
-    # Use centralized _MEMORY_DIR
-    db_path = _MEMORY_DIR / f"{agent_name}_{user_id}_{thread_id}.db"  # MODIFIED
+    db_path = _MEMORY_DIR / f"{agent_name}_{user_id}_{thread_id}.db"
     if not os.path.exists(db_path):
         raise HTTPException(status_code=404, detail="History not found.")
     try:
-        async with AsyncSqliteSaver.from_conn_string(str(db_path)) as saver:  # MODIFIED
+        async with AsyncSqliteSaver.from_conn_string(str(db_path)) as saver:
             config = {"configurable": {"thread_id": thread_id}}
             checkpoint_tuple = await saver.aget_tuple(config)
             if not checkpoint_tuple:
@@ -180,16 +171,13 @@ async def get_history(thread_id: str, agent_name: str, user_id: str):
 
 
 @app.post("/create-agent", tags=["Agents"])
-# Note: create_agent is currently synchronous. If embed_agent_data becomes async,
-# this needs to change to async def and await embed_agent_data.
-def create_agent(config: AgentConfig):
+# MODIFIED: Changed to async def and added BackgroundTasks
+async def create_agent(config: AgentConfig, bg: BackgroundTasks):
     try:
         save_agent_config(config)
-        # Assuming embed_agent_data will be called in an asyncio.run context in cli.py if needed.
-        # If this endpoint is used directly, embed_agent_data would need to be async or run in thread.
-        # For now, it's typically called by cli.py's deploy command.
-        embed_agent_data(config)
-        return JSONResponse(content={"status": "Agent configuration saved successfully.", "agent": config.name})
+        # MODIFIED: Use bg.add_task with the coroutine directly
+        bg.add_task(embed_agent_data, config)
+        return JSONResponse(content={"status": "Agent configuration saved and embedding started in background.", "agent": config.name})
     except Exception as e:
         logger.error(f"Error creating agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -250,11 +238,10 @@ async def websocket_chat(ws: WebSocket):
         if "extractor" in agent_config.tools: all_tools.append(get_extraction_tool(agent_config))
 
         workflow = get_agent_workflow(all_tools)
-        # Use centralized _MEMORY_DIR
-        memory_path = _MEMORY_DIR / f"{agent_name}_{user_id}_{thread_id}.db"  # MODIFIED
-        os.makedirs(_MEMORY_DIR, exist_ok=True)  # MODIFIED
+        memory_path = _MEMORY_DIR / f"{agent_name}_{user_id}_{thread_id}.db"
+        os.makedirs(_MEMORY_DIR, exist_ok=True)
 
-        async with AsyncSqliteSaver.from_conn_string(str(memory_path)) as saver:  # MODIFIED
+        async with AsyncSqliteSaver.from_conn_string(str(memory_path)) as saver:
             langgraph_agent = workflow.compile(checkpointer=saver)
 
             # --- Initial Query ---

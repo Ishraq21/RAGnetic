@@ -132,8 +132,14 @@ class AgentConfig(BaseModel):
         description="The configuration for how documents are chunked before embedding."
     )
 
-    sources: List[DataSource]
-    tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv', 'extractor']]] = ['retriever']
+    sources: Optional[List[DataSource]] = Field(
+        default_factory=list,
+        description="A list of data sources for the agent to retrieve information from. Optional for generic chatbots."
+    )
+    tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv', 'extractor']]] = Field(
+        default_factory=list,
+        description="A list of tools the agent can use. Defaults to an empty list, meaning no tools are used unless specified."
+    )
 
     extraction_schema: Optional[Dict[str, str]] = Field(
         None,

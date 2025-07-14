@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 import uuid
 import hashlib
 import json
-import asyncio  # NEW: Import asyncio
+import asyncio
 
 # LangChain and LlamaIndex have different Document objects
 from langchain_core.documents import Document as LangChainDocument
@@ -24,16 +24,20 @@ from pinecone import Pinecone as PineconeClient
 from app.schemas.agent import AgentConfig, DataSource, ChunkingConfig
 from app.core.embed_config import get_embedding_model
 from app.core.config import get_api_key
-# Import all available loaders (these will need to be async later)
 from app.pipelines.loaders import (
     directory_loader, url_loader, db_loader, api_loader,
-    code_repository_loader, gdoc_loader, web_crawler_loader,  # web_crawler_loader is already async
+    code_repository_loader, gdoc_loader, web_crawler_loader,
     notebook_loader, pdf_loader, docx_loader, csv_loader,
     text_loader, iac_loader
 )
 
+from app.core.config import get_api_key, get_path_settings
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_APP_PATHS = get_path_settings()
+_VECTORSTORE_DIR = _APP_PATHS["VECTORSTORE_DIR"]
 
 
 class VectorStoreCreationError(Exception):
@@ -74,8 +78,6 @@ def _get_chunks_from_documents(
     elif chunking_mode == 'semantic':
         logger.info("Attempting semantic chunking using LlamaIndex...")
         try:
-            # Note: get_embedding_model and LangchainEmbedding are synchronous
-            # If they involve network calls, they should also be async eventually
             langchain_embeddings = get_embedding_model(embedding_model_name)
             llama_embeddings = LangchainEmbedding(langchain_embeddings)
             semantic_splitter = SemanticSplitterNodeParser.from_defaults(
@@ -83,7 +85,6 @@ def _get_chunks_from_documents(
                 breakpoint_percentile_threshold=chunking_config.breakpoint_percentile_threshold,
             )
             llama_docs = [LlamaDocument(text=doc.page_content, metadata=doc.metadata) for doc in documents]
-            # get_nodes_from_documents is CPU-bound
             nodes = semantic_splitter.get_nodes_from_documents(llama_docs)
             for node in nodes:
                 original_doc_id = node.metadata.get("original_doc_id", "")
@@ -110,7 +111,6 @@ def _get_chunks_from_documents(
             chunk_size=chunking_config.chunk_size,
             chunk_overlap=chunking_config.chunk_overlap
         )
-        # split_documents is CPU-bound
         split_chunks = splitter.split_documents(documents)
         for idx, chunk in enumerate(split_chunks):
             original_doc_id = chunk.metadata.get("original_doc_id", "")
@@ -129,11 +129,9 @@ def _get_chunks_from_documents(
     return chunks
 
 
-async def load_documents_from_source(source: DataSource, reproducible_ids: bool = False) -> list[
-    LangChainDocument]:  # MODIFIED: async def
+async def load_documents_from_source(source: DataSource, reproducible_ids: bool = False) -> list[LangChainDocument]:
     """
     Dispatcher function that calls the appropriate loader based on the source type.
-    This function must await the loader calls if they are async.
     """
     source_type = source.type
     logger.info(f"Dispatching to loader for source type: '{source_type}'")
@@ -146,38 +144,37 @@ async def load_documents_from_source(source: DataSource, reproducible_ids: bool 
                 logger.warning(f"Local path not found: {path}. Skipping.")
                 return []
             if os.path.isfile(path):
-                # These loaders need to be converted to async
                 if path.lower().endswith('.txt'):
-                    loaded_docs = await text_loader.load(path)  # MODIFIED: await
+                    loaded_docs = await text_loader.load(path)
                 elif path.lower().endswith('.pdf'):
-                    loaded_docs = await pdf_loader.load(path)  # MODIFIED: await
+                    loaded_docs = await pdf_loader.load(path)
                 elif path.lower().endswith('.docx'):
-                    loaded_docs = await docx_loader.load(path)  # MODIFIED: await
+                    loaded_docs = await docx_loader.load(path)
                 elif path.lower().endswith('.csv'):
-                    loaded_docs = await csv_loader.load(path)  # MODIFIED: await
+                    loaded_docs = await csv_loader.load(path)
                 elif path.lower().endswith('.ipynb'):
-                    loaded_docs = await notebook_loader.load_notebook(path)  # MODIFIED: await
+                    loaded_docs = await notebook_loader.load_notebook(path)
                 elif path.lower().endswith(('.tf', '.tfvars', '.yaml', '.yml')):
-                    loaded_docs = await iac_loader.load(path)  # MODIFIED: await
+                    loaded_docs = await iac_loader.load(path)
                 else:
                     logger.warning(f"Unsupported local file type: {path}. Skipping.")
             elif os.path.isdir(path):
-                loaded_docs = await directory_loader.load(path)  # MODIFIED: await
+                loaded_docs = await directory_loader.load(path)
         elif source_type == "code_repository":
-            loaded_docs = await code_repository_loader.load(source.path)  # MODIFIED: await
+            loaded_docs = await code_repository_loader.load(source.path)
         elif source_type == "url":
-            loaded_docs = await url_loader.load(source.url)  # MODIFIED: await
+            loaded_docs = await url_loader.load(source.url)
         elif source_type == "db":
-            loaded_docs = await db_loader.load(source.db_connection)  # MODIFIED: await
+            loaded_docs = await db_loader.load(source.db_connection)
         elif source_type == "gdoc":
             loaded_docs = await gdoc_loader.load(folder_id=source.folder_id, document_ids=source.document_ids,
-                                                 file_types=source.file_types)  # MODIFIED: await
+                                                 file_types=source.file_types)
         elif source_type == "web_crawler":
-            loaded_docs = await web_crawler_loader.load(url=source.url, max_depth=source.max_depth)  # Already async
+            loaded_docs = await web_crawler_loader.load(url=source.url, max_depth=source.max_depth)
         elif source_type == "api":
             loaded_docs = await api_loader.load(url=source.url, method=source.method, headers=source.headers,
                                                 params=source.params, payload=source.payload,
-                                                json_pointer=source.json_pointer)  # MODIFIED: await
+                                                json_pointer=source.json_pointer)
         else:
             logger.warning(f"Unknown or unsupported source type: '{source_type}'. Skipping.")
             return []
@@ -197,39 +194,39 @@ async def load_documents_from_source(source: DataSource, reproducible_ids: bool 
     return loaded_docs
 
 
-async def embed_agent_data(config: AgentConfig):  # MODIFIED: async def
+async def embed_agent_data(config: AgentConfig) -> bool:  # MODIFIED: Add return type hint
     """
     Main embedding pipeline. Loads, chunks, stores documents asynchronously, and saves a
     raw text copy of chunks for scalable BM25 initialization.
+    Returns True if a vector store was created, False otherwise.
     """
     logger.info(f"[EMBED CONFIG] chunking.mode={config.chunking.mode}, vector_store.type={config.vector_store.type}")
     logger.info(f"Starting data embedding process for agent: '{config.name}'")
 
-    # MODIFIED: Use asyncio.gather to load documents from sources concurrently
     loading_tasks = [
         load_documents_from_source(source, config.reproducible_ids)
-        for source in config.sources
+        for source in config.sources or []
     ]
 
-    # Run all loading tasks concurrently and collect results
-    all_loaded_docs_lists = await asyncio.gather(*loading_tasks, return_exceptions=True)  # NEW: return_exceptions
+    all_loaded_docs_lists = await asyncio.gather(*loading_tasks, return_exceptions=True)
 
     all_docs = []
     for loaded_docs_list in all_loaded_docs_lists:
         if isinstance(loaded_docs_list, Exception):
             logger.error(f"A document loading task failed: {loaded_docs_list}", exc_info=True)
-            continue  # Continue with other sources even if one fails
+            continue
         validated_docs = [doc for doc in loaded_docs_list if doc.page_content and doc.page_content.strip()]
         all_docs.extend(validated_docs)
 
     if not all_docs:
-        raise ValueError("No valid documents with content found to embed from any of the specified sources.")
+        logger.info(
+            f"No valid documents found for agent '{config.name}' from any specified sources. Skipping vector store creation.")
+        return False  # MODIFIED: Return False if no documents to embed
 
     all_docs.sort(key=lambda d: d.metadata.get("original_doc_id", ""))
     logger.info(f"Loaded a total of {len(all_docs)} valid documents from all sources.")
 
     try:
-        # get_embedding_model is synchronous; if it involves network calls, it might need async version
         langchain_embeddings = get_embedding_model(config.embedding_model)
 
         chunks = _get_chunks_from_documents(
@@ -239,62 +236,51 @@ async def embed_agent_data(config: AgentConfig):  # MODIFIED: async def
             reproducible_ids=config.reproducible_ids,
         )
 
+        # Ensure chunks are not empty before attempting vector store creation
+        if not chunks:
+            logger.info(f"No chunks generated for agent '{config.name}'. Skipping vector store creation.")
+            return False  # MODIFIED: Return False if no chunks generated
+
         vs_config = config.vector_store
         db_type = vs_config.type
-        vectorstore_path = f"vectorstore/{config.name}"
-        logger.info(f"Creating vector store of type '{db_type}' for agent '{config.name}'.")
+        vectorstore_path = os.path.join(_VECTORSTORE_DIR, config.name)
 
-        # --- Vector Store Creation Dispatcher (mostly synchronous LangChain calls) ---
-        # These methods are mostly blocking for local FAISS/Chroma.
-        # For remote VDBs (Qdrant, Pinecone, MongoDB Atlas), their respective
-        # from_documents methods might have async equivalents or can be run in executor.
+        os.makedirs(vectorstore_path, exist_ok=True, mode=0o750)
+
+        logger.info(f"Creating vector store of type '{db_type}' for agent '{config.name}' at {vectorstore_path}")
+
         if db_type == 'faiss':
-            # FAISS.from_documents and db.save_local are blocking, consider running in ThreadPoolExecutor
-            db = await asyncio.to_thread(FAISS.from_documents, chunks, langchain_embeddings)  # NEW: to_thread
-            await asyncio.to_thread(db.save_local, vectorstore_path)  # NEW: to_thread
+            db = await asyncio.to_thread(FAISS.from_documents, chunks, langchain_embeddings)
+            await asyncio.to_thread(db.save_local, vectorstore_path)
         elif db_type == 'chroma':
             await asyncio.to_thread(Chroma.from_documents, chunks, langchain_embeddings,
-                                    persist_directory=vectorstore_path)  # NEW: to_thread
+                                    persist_directory=vectorstore_path)
         elif db_type == 'qdrant':
-            # Qdrant might have async client, check Qdrant.afrom_documents or similar
             await asyncio.to_thread(Qdrant.from_documents, chunks, langchain_embeddings, host=vs_config.qdrant_host,
                                     port=vs_config.qdrant_port,
                                     path=None if vs_config.qdrant_host else vectorstore_path,
-                                    collection_name=config.name)  # NEW: to_thread
+                                    collection_name=config.name)
         elif db_type == 'pinecone':
-            pc_api_key = get_api_key("pinecone")  # This is synchronous
-            PineconeClient(api_key=pc_api_key)  # This is synchronous
-            # PineconeLangChain.from_documents can be blocking
+            pc_api_key = get_api_key("pinecone")
+            PineconeClient(api_key=pc_api_key)
             await asyncio.to_thread(PineconeLangChain.from_documents, chunks, langchain_embeddings,
-                                    index_name=vs_config.pinecone_index_name)  # NEW: to_thread
+                                    index_name=vs_config.pinecone_index_name)
         elif db_type == 'mongodb_atlas':
-            conn_string = get_api_key("mongodb")  # This is synchronous
+            conn_string = get_api_key("mongodb")
             for chunk in chunks:
                 chunk.metadata['_id'] = chunk.id
-            # MongoDBAtlasVectorSearch.from_documents can be blocking
             await asyncio.to_thread(MongoDBAtlasVectorSearch.from_documents, documents=chunks,
                                     embedding=langchain_embeddings,
                                     connection_string=conn_string,
                                     namespace=f"{vs_config.mongodb_db_name}.{vs_config.mongodb_collection_name}",
-                                    index_name=vs_config.mongodb_index_name)  # NEW: to_thread
+                                    index_name=vs_config.mongodb_index_name)
         else:
             raise ValueError(f"Unsupported vector store type: {db_type}")
 
         logger.info(f"Successfully created and populated vector store for agent '{config.name}'.")
 
-        # Save raw chunks for BM25 (file I/O, consider to_thread if large files)
-        bm25_docs_path = os.path.join(vectorstore_path, "bm25_documents.jsonl")
+        bm25_docs_path = os.path.join(_VECTORSTORE_DIR, config.name, "bm25_documents.jsonl")
 
-        # For large files, this would also benefit from asyncio.to_thread
-
-        # Original code with syntax error:
-        # await asyncio.to_thread(lambda: (
-        #     with open(bm25_docs_path, 'w', encoding='utf-8') as f:
-        # for chunk in chunks:
-        #     f.write(json.dumps({"id": chunk.id, "page_content": chunk.page_content}) + "\n")
-        # ))
-
-        # Corrected structure for the lambda or helper function
         def _write_bm25_chunks_to_file():
             with open(bm25_docs_path, 'w', encoding='utf-8') as f:
                 for chunk in chunks:
@@ -303,8 +289,8 @@ async def embed_agent_data(config: AgentConfig):  # MODIFIED: async def
         await asyncio.to_thread(_write_bm25_chunks_to_file)
 
         logger.info(f"Saved {len(chunks)} chunks for scalable BM25 retrieval at {bm25_docs_path}")
-
         logger.info(f"Successfully created vector store and BM25 source for agent '{config.name}'.")
+        return True
 
     except Exception as e:
         logger.error(f"Failed to create vector store for agent '{config.name}'. Error: {e}", exc_info=True)
