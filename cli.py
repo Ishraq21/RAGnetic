@@ -15,7 +15,26 @@ from logging.handlers import TimedRotatingFileHandler
 import signal
 import sys
 from typing import Optional, List, Dict, Any
-import secrets
+import secrets # CRITICAL FIX: ADDED MISSING IMPORT FOR SECRETS
+
+from langchain_community.vectorstores import FAISS, Chroma # For local vector stores
+from langchain_qdrant import Qdrant # For Qdrant
+from langchain_pinecone import Pinecone as PineconeLangChain # For Pinecone
+from langchain_mongodb import MongoDBAtlasVectorSearch # For MongoDB Atlas
+from pinecone import Pinecone as PineconeClient # Pinecone client for initialization
+
+from app.core.embed_config import get_embedding_model # For dynamically loading the correct embedding model
+from langchain_core.documents import Document as LangChainDocument # For type hinting if needed for clarity
+from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file # Ensure these are correctly imported
+from pathlib import Path # For path manipulation
+
+from sqlalchemy import create_engine, text # For DB connection checks
+from sqlalchemy.exc import SQLAlchemyError # For DB exception handling
+import requests # For URL/API connection checks
+from urllib.parse import urlparse # For URL parsing
+from app.schemas.agent import DataSource # For DataSource type hinting in check_connections
+from google.oauth2 import service_account # For GDrive credentials check
+
 
 # Initialize a default logger for CLI startup FIRST, so it's always bound.
 logger = logging.getLogger(__name__)
@@ -24,7 +43,7 @@ from app.core.config import get_path_settings, get_api_key, get_server_api_keys
 from app.core.structured_logging import JSONFormatter
 from app.evaluation.dataset_generator import generate_test_set
 from app.evaluation.benchmark import run_benchmark
-from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file
+# from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file # Already imported above
 from app.pipelines.embed import embed_agent_data
 from app.watcher import start_watcher
 import pytest
@@ -67,14 +86,14 @@ def setup_logging(json_format: bool = False):
         root_logger.setLevel(logging.INFO)
         logger.info("Logging configured for PRODUCTION environment.")
     else:
-        root_logger.setLevel(logging.INFO)
+        root_logger.setLevel(logging.INFO) # Keep INFO for general CLI output
         logger.info("Logging configured for DEVELOPMENT environment (minimal DEBUG on console).")
 
     console_handler = logging.StreamHandler()
     if is_production:
         console_handler.setLevel(logging.WARNING)
     else:
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(logging.INFO) # Keep INFO for general CLI output
 
     if json_format:
         formatter = JSONFormatter()
@@ -88,7 +107,7 @@ def setup_logging(json_format: bool = False):
         if is_production:
             file_handler.setLevel(logging.WARNING)
         else:
-            file_handler.setLevel(logging.INFO)
+            file_handler.setLevel(logging.INFO) # Keep INFO for general CLI output
         root_logger.addHandler(file_handler)
     else:
         formatter = logging.Formatter('%(levelname)s: %(message)s')
@@ -158,7 +177,6 @@ def init():
             config.write(configfile)
         logger.info(f"  - Created config file at: {_CONFIG_FILE}")
         typer.secho("\nProject initialized. To secure your server, run:", fg=typer.colors.CYAN)
-        # MODIFIED: Updated command prompt
         typer.secho("  ragnetic set-server-key", bold=True)
     else:
         logger.info("Project already initialized.")
@@ -318,59 +336,195 @@ def deploy_agent_by_name(
         raise typer.Exit(code=1)
 
 
-@app.command(help="Displays the configuration of a specific agent.")
+@app.command(name='inspect-agent', help="Displays the configuration of a specific agent.")
 def inspect_agent(
-        agent_name: str = typer.Argument(..., help="The name of the agent to inspect.")
+        agent_name: str = typer.Argument(..., help="The name of the agent to inspect."),
+        show_documents_metadata: bool = typer.Option(
+            False, "--metadata", "-m",
+            help="Display detailed metadata for ingested documents."
+        ),
+        check_connections: bool = typer.Option(
+            False, "--check-connections", "-c",
+            help="Verify connectivity for each configured external source."
+        ),
+
+        num_docs: int = typer.Option(
+            5, "--num-docs",
+            help="Number of sample documents to retrieve and display from the vector store."
+        ),
 ):
     _validate_agent_name_cli(agent_name)
     setup_logging()
+
+    errors = 0
+
+    typer.echo(f"Inspecting configuration for agent: '{agent_name}'")
+
+    # 1) Validate YAML config
     try:
-        typer.echo(f"Inspecting configuration for agent: '{agent_name}'")
-        config = load_agent_config(agent_name)
-        typer.echo(yaml.dump(config.model_dump(), indent=2, sort_keys=False))
+        agent_config = load_agent_config(agent_name)
+        typer.echo(yaml.dump(agent_config.model_dump(), indent=2, sort_keys=False))
+        typer.secho("  - [PASS] YAML configuration is valid.", fg=typer.colors.GREEN)
     except FileNotFoundError:
         typer.secho(f"Error: Agent '{agent_name}' not found.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
-
-
-@app.command(help="Validates an agent's configuration and associated files.")
-def validate_agent(
-        agent_name: str = typer.Argument(..., help="The name of the agent to validate."),
-        check_connections: bool = typer.Option(False, "--check-connections", "-c",
-                                               help="Test data source connections."),
-        json_logs: bool = typer.Option(False, "--json-logs", help="Structured JSON logs"),
-):
-    _validate_agent_name_cli(agent_name)
-    setup_logging(json_logs)
-    typer.echo(f"Validating agent: '{agent_name}'...")
-    errors = 0
-    try:
-        agent_config = load_agent_config(agent_name)
-        typer.secho("  - [PASS] YAML configuration is valid.", fg=typer.colors.GREEN)
     except Exception as e:
         typer.secho(f"  - [FAIL] Could not load or parse YAML config: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
+        errors += 1
 
-    vectorstore_path = _VECTORSTORE_DIR / agent_name
-    if os.path.exists(vectorstore_path) and os.path.isdir(vectorstore_path):
-        typer.secho(f"  - [PASS] Vector store directory exists at: {vectorstore_path}", fg=typer.colors.GREEN)
-    else:
-        typer.secho(f"  - [WARN] Vector store not found. Agent may need to be deployed.", fg=typer.colors.YELLOW)
+    # 2) Optionally inspect vector-store documents
+    if show_documents_metadata:
+        typer.secho(f"\n--- Inspecting Document Metadata for '{agent_name}' ---", bold=True)
+        vectorstore_path = _VECTORSTORE_DIR / agent_name
 
+        if not os.path.exists(vectorstore_path):
+            typer.secho(
+                f"Error: Vector store not found at {vectorstore_path}. Please deploy the agent first.",
+                fg=typer.colors.RED
+            )
+            errors += 1
+        else:
+            async def _inspect_vector_store_async(k_value: int):
+                # load embeddings
+                embeddings = get_embedding_model(agent_config.embedding_model)
+                typer.echo(f"Loading vector store: {agent_config.vector_store.type}")
+
+                # choose the right loader
+                cls_map = {
+                    'faiss': FAISS,
+                    'chroma': Chroma,
+                    'qdrant': Qdrant,
+                    'pinecone': PineconeLangChain,
+                    'mongodb_atlas': MongoDBAtlasVectorSearch,
+                }
+                db_type = agent_config.vector_store.type
+                if db_type not in cls_map:
+                    typer.secho(f"Unsupported vector store type '{db_type}'", fg=typer.colors.RED)
+                    return False
+
+                # handle external API keys
+                if db_type in ('pinecone', 'mongodb_atlas', 'qdrant'):
+                    key_map = {'pinecone': 'pinecone', 'mongodb_atlas': 'mongodb', 'qdrant': 'qdrant'}
+                    key = get_api_key(key_map[db_type])
+                    if not key:
+                        typer.secho(f"Missing API key for {db_type}", fg=typer.colors.YELLOW)
+                        return False
+                    if db_type == 'pinecone':
+                        PineconeClient(api_key=key)
+
+                # load the store
+                if db_type == 'faiss':
+                    db = await asyncio.to_thread(
+                        FAISS.load_local, str(vectorstore_path), embeddings, allow_dangerous_deserialization=True
+                    )
+                elif db_type == 'chroma':
+                    db = await asyncio.to_thread(Chroma, persist_directory=str(vectorstore_path),
+                                                 embedding_function=embeddings)
+                elif db_type == 'qdrant':
+                    cfg = agent_config.vector_store
+                    db = await asyncio.to_thread(
+                        Qdrant, client=None, collection_name=agent_name,
+                        embeddings=embeddings, host=cfg.qdrant_host, port=cfg.qdrant_port, prefer_grpc=True
+                    )
+                elif db_type == 'pinecone':
+                    idx = agent_config.vector_store.pinecone_index_name
+                    db = await asyncio.to_thread(PineconeLangChain.from_existing_index, index_name=idx,
+                                                 embedding=embeddings)
+                else:  # mongodb_atlas
+                    vs = agent_config.vector_store
+                    db = await asyncio.to_thread(
+                        MongoDBAtlasVectorSearch.from_connection_string,
+                        get_api_key("mongodb"),
+                        vs.mongodb_db_name,
+                        vs.mongodb_collection_name,
+                        embeddings,
+                        vs.mongodb_index_name
+                    )
+
+                if not db:
+                    typer.secho("Failed to initialize vector store.", fg=typer.colors.RED)
+                    return False
+
+                typer.echo("Vector store loaded successfully.")
+                typer.echo("\nRetrieving sample entries…")
+                docs = await asyncio.to_thread(db.similarity_search_with_score, "document", k=k_value)
+                if docs:
+                    for i, (doc, score) in enumerate(docs, 1):
+                        typer.secho(f"\n--- Entry {i} (Distance Score: {score:.4f} | Lower is More Relevant) ---",
+                                    fg=typer.colors.CYAN, bold=True)
+                        typer.echo(f"{doc.page_content[:400]}…")
+                        typer.secho("Metadata:", fg=typer.colors.BLUE)
+                        typer.echo(json.dumps(doc.metadata, indent=2))
+                        typer.secho("-" * 60, fg=typer.colors.MAGENTA)
+                else:
+                    typer.secho("No entries retrieved; store may be empty.", fg=typer.colors.YELLOW)
+                return True
+
+            try:
+                success = asyncio.run(_inspect_vector_store_async(k_value=num_docs))
+
+                if not success:
+                    errors += 1
+            except Exception as e:
+                typer.secho(f"Error during metadata inspection: {e}", fg=typer.colors.RED)
+                errors += 1
+
+    # 3) Optionally check external connections
     if check_connections:
-        typer.echo("\n--- Performing Connection Check ---")
-        for i, source in enumerate(agent_config.sources):
-            source_info = f"Source #{i + 1} (type: {source.type})"
-            if source.type == 'db' and source.db_connection:
-                pass
-            elif source.type == 'url' and source.url:
-                pass
+        typer.secho(f"\n--- Performing Connection Checks for '{agent_name}' ---", bold=True)
+        if not agent_config.sources:
+            typer.secho("No data sources configured.", fg=typer.colors.YELLOW)
+        else:
+            for idx, source in enumerate(agent_config.sources, 1):
+                info = f"Source {idx} ({source.type})"
+                status = "[UNKNOWN]"
+                try:
+                    if source.type == "db" and source.db_connection:
+                        connect_args = {}
+                        conn_str = source.db_connection
 
-    typer.echo("-" * 20)
+                        if conn_str.startswith("postgresql"):
+                            connect_args['connect_timeout'] = 5
+                        elif conn_str.startswith("mysql"):
+                            # The mysql-connector-python driver uses 'connect_timeout'
+                            # Other MySQL drivers might use 'connection_timeout'
+                            connect_args['connect_timeout'] = 5
+                        elif not conn_str.startswith("sqlite"):
+                            # Generic fallback for other network-based DBs
+                            connect_args['timeout'] = 5
+                        # SQLite does not need a network timeout
+
+                        eng = create_engine(conn_str, connect_args=connect_args)
+                        with eng.connect() as conn:
+                            conn.execute(text("SELECT 1"))
+                        status = "[PASS]"
+                        eng.dispose()
+                    elif source.type in ("url", "api") and source.url:
+                        r = requests.head(source.url, timeout=5)
+                        r.raise_for_status()
+                        status = "[PASS]"
+                    elif source.type == "gdoc":
+                        cfg = configparser.ConfigParser()
+                        cfg.read(_CONFIG_FILE)
+                        if cfg.has_section("GOOGLE_CREDENTIALS") and cfg.get("GOOGLE_CREDENTIALS", "json_key",
+                                                                             fallback=None):
+                            status = "[PASS] GDrive creds"
+                        else:
+                            status = "[FAIL] Missing GDrive creds"
+                            errors += 1
+                    else:
+                        status = "[SKIP]"
+                except Exception as e:
+                    status = f"[FAIL] {e}"
+                    errors += 1
+
+                typer.echo(f"  - {info}: {status}")
+
+    typer.secho("\n" + "-" * 20, fg=typer.colors.WHITE)
     if errors == 0:
         typer.secho("Validation successful.", fg=typer.colors.GREEN)
     else:
-        typer.secho(f"Validation failed with {errors} critical error(s).", fg=typer.colors.RED)
+        typer.secho(f"Validation failed with {errors} error(s).", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
 

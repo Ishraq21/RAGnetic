@@ -5,8 +5,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from langchain_core.documents import Document
 from typing import List, Optional
 import asyncio
+from datetime import datetime
 
-from app.schemas.agent import AgentConfig, DataPolicy
+# NEW: Import DataSource for lineage
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,6 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                     # Basic credit card pattern (major issuers, e.g., Visa, Mastercard, Amex, Discover)
                     pattern = r'\b(?:4\d{3}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|5[1-5]\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|3[47]\d{13}|6(?:011|5\d{2})[- ]?\d{4}[- ]?\d{4}[- ]?\d{4})\b'
                 elif pii_type == 'name':
-                    # Name redaction is complex and context-dependent.
                     logger.warning(f"PII type '{pii_type}' (name) is complex and not fully implemented for regex-based redaction. Skipping for now.")
                     continue
 
@@ -77,29 +78,26 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
                     elif kw_config.action == 'block_chunk':
-                        # At this stage (document/table entry level), we can't block just a chunk directly.
-                        # We'll redact and log a warning for now, indicating this entry contains content
-                        # that should ideally be split and then blocked at chunking.
                         replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.warning(f"Keyword '{keyword}' found. This entry contains content that should ideally be blocked at chunk level. Currently redacting.")
-                    elif kw_config.action == 'block_document': # In DB loader, 'document' refers to a 'table entry'
+                    elif kw_config.action == 'block_document':
                         logger.warning(f"Keyword '{keyword}' found. Table entry is marked for blocking by policy. Content will be discarded.")
                         document_blocked = True
-                        return "", document_blocked # Return empty content and blocked flag
+                        return "", document_blocked
 
     return processed_text, document_blocked
 
 
-async def load(connection_string: str, agent_config: Optional[AgentConfig] = None) -> List[Document]:  # MODIFIED: Added agent_config
+async def load(connection_string: str, agent_config: Optional[AgentConfig] = None, source: Optional[DataSource] = None) -> List[Document]:
     """
     Connects to a SQL database, inspects its schema, and creates a
     Document for each table with its schema and sample rows.
     Includes connection string validation, data policy application, and emphasizes safe SQL practices.
-    Now supports asynchronous loading.
+    Now supports asynchronous loading and enriched metadata for lineage.
     """
     docs = []
-    engine = None # Initialize engine for finally block
+    engine = None
     try:
         if not connection_string:
             logger.error("Error: Database connection string is required.")
@@ -126,14 +124,12 @@ async def load(connection_string: str, agent_config: Optional[AgentConfig] = Non
 
             sample_rows_content = ""
             try:
-                # MODIFIED: Run query execution in a separate thread
-                # Using LIMIT 3 to get a small, representative sample, avoiding large data pulls.
                 query_sql = f"SELECT * FROM \"{table_name}\" LIMIT 3"
                 rows = await asyncio.to_thread(_execute_query_blocking, engine, query_sql)
 
                 sample_rows = "Sample Rows:\n"
-                for row in rows:  # Iterate over the fetched rows
-                    sample_rows += str(row._asdict()) + "\n" # Convert row to dict for better representation
+                for row in rows:
+                    sample_rows += str(row._asdict()) + "\n"
                 sample_rows_content = sample_rows
             except SQLAlchemyError as sqla_e:
                 sample_rows_content = f"Could not fetch sample rows: {sqla_e}\n"
@@ -148,31 +144,41 @@ async def load(connection_string: str, agent_config: Optional[AgentConfig] = Non
             processed_text = page_content
             document_blocked = False
 
-            # Apply data policies if provided in agent_config
             if agent_config and agent_config.data_policies:
                 logger.debug(f"Applying data policies to table '{table_name}'...")
                 processed_text, document_blocked = _apply_data_policies(page_content, agent_config.data_policies)
 
             if document_blocked:
                 logger.warning(f"Table '{table_name}' was completely blocked by a data policy and will not be processed.")
-                continue # Skip this table if it's blocked
+                continue
 
-            if processed_text.strip(): # Ensure there's actual content left after policies
+            if processed_text.strip():
+                # Create base metadata for the document (table entry)
+                metadata = {
+                    "source_db_connection_string": connection_string, # Full connection string for lineage
+                    "table_name": table_name,
+                    "load_timestamp": datetime.now().isoformat(), # NEW: Add load timestamp
+                }
+                # Add general source info if available from the DataSource object
+                if source: # NEW: Add info from DataSource object for lineage
+                    metadata["source_type_config"] = source.model_dump() # Store entire DataSource config
+                    if source.url: metadata["source_url"] = source.url
+                    if source.path: metadata["source_path"] = source.path # Path if sqlite or local db file
+                    if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
+                    if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
+
+                metadata["source_type"] = source.type if source else "database" # Use DataSource type or default
+
                 doc = Document(
                     page_content=processed_text,
-                    metadata={
-                        "source": connection_string,
-                        "source_type": "database",
-                        "table_name": table_name,
-                        "db_connection_string": connection_string # Added for consistency
-                    }
+                    metadata={**metadata} # Use the enriched metadata
                 )
                 docs.append(doc)
             else:
                 logger.debug(f"Table '{table_name}' had no content after policy application or was empty.")
 
 
-        logger.info(f"Loaded schema for {len(docs)} processed tables from the database.")
+        logger.info(f"Loaded schema for {len(docs)} processed tables from the database with enriched metadata.")
         return docs
 
     except SQLAlchemyError as e:
@@ -186,8 +192,5 @@ async def load(connection_string: str, agent_config: Optional[AgentConfig] = Non
         return []
     finally:
         if engine:
-            # Dispose of the engine to close all connections in the pool
-            # This is important in async contexts where connections might persist
-            # if not explicitly closed.
             engine.dispose()
             logger.debug(f"Disposed of database engine for {connection_string[:30]}...")

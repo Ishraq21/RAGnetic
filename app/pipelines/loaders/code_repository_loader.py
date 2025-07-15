@@ -7,9 +7,10 @@ from typing import List, Optional
 from pathlib import Path
 from urllib.parse import urlparse
 import asyncio
+from datetime import datetime  # NEW: Import datetime for load_timestamp
 
 from app.core.config import get_path_settings
-from app.schemas.agent import AgentConfig, DataPolicy
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource  # MODIFIED: Import DataSource
 
 from git import Repo, InvalidGitRepositoryError, NoSuchPathError, GitCommandError
 from langchain_community.document_loaders import GitLoader
@@ -20,13 +21,13 @@ logger = logging.getLogger(__name__)
 
 # --- Centralized Path Configuration ---
 _PATH_SETTINGS = get_path_settings()
-_PROJECT_ROOT_FROM_CONFIG = _PATH_SETTINGS["PROJECT_ROOT"]  # Store project root for clarity
-_ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"]  # Store resolved allowed dirs
+_PROJECT_ROOT_FROM_CONFIG = _PATH_SETTINGS["PROJECT_ROOT"]
+_ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"]
+logger.info(
+    f"Loaded allowed data directories for code repository loader from central config: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
 
 # NEW: Define _CLONE_TEMP_DIR relative to the centralized PROJECT_ROOT
 _CLONE_TEMP_DIR = _PROJECT_ROOT_FROM_CONFIG / ".ragnetic_temp_clones"
-logger.info(
-    f"Loaded allowed data directories for code repository loader from central config: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
 
 
 # --- End Centralized Configuration ---
@@ -41,7 +42,7 @@ def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
     resolved_path = Path(input_path).resolve()
 
     is_safe = False
-    for allowed_dir in _ALLOWED_DATA_DIRS_RESOLVED:  # This variable now comes from central config
+    for allowed_dir in _ALLOWED_DATA_DIRS_RESOLVED:
         if resolved_path.is_relative_to(allowed_dir):
             is_safe = True
             break
@@ -68,23 +69,20 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                 if pii_type == 'email':
                     pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
                 elif pii_type == 'phone':
-                    # Common phone number formats (adjust or enhance regex as needed for international formats)
                     pattern = r'\b(?:\+\d{1,3}[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b'
                 elif pii_type == 'ssn':
                     pattern = r'\b\d{3}[- ]?\d{2}[- ]?\d{4}\b'
                 elif pii_type == 'credit_card':
-                    # Basic credit card pattern (major issuers, e.g., Visa, Mastercard, Amex, Discover)
                     pattern = r'\b(?:4\d{3}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|5[1-5]\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|3[47]\d{13}|6(?:011|5\d{2})[- ]?\d{4}[- ]?\d{4}[- ]?\d{4})\b'
                 elif pii_type == 'name':
-                    # Name redaction is complex and context-dependent.
                     logger.warning(
                         f"PII type '{pii_type}' (name) is complex and not fully implemented for regex-based redaction. Skipping for now.")
                     continue
 
                 if pattern:
-                    replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 8)  # Generic length
+                    replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 8)
                     if pii_type == 'credit_card': replacement = pii_config.redaction_placeholder or (
-                                pii_config.redaction_char * 16)  # Specific length for CC
+                            pii_config.redaction_char * 16)
                     processed_text = re.sub(pattern, replacement, processed_text)
                     logger.debug(f"Applied {pii_type} redaction policy. Replaced with: {replacement}")
 
@@ -97,27 +95,25 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
                     elif kw_config.action == 'block_chunk':
-                        # At this stage (file level), we can't block just a chunk directly.
-                        # We'll redact and log a warning for now, indicating this file contains content
-                        # that should ideally be split and then blocked at chunking.
                         replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.warning(
                             f"Keyword '{keyword}' found. This file contains content that should ideally be blocked at chunk level. Currently redacting.")
-                    elif kw_config.action == 'block_document':  # In code loader, 'document' refers to a 'file'
+                    elif kw_config.action == 'block_document':
                         logger.warning(
                             f"Keyword '{keyword}' found. File is marked for blocking by policy. Content will be discarded.")
                         document_blocked = True
-                        return "", document_blocked  # Return empty content and blocked flag
+                        return "", document_blocked
 
     return processed_text, document_blocked
 
 
-async def load(repo_path: str, agent_config: Optional[AgentConfig] = None) -> List[Document]:  # Added agent_config
+async def load(repo_path: str, agent_config: Optional[AgentConfig] = None, source: Optional[DataSource] = None) -> List[
+    Document]:  # MODIFIED: Added source parameter
     """
     Smart loader that handles both remote GitHub URLs and local file paths.
     Includes input validation for both types, data policy application, and robust error handling.
-    Now supports asynchronous loading.
+    Now supports asynchronous loading and enriched metadata for lineage.
     """
     try:
         if not repo_path:
@@ -148,8 +144,9 @@ async def load(repo_path: str, agent_config: Optional[AgentConfig] = None) -> Li
                     if not default_branch:
                         logger.error(f"Can't determine default branch for {repo_path}. Skipping.")
                         return []
-                    # Pass agent_config to _load_and_chunk
-                    return await _load_and_chunk(str(safe_temp_dir), branch=default_branch, agent_config=agent_config)
+                    # Pass agent_config and source to _load_and_chunk
+                    return await _load_and_chunk(str(safe_temp_dir), branch=default_branch, agent_config=agent_config,
+                                                 source=source)  # MODIFIED: Passed source
 
                 except (GitCommandError, InvalidGitRepositoryError, NoSuchPathError) as git_e:
                     logger.error(f"Git operation failed for {repo_path}: {git_e}", exc_info=True)
@@ -161,8 +158,9 @@ async def load(repo_path: str, agent_config: Optional[AgentConfig] = None) -> Li
             # --- Local filesystem path Validation ---
             logger.info(f"Processing local code repository at: {repo_path}")
             safe_local_repo_path = _is_path_safe_and_within_allowed_dirs(repo_path)
-            # Pass agent_config to _load_and_chunk
-            return await _load_and_chunk(str(safe_local_repo_path), branch=None, agent_config=agent_config)
+            # Pass agent_config and source to _load_and_chunk
+            return await _load_and_chunk(str(safe_local_repo_path), branch=None, agent_config=agent_config,
+                                         source=source)  # MODIFIED: Passed source
 
     except ValueError as e:
         logger.error(f"Code repository loader validation error: {e}")
@@ -195,14 +193,14 @@ async def _get_default_branch(repo_path: str) -> Optional[str]:
         return None
 
 
-async def _load_and_chunk(repo_path: str, branch: Optional[str], agent_config: Optional[AgentConfig]) -> List[
-    Document]:  # Added agent_config
+async def _load_and_chunk(repo_path: str, branch: Optional[str], agent_config: Optional[AgentConfig],
+                          source: Optional[DataSource]) -> List[Document]:  # MODIFIED: Added source parameter
     """
     Load via GitLoader (if branch provided, checkout that branch first),
     then split all files matching EXTENSION_MAP into code-language chunks.
     Assumes repo_path is already validated as safe.
     Applies data policies before chunking.
-    Now supports asynchronous loading.
+    Now supports asynchronous loading and enriched metadata.
     """
     try:
         if not Path(repo_path).is_dir():
@@ -249,6 +247,27 @@ async def _load_and_chunk(repo_path: str, branch: Optional[str], agent_config: O
 
             # Update the document's page_content with the processed text
             doc.page_content = processed_text
+
+            # NEW: Enriched metadata for lineage
+            metadata = {
+                "source_path": str(Path(repo_path).resolve()),  # The repository's base path
+                "file_name": Path(doc.metadata.get("file_path", "")).name,  # File name within the repo
+                "file_path_in_repo": doc.metadata.get("file_path", "N/A"),  # Relative path within the repo
+                "file_type": Path(doc.metadata.get("file_path", "")).suffix.lower(),
+                "load_timestamp": datetime.now().isoformat(),
+                "repo_url": source.url if source and source.url else "N/A",  # Original repo URL from DataSource
+                "repo_branch": branch if branch else "default",  # Branch used for cloning
+            }
+            # Add general source info from the DataSource object
+            if source:  # NEW: Add info from DataSource object for lineage
+                metadata["source_type_config"] = source.model_dump()  # Store entire DataSource config
+                if source.db_connection: metadata["source_db_connection"] = source.db_connection
+                if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
+                if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
+
+            metadata["source_type"] = source.type if source else "code_repository"  # Use DataSource type or default
+
+            doc.metadata = {**doc.metadata, **metadata}  # Merge existing LangChain metadata with new enriched data
             processed_docs.append(doc)
 
         chunked = []
@@ -270,18 +289,12 @@ async def _load_and_chunk(repo_path: str, branch: Optional[str], agent_config: O
                 language=lang, chunk_size=1000, chunk_overlap=100
             )
             for chunk in splitter.split_documents([doc]):
-                chunk.metadata["source_type"] = "code_repository"
-                # Add file_name and file_path to metadata for consistency
-                if "file_path" in doc.metadata:
-                    chunk.metadata["file_path"] = doc.metadata["file_path"]
-                    chunk.metadata["file_name"] = Path(doc.metadata["file_path"]).name
-                elif "source" in doc.metadata:  # Fallback if GitLoader uses 'source' for full path
-                    chunk.metadata["file_path"] = doc.metadata["source"]
-                    chunk.metadata["file_name"] = Path(doc.metadata["source"]).name
-
+                # Preserve all rich metadata from the document onto the chunk
+                chunk.metadata = {**chunk.metadata, **doc.metadata}  # Inherit all metadata from parent doc
                 chunked.append(chunk)
 
-        logger.info(f"Chunked {len(processed_docs)} processed files into {len(chunked)} code chunks for '{repo_path}'.")
+        logger.info(
+            f"Chunked {len(processed_docs)} processed files into {len(chunked)} code chunks for '{repo_path}' with enriched metadata.")
         return chunked
 
     except (InvalidGitRepositoryError, NoSuchPathError) as git_loader_e:

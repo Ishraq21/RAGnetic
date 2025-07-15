@@ -4,8 +4,9 @@ import trafilatura
 from typing import List, Optional
 from langchain_core.documents import Document
 from urllib.parse import urlparse # Added import for URL scheme validation
+from datetime import datetime
 
-from app.schemas.agent import AgentConfig, DataPolicy
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 
 logger = logging.getLogger(__name__) # Added logger initialization
 
@@ -52,27 +53,29 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
                     elif kw_config.action == 'block_chunk':
-                        # At this stage (document level), we can't block just a chunk directly.
-                        # We'll redact and log a warning for now, indicating this document contains content
-                        # that should ideally be split and then blocked at chunking.
                         replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.warning(f"Keyword '{keyword}' found. This document contains content that should ideally be blocked at chunk level. Currently redacting.")
-                    elif kw_config.action == 'block_document': # In URL loader, 'document' refers to the entire webpage
+                    elif kw_config.action == 'block_document':
                         logger.warning(f"Keyword '{keyword}' found. Webpage is marked for blocking by policy. Content will be discarded.")
                         document_blocked = True
-                        return "", document_blocked # Return empty content and blocked flag
+                        return "", document_blocked
 
     return processed_text, document_blocked
 
 
-def load(url: str, agent_config: Optional[AgentConfig] = None) -> List[Document]: # Added agent_config
+async def load(url: str, agent_config: Optional[AgentConfig] = None, source: Optional[DataSource] = None) -> List[Document]: # MODIFIED: Added source parameter
     """
     Loads a webpage and creates a single Document from its main content,
     with URL scheme validation, data policy application, and standardized error logging.
+    Now supports enriched metadata for lineage.
     """
     try:
         # --- Input Validation: URL Scheme ---
+        if not url:
+            logger.error("Error: A starting URL is required for the web crawler.")
+            return []
+
         parsed_url = urlparse(url)
         if parsed_url.scheme not in ['http', 'https']:
             logger.error(f"Attempted to load from unsupported URL scheme: {parsed_url.scheme} in {url}. Only 'http' and 'https' are allowed for security reasons.")
@@ -94,37 +97,47 @@ def load(url: str, agent_config: Optional[AgentConfig] = None) -> List[Document]
         processed_text = text
         document_blocked = False
 
-        # Apply data policies if provided in agent_config
         if agent_config and agent_config.data_policies:
             logger.info(f"Applying data policies to content from URL: {url}...")
             processed_text, document_blocked = _apply_data_policies(text, agent_config.data_policies)
 
         if document_blocked:
             logger.warning(f"Content from URL '{url}' was completely blocked by a data policy and will not be processed.")
-            return [] # Return empty list if document is blocked
+            return []
 
         if processed_text.strip(): # Ensure there's actual content left after policies
+            # Create base metadata for the webpage
+            metadata = {
+                "source_url": url, # Full URL for lineage
+                "file_name": parsed_url.netloc + parsed_url.path.replace('/', '_'), # Basic file name
+                "file_path": url, # Treat URL as path for consistency
+                "load_timestamp": datetime.now().isoformat(), # NEW: Add load timestamp
+            }
+            # Add general source info if available from the DataSource object
+            if source: # NEW: Add info from DataSource object for lineage
+                metadata["source_type_config"] = source.model_dump() # Store entire DataSource config
+                if source.path: metadata["source_path"] = source.path
+                if source.db_connection: metadata["source_db_connection"] = source.db_connection
+                if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
+                if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
+
+            metadata["source_type"] = source.type if source else "url" # Use DataSource type or default
+
             doc = Document(
                 page_content=processed_text,
-                metadata={
-                    "source": url,
-                    "source_type": "url",
-                    "url": url, # Specific metadata for consistency
-                    "file_name": url.split('/')[-1] if url.split('/')[-1] else urlparse(url).netloc, # Simple file_name
-                    "file_path": url # Treat URL as path for consistency
-                }
+                metadata={**metadata} # Use the enriched metadata
             )
-            logger.info(f"Successfully extracted and processed content from {url}.")
+            logger.info(f"Successfully extracted and processed content from {url} with enriched metadata.")
             return [doc]
         else:
             logger.warning(f"Content extraction from {url} resulted in empty text after policy application. Skipping document creation.")
             return []
-    except trafilatura.errors.NonSuccessfulRequest as e: # Catch trafilatura specific errors if needed
+    except trafilatura.errors.NonSuccessfulRequest as e:
         logger.error(f"Trafilatura failed to fetch URL {url} due to non-successful request: {e}", exc_info=True)
         return []
-    except ValueError as e: # Catches validation errors we raise
+    except ValueError as e:
         logger.error(f"Validation error for URL {url}: {e}")
         return []
-    except Exception as e: # Catch any other unexpected errors
+    except Exception as e:
         logger.error(f"An unexpected error occurred while loading URL {url}: {e}", exc_info=True)
         return []

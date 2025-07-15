@@ -139,8 +139,8 @@ async def load_documents_from_source(source: DataSource, agent_config: AgentConf
     logger.info(f"Dispatching to loader for source type: '{source_type}'")
     loaded_docs: List[LangChainDocument] = []
 
-    # Prepare common loader arguments that all async loaders now accept
-    loader_args = {'agent_config': agent_config}
+    # Each loader's 'load' function should now accept a 'source' argument if it needs it for metadata enrichment.
+    loader_args = {'agent_config': agent_config, 'source': source}
 
     try:
         if source_type == "local":
@@ -195,8 +195,18 @@ async def load_documents_from_source(source: DataSource, agent_config: AgentConf
         return []
 
     for idx, doc in enumerate(loaded_docs):
+        # Ensure 'source' metadata is consistently added/updated from the DataSource object
+        doc.metadata['source_type'] = source.type # Consistently set source_type from DataSource
+        if source.path:
+            doc.metadata['source_path'] = source.path # Detailed path
+        if source.url:
+            doc.metadata['source_url'] = source.url # Detailed URL
+        if source.db_connection:
+            doc.metadata['source_db_connection'] = source.db_connection # Detailed DB connection string
+
+        # Original doc ID generation as before
         source_identifier = doc.metadata.get('source', source.path or source.url or source.type)
-        if reproducible_ids: # This is where reproducible_ids is used
+        if reproducible_ids:
             hash_input = f"{source_identifier}-{idx}-{doc.page_content}"
             doc.metadata['original_doc_id'] = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
         else:

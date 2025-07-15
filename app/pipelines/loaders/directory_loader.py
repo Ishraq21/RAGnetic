@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import List, Optional
 from langchain_core.documents import Document
 import asyncio
-import concurrent.futures  # NEW: For ThreadPoolExecutor
+import concurrent.futures
+from datetime import datetime  # NEW: Import datetime for load_timestamp
 
 from app.core.config import get_path_settings
-from app.schemas.agent import AgentConfig, DataPolicy
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource  # MODIFIED: Import DataSource
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,8 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
     return processed_text, document_blocked
 
 
-def _process_single_file(file_path: Path, policies: Optional[List[DataPolicy]]) -> Optional[Document]:
+def _process_single_file(file_path: Path, policies: Optional[List[DataPolicy]], source: Optional[DataSource]) -> \
+Optional[Document]:  # MODIFIED: Added source parameter
     """
     Synchronously processes a single text file from a directory.
     This function is designed to be run in a ThreadPoolExecutor.
@@ -107,9 +109,6 @@ def _process_single_file(file_path: Path, policies: Optional[List[DataPolicy]]) 
         return None  # Skip directories
 
     try:
-        # Currently, this loader directly handles .txt files.
-        # In a more advanced version, this would dispatch to other loaders (pdf_loader.load, docx_loader.load etc.)
-        # and would need to pass agent_config to them. For this iteration, we keep it simple for .txt.
         if file_path.suffix.lower() == '.txt':
             with open(file_path, "r", encoding="utf-8", errors='ignore') as f:
                 text = f.read()
@@ -127,14 +126,29 @@ def _process_single_file(file_path: Path, policies: Optional[List[DataPolicy]]) 
                 return None
 
             if processed_text.strip():
+                # Create base metadata for the document
+                metadata = {
+                    "source_path": str(file_path.resolve()),  # Full path for lineage
+                    "file_name": file_path.name,
+                    "file_type": file_path.suffix.lower(),
+                    "load_timestamp": datetime.now().isoformat(),  # Add load timestamp
+                }
+                # Add general source info if available from the DataSource object
+                if source:  # NEW: Add info from DataSource object for lineage
+                    metadata["source_type_config"] = source.model_dump()  # Store entire DataSource config
+                    if source.url: metadata["source_url"] = source.url
+                    if source.db_connection: metadata["source_db_connection"] = source.db_connection
+                    if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
+                    if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
+
+                # Note: For directory loader, source_type is typically 'local',
+                # but we're pulling specific file types (like .txt) for processing here.
+                # The primary source type comes from the DataSource object itself.
+                metadata["source_type"] = source.type if source else "local_directory"  # Use DataSource type or default
+
                 return Document(
                     page_content=processed_text,
-                    metadata={
-                        "source": str(file_path.resolve()),
-                        "source_type": "local_directory",
-                        "file_name": file_path.name,
-                        "file_path": str(file_path)
-                    }
+                    metadata={**metadata}  # Use the enriched metadata
                 )
             else:
                 logger.debug(f"File '{file_path.name}' had no content after policy application or was empty.")
@@ -149,7 +163,8 @@ def _process_single_file(file_path: Path, policies: Optional[List[DataPolicy]]) 
         return None
 
 
-async def load(folder_path: str, agent_config: Optional[AgentConfig] = None) -> List[Document]:
+async def load(folder_path: str, agent_config: Optional[AgentConfig] = None, source: Optional[DataSource] = None) -> \
+List[Document]:  # MODIFIED: Added source parameter
     """
     Loads all files from a local directory, applying data policies.
     Supports parallel loading of files within the directory based on agent_config.scaling.
@@ -169,8 +184,7 @@ async def load(folder_path: str, agent_config: Optional[AgentConfig] = None) -> 
 
         policies = agent_config.data_policies if agent_config and agent_config.data_policies else []
 
-        # Determine number of workers for internal parallelization
-        num_workers = os.cpu_count() or 1  # Default to CPU count if not specified
+        num_workers = os.cpu_count() or 1
         if agent_config and agent_config.scaling and agent_config.scaling.num_ingestion_workers:
             num_workers = agent_config.scaling.num_ingestion_workers
 
@@ -182,7 +196,8 @@ async def load(folder_path: str, agent_config: Optional[AgentConfig] = None) -> 
             loop = asyncio.get_running_loop()
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
                 tasks = [
-                    loop.run_in_executor(executor, _process_single_file, file_path, policies)
+                    loop.run_in_executor(executor, _process_single_file, file_path, policies, source)
+                    # <-- Passed source
                     for file_path in all_files_in_dir
                 ]
                 processed_results = await asyncio.gather(*tasks)
@@ -191,14 +206,14 @@ async def load(folder_path: str, agent_config: Optional[AgentConfig] = None) -> 
 
         else:
             logger.info(f"Using sequential ingestion for directory: {safe_folder_path}")
-            # Sequential processing (if parallel_ingestion is False or not specified)
-            # This calls _process_single_file sequentially for each file.
+            # Sequential processing
             for file_path in all_files_in_dir:
-                doc = await asyncio.to_thread(_process_single_file, file_path, policies)
+                # MODIFIED: Pass 'source' object to _process_single_file
+                doc = await asyncio.to_thread(_process_single_file, file_path, policies, source)  # <-- Passed source
                 if doc is not None:
                     docs.append(doc)
 
-        logger.info(f"Successfully loaded {len(docs)} documents from {folder_path}.")
+        logger.info(f"Successfully loaded {len(docs)} documents from {folder_path} with enriched metadata.")
         return docs
     except ValueError as e:
         logger.error(f"Security error during local directory loading: {e}")
