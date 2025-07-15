@@ -25,7 +25,6 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
 from app.tools.arxiv_tool import get_arxiv_tool
-from app.tools.extraction_tool import get_extraction_tool
 from app.watcher import start_watcher
 from app.core.config import get_path_settings, get_server_api_keys # Import get_server_api_keys
 
@@ -262,7 +261,6 @@ async def _initialize_agent_session(initial_payload: dict) -> Optional[Dict]:
                 create_sql_toolkit(db_connection_string=db_source.db_connection, llm_model_name=agent_config.llm_model,
                                    llm_model_params=agent_config.model_params))
         if "arxiv" in agent_config.tools: all_tools.extend(get_arxiv_tool())
-        if "extractor" in agent_config.tools: all_tools.append(get_extraction_tool(agent_config))
 
         workflow = get_agent_workflow(all_tools)
 
