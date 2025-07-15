@@ -129,13 +129,18 @@ def _get_chunks_from_documents(
     return chunks
 
 
-async def load_documents_from_source(source: DataSource, reproducible_ids: bool = False) -> list[LangChainDocument]:
+async def load_documents_from_source(source: DataSource, agent_config: AgentConfig, reproducible_ids: bool) -> list[LangChainDocument]:
     """
-    Dispatcher function that calls the appropriate loader based on the source type.
+    Dispatcher function that calls the appropriate loader based on the source type,
+    passing the full agent_config for policy application and scaling settings,
+    and the reproducible_ids flag.
     """
     source_type = source.type
     logger.info(f"Dispatching to loader for source type: '{source_type}'")
     loaded_docs: List[LangChainDocument] = []
+
+    # Prepare common loader arguments that all async loaders now accept
+    loader_args = {'agent_config': agent_config}
 
     try:
         if source_type == "local":
@@ -145,36 +150,36 @@ async def load_documents_from_source(source: DataSource, reproducible_ids: bool 
                 return []
             if os.path.isfile(path):
                 if path.lower().endswith('.txt'):
-                    loaded_docs = await text_loader.load(path)
+                    loaded_docs = await text_loader.load(path, **loader_args)
                 elif path.lower().endswith('.pdf'):
-                    loaded_docs = await pdf_loader.load(path)
+                    loaded_docs = await pdf_loader.load(path, **loader_args)
                 elif path.lower().endswith('.docx'):
-                    loaded_docs = await docx_loader.load(path)
+                    loaded_docs = await docx_loader.load(path, **loader_args)
                 elif path.lower().endswith('.csv'):
-                    loaded_docs = await csv_loader.load(path)
+                    loaded_docs = await csv_loader.load(path, **loader_args)
                 elif path.lower().endswith('.ipynb'):
-                    loaded_docs = await notebook_loader.load_notebook(path)
+                    loaded_docs = await notebook_loader.load_notebook(path, **loader_args)
                 elif path.lower().endswith(('.tf', '.tfvars', '.yaml', '.yml')):
-                    loaded_docs = await iac_loader.load(path)
+                    loaded_docs = await iac_loader.load(path, **loader_args)
                 else:
                     logger.warning(f"Unsupported local file type: {path}. Skipping.")
             elif os.path.isdir(path):
-                loaded_docs = await directory_loader.load(path)
+                loaded_docs = await directory_loader.load(path, **loader_args)
         elif source_type == "code_repository":
-            loaded_docs = await code_repository_loader.load(source.path)
+            loaded_docs = await code_repository_loader.load(source.path, **loader_args)
         elif source_type == "url":
-            loaded_docs = await url_loader.load(source.url)
+            loaded_docs = await url_loader.load(source.url, **loader_args)
         elif source_type == "db":
-            loaded_docs = await db_loader.load(source.db_connection)
+            loaded_docs = await db_loader.load(source.db_connection, **loader_args)
         elif source_type == "gdoc":
             loaded_docs = await gdoc_loader.load(folder_id=source.folder_id, document_ids=source.document_ids,
-                                                 file_types=source.file_types)
+                                                 file_types=source.file_types, **loader_args)
         elif source_type == "web_crawler":
-            loaded_docs = await web_crawler_loader.load(url=source.url, max_depth=source.max_depth)
+            loaded_docs = await web_crawler_loader.load(url=source.url, max_depth=source.max_depth, **loader_args)
         elif source_type == "api":
             loaded_docs = await api_loader.load(url=source.url, method=source.method, headers=source.headers,
                                                 params=source.params, payload=source.payload,
-                                                json_pointer=source.json_pointer)
+                                                json_pointer=source.json_pointer, **loader_args)
         else:
             logger.warning(f"Unknown or unsupported source type: '{source_type}'. Skipping.")
             return []
@@ -186,7 +191,7 @@ async def load_documents_from_source(source: DataSource, reproducible_ids: bool 
 
     for idx, doc in enumerate(loaded_docs):
         source_identifier = doc.metadata.get('source', source.path or source.url or source.type)
-        if reproducible_ids:
+        if reproducible_ids: # This is where reproducible_ids is used
             hash_input = f"{source_identifier}-{idx}-{doc.page_content}"
             doc.metadata['original_doc_id'] = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
         else:
@@ -194,7 +199,7 @@ async def load_documents_from_source(source: DataSource, reproducible_ids: bool 
     return loaded_docs
 
 
-async def embed_agent_data(config: AgentConfig) -> bool:  # MODIFIED: Add return type hint
+async def embed_agent_data(config: AgentConfig) -> bool:
     """
     Main embedding pipeline. Loads, chunks, stores documents asynchronously, and saves a
     raw text copy of chunks for scalable BM25 initialization.
@@ -204,7 +209,7 @@ async def embed_agent_data(config: AgentConfig) -> bool:  # MODIFIED: Add return
     logger.info(f"Starting data embedding process for agent: '{config.name}'")
 
     loading_tasks = [
-        load_documents_from_source(source, config.reproducible_ids)
+        load_documents_from_source(source, config, config.reproducible_ids)
         for source in config.sources or []
     ]
 
@@ -221,7 +226,7 @@ async def embed_agent_data(config: AgentConfig) -> bool:  # MODIFIED: Add return
     if not all_docs:
         logger.info(
             f"No valid documents found for agent '{config.name}' from any specified sources. Skipping vector store creation.")
-        return False  # MODIFIED: Return False if no documents to embed
+        return False
 
     all_docs.sort(key=lambda d: d.metadata.get("original_doc_id", ""))
     logger.info(f"Loaded a total of {len(all_docs)} valid documents from all sources.")
@@ -239,7 +244,7 @@ async def embed_agent_data(config: AgentConfig) -> bool:  # MODIFIED: Add return
         # Ensure chunks are not empty before attempting vector store creation
         if not chunks:
             logger.info(f"No chunks generated for agent '{config.name}'. Skipping vector store creation.")
-            return False  # MODIFIED: Return False if no chunks generated
+            return False
 
         vs_config = config.vector_store
         db_type = vs_config.type

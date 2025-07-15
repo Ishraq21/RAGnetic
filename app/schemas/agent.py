@@ -116,6 +116,59 @@ class VectorStoreConfig(BaseModel):
     # id_key field has been removed as per simplification. Document.id will be used.
 
 
+class PIIConfig(BaseModel):
+    types: List[Literal['email', 'phone', 'ssn', 'credit_card', 'name']] = Field(
+        default_factory=lambda: ['email', 'phone'],
+        description="List of PII types to redact. Supported: 'email', 'phone', 'ssn', 'credit_card', 'name'."
+    )
+    redaction_char: str = Field(
+        "*",
+        description="Character to replace redacted PII with."
+    )
+    redaction_placeholder: Optional[str] = Field(
+        None,
+        description="Optional string to replace redacted PII (e.g., '[REDACTED_EMAIL]'). If None, uses redaction_char."
+    )
+
+class KeywordFilterConfig(BaseModel):
+    keywords: List[str] = Field(
+        ...,
+        description="List of keywords or phrases to filter/redact."
+    )
+    action: Literal['redact', 'block_chunk', 'block_document'] = Field(
+        'redact',
+        description="Action to take: 'redact' keyword, 'block_chunk' containing keyword, or 'block_document' containing keyword."
+    )
+    redaction_char: str = Field(
+        "*",
+        description="Character to replace redacted keywords with (if action is 'redact')."
+    )
+    redaction_placeholder: Optional[str] = Field(
+        None,
+        description="Optional string to replace redacted keywords (e.g., '[REDACTED_TERM]'). If None, uses redaction_char."
+    )
+
+class DataPolicy(BaseModel):
+    type: Literal['pii_redaction', 'keyword_filter']
+    pii_config: Optional[PIIConfig] = Field(
+        None,
+        description="Configuration for PII redaction policy."
+    )
+    keyword_filter_config: Optional[KeywordFilterConfig] = Field(
+        None,
+        description="Configuration for keyword filtering policy."
+    )
+
+    @field_validator('pii_config', 'keyword_filter_config')
+    @classmethod
+    def check_policy_config_is_present(cls, v, info):
+        if info.data['type'] == 'pii_redaction' and v is None:
+            raise ValueError('pii_config must be provided for pii_redaction policy type.')
+        if info.data['type'] == 'keyword_filter' and v is None:
+            raise ValueError('keyword_filter_config must be provided for keyword_filter policy type.')
+        return v
+
+
 class AgentConfig(BaseModel):
     name: str
     display_name: Optional[str] = None
@@ -165,5 +218,10 @@ class AgentConfig(BaseModel):
     llm_timeout: Optional[int] = Field(
         60, # Default to 60 seconds
         description="Timeout in seconds for LLM calls. Defaults to 60 seconds."
+    )
+
+    data_policies: Optional[List[DataPolicy]] = Field(
+        default_factory=list,
+        description="A list of data policies for redaction or filtering sensitive information during ingestion."
     )
 

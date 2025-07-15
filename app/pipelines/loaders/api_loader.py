@@ -2,10 +2,13 @@ import requests
 import json
 import jsonpointer
 import logging
+import re # Added for PII redaction
 from urllib.parse import urlparse
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from langchain_core.documents import Document
-import asyncio  # NEW: Added import for asynchronous operations
+import asyncio
+
+from app.schemas.agent import AgentConfig, DataPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +23,75 @@ def _make_request_blocking(url: str, method: str, headers: Dict, params: Dict, p
     response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
     return response.json()
 
+def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bool]:
+    """
+    Applies data policies (redaction/filtering) to the text content.
+    Returns the processed text and a boolean indicating if the document (API record) was blocked.
+    """
+    processed_text = text
+    document_blocked = False
 
-async def load(  # MODIFIED: Changed to async def
+    for policy in policies:
+        if policy.type == 'pii_redaction' and policy.pii_config:
+            pii_config = policy.pii_config
+            for pii_type in pii_config.types:
+                pattern = None
+                if pii_type == 'email':
+                    pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+                elif pii_type == 'phone':
+                    # Common phone number formats (adjust or enhance regex as needed for international formats)
+                    pattern = r'\b(?:\+\d{1,3}[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b'
+                elif pii_type == 'ssn':
+                    pattern = r'\b\d{3}[- ]?\d{2}[- ]?\d{4}\b'
+                elif pii_type == 'credit_card':
+                    # Basic credit card pattern (major issuers, e.g., Visa, Mastercard, Amex, Discover)
+                    pattern = r'\b(?:4\d{3}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|5[1-5]\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|3[47]\d{13}|6(?:011|5\d{2})[- ]?\d{4}[- ]?\d{4}[- ]?\d{4})\b'
+                elif pii_type == 'name':
+                    # Name redaction is complex and context-dependent.
+                    logger.warning(f"PII type '{pii_type}' (name) is complex and not fully implemented for regex-based redaction. Skipping for now.")
+                    continue
+
+                if pattern:
+                    replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 8) # Generic length
+                    if pii_type == 'credit_card': replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 16) # Specific length for CC
+                    processed_text = re.sub(pattern, replacement, processed_text)
+                    logger.debug(f"Applied {pii_type} redaction policy. Replaced with: {replacement}")
+
+        elif policy.type == 'keyword_filter' and policy.keyword_filter_config:
+            kw_config = policy.keyword_filter_config
+            for keyword in kw_config.keywords:
+                if keyword in processed_text:
+                    if kw_config.action == 'redact':
+                        replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
+                        processed_text = processed_text.replace(keyword, replacement)
+                        logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
+                    elif kw_config.action == 'block_chunk':
+                        # At this stage (API record/document level), we can't block just a chunk directly.
+                        # We'll redact and log a warning for now, indicating this record contains content
+                        # that should ideally be split and then blocked at chunking.
+                        replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
+                        processed_text = processed_text.replace(keyword, replacement)
+                        logger.warning(f"Keyword '{keyword}' found. This API record contains content that should ideally be blocked at chunk level. Currently redacting.")
+                    elif kw_config.action == 'block_document': # In API loader, 'document' refers to an API record
+                        logger.warning(f"Keyword '{keyword}' found. API record is marked for blocking by policy. Content will be discarded.")
+                        document_blocked = True
+                        return "", document_blocked # Return empty content and blocked flag
+
+    return processed_text, document_blocked
+
+
+async def load(
         url: str,
         method: str = 'GET',
         headers: Dict = None,
         params: Dict = None,
         payload: Dict = None,
-        json_pointer: str = None
+        json_pointer: str = None,
+        agent_config: Optional[AgentConfig] = None # NEW: Added agent_config
 ) -> List[Document]:
     """
     Fetches data from a REST API endpoint using GET or POST and creates a Document for each record,
-    with robust URL validation, timeouts, standardized error logging, and asynchronous operations.
+    with robust URL validation, timeouts, data policy application, standardized error logging, and asynchronous operations.
     """
     docs = []
     try:
@@ -53,14 +113,13 @@ async def load(  # MODIFIED: Changed to async def
 
         request_timeout = 30  # Standardized timeout
 
-        # MODIFIED: Run the blocking request in a separate thread
         data = await asyncio.to_thread(
             _make_request_blocking,
             url=url,
             method=method,
-            headers=headers,
-            params=params,
-            payload=payload,
+            headers=headers if headers is not None else {}, # Ensure headers and params are dicts
+            params=params if params is not None else {},
+            payload=payload if payload is not None else {},
             request_timeout=request_timeout
         )
 
@@ -80,13 +139,36 @@ async def load(  # MODIFIED: Changed to async def
 
         for record in records:
             content = json.dumps(record, indent=2)
-            doc = Document(
-                page_content=content,
-                metadata={"source": url, "source_type": "api"}
-            )
-            docs.append(doc)
 
-        logger.info(f"Loaded {len(docs)} records from API endpoint: {url}")
+            processed_text = content
+            document_blocked = False
+
+            # Apply data policies if provided in agent_config
+            if agent_config and agent_config.data_policies:
+                logger.debug(f"Applying data policies to API record from {url}...")
+                processed_text, document_blocked = _apply_data_policies(content, agent_config.data_policies)
+
+            if document_blocked:
+                logger.warning(f"API record from '{url}' was completely blocked by a data policy and will not be processed.")
+                continue # Skip this record if it's blocked
+
+            if processed_text.strip(): # Ensure there's actual content left after policies
+                doc = Document(
+                    page_content=processed_text,
+                    metadata={
+                        "source": url,
+                        "source_type": "api",
+                        "api_url": url, # More specific metadata
+                        "method": method.upper(),
+                        "json_pointer": json_pointer if json_pointer else "root"
+                    }
+                )
+                docs.append(doc)
+            else:
+                logger.debug(f"API record from '{url}' had no content after policy application or was empty.")
+
+
+        logger.info(f"Loaded {len(docs)} processed records from API endpoint: {url}")
         return docs
 
     except ValueError as e:

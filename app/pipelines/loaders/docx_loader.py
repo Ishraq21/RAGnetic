@@ -1,13 +1,14 @@
 import docx
 import logging
 import os
+import re # Added for PII redaction
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from langchain_core.documents import Document
 import asyncio
 
-# NEW: Import get_path_settings from centralized config
 from app.core.config import get_path_settings
+from app.schemas.agent import AgentConfig, DataPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +39,71 @@ def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
 
     return resolved_path
 
+def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bool]:
+    """
+    Applies data policies (redaction/filtering) to the text content.
+    Returns the processed text and a boolean indicating if the document was blocked.
+    """
+    processed_text = text
+    document_blocked = False
 
-async def load(file_path: str) -> List[Document]:
+    for policy in policies:
+        if policy.type == 'pii_redaction' and policy.pii_config:
+            pii_config = policy.pii_config
+            for pii_type in pii_config.types:
+                pattern = None
+                if pii_type == 'email':
+                    pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+                elif pii_type == 'phone':
+                    # Common phone number formats (adjust or enhance regex as needed for international formats)
+                    pattern = r'\b(?:\+\d{1,3}[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b'
+                elif pii_type == 'ssn':
+                    pattern = r'\b\d{3}[- ]?\d{2}[- ]?\d{4}\b'
+                elif pii_type == 'credit_card':
+                    # Basic credit card pattern (major issuers, e.g., Visa, Mastercard, Amex, Discover)
+                    pattern = r'\b(?:4\d{3}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|5[1-5]\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|3[47]\d{13}|6(?:011|5\d{2})[- ]?\d{4}[- ]?\d{4}[- ]?\d{4})\b'
+                elif pii_type == 'name':
+                    # Name redaction is complex and context-dependent.
+                    # For initial phase, might require a simple list of common names or a rule.
+                    # More advanced NLP or entity recognition would be needed for robust name redaction.
+                    logger.warning(f"PII type '{pii_type}' (name) is complex and not fully implemented for regex-based redaction. Skipping for now.")
+                    continue
+
+                if pattern:
+                    replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 8) # Generic length
+                    if pii_type == 'credit_card': replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 16) # Specific length for CC
+                    processed_text = re.sub(pattern, replacement, processed_text)
+                    logger.debug(f"Applied {pii_type} redaction policy. Replaced with: {replacement}")
+
+        elif policy.type == 'keyword_filter' and policy.keyword_filter_config:
+            kw_config = policy.keyword_filter_config
+            for keyword in kw_config.keywords:
+                if keyword in processed_text:
+                    if kw_config.action == 'redact':
+                        replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
+                        processed_text = processed_text.replace(keyword, replacement)
+                        logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
+                    elif kw_config.action == 'block_chunk':
+                        # At this stage (document level), we can't block just a chunk directly.
+                        # We'll redact and log a warning for now, indicating this document contains content
+                        # that should ideally be split and then blocked at chunking.
+                        replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
+                        processed_text = processed_text.replace(keyword, replacement)
+                        logger.warning(f"Keyword '{keyword}' found. This document contains content that should ideally be blocked at chunk level. Currently redacting.")
+                    elif kw_config.action == 'block_document':
+                        logger.warning(f"Keyword '{keyword}' found. Document is marked for blocking by policy. Content will be discarded.")
+                        document_blocked = True
+                        return "", document_blocked # Return empty content and blocked flag
+
+    return processed_text, document_blocked
+
+
+async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> List[Document]:
     """
     Loads a .docx file and creates a single Document from its content,
-    with path safety validation and standardized error logging.
+    with path safety validation, data policy application, and standardized error logging.
     Now supports asynchronous loading.
     """
-    docs = []
     try:
         # First, validate the file_path itself
         safe_file_path = _is_path_safe_and_within_allowed_dirs(file_path)
@@ -70,18 +128,32 @@ async def load(file_path: str) -> List[Document]:
 
         full_text = "\n".join([para.text for para in document.paragraphs])
 
-        if full_text.strip():
+        processed_text = full_text
+        document_blocked = False
+
+        # Apply data policies if provided in agent_config
+        if agent_config and agent_config.data_policies:
+            logger.info(f"Applying data policies to {safe_file_path.name}...")
+            processed_text, document_blocked = _apply_data_policies(full_text, agent_config.data_policies)
+
+        if document_blocked:
+            logger.warning(f"DOCX document '{safe_file_path.name}' was completely blocked by a data policy and will not be processed.")
+            return [] # Return empty list if document is blocked
+
+        if processed_text.strip(): # Check if content remains after policies
             doc = Document(
-                page_content=full_text,
+                page_content=processed_text,
                 metadata={
                     "source": str(safe_file_path.resolve()),
-                    "source_type": "docx"
+                    "source_type": "docx",
+                    "file_name": safe_file_path.name, # Added for consistency
+                    "file_path": str(safe_file_path)  # Added for consistency
                 }
             )
-            logger.info(f"Loaded content from {safe_file_path.name}")
+            logger.info(f"Loaded and processed content from {safe_file_path.name}")
             return [doc]
         else:
-            logger.warning(f"DOCX file {safe_file_path.name} contained no readable text. Skipping document creation.")
+            logger.warning(f"DOCX file {safe_file_path.name} contained no readable text or all content was redacted/filtered. Skipping document creation.")
             return []
     except Exception as e:
         logger.error(f"Error loading .docx file {file_path}: {e}", exc_info=True)
