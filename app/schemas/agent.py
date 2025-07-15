@@ -136,16 +136,10 @@ class AgentConfig(BaseModel):
         default_factory=list,
         description="A list of data sources for the agent to retrieve information from. Optional for generic chatbots."
     )
-    tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv', 'extractor']]] = Field(
+    tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv']]] = Field(
         default_factory=list,
         description="A list of tools the agent can use. Defaults to an empty list, meaning no tools are used unless specified."
     )
-
-    extraction_schema: Optional[Dict[str, str]] = Field(
-        None,
-        description="A dictionary defining the schema for the extractor tool. Key is the attribute name, value is the description."
-    )
-
 
     # Users can now specify models in their agent.yaml file.
     # Default models if they are omitted.
@@ -155,10 +149,6 @@ class AgentConfig(BaseModel):
     vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig, description="The vector database to use for the agent.")
 
     # For PyTest
-    extraction_examples: Optional[List[tuple[str, Any]]] = Field(
-        None,
-        description="A list of few-shot examples (text, expected_output) for the extractor tool."
-    )
     evaluation_llm_model: Optional[str] = Field(
         None,
         description="Optional LLM to use specifically for evaluation tasks (e.g., test set generation, LLM-as-a-judge)."
