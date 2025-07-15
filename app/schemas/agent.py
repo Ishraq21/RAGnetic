@@ -169,6 +169,18 @@ class DataPolicy(BaseModel):
         return v
 
 
+class ScalingConfig(BaseModel):
+    """Configuration for scaling data ingestion and processing."""
+    parallel_ingestion: bool = Field(
+        False,
+        description="If true, enables parallel processing of multiple items within a single source (e.g., files in a directory, API records)."
+    )
+    num_ingestion_workers: Optional[int] = Field(
+        None,
+        description="Number of parallel workers/processes to use for ingestion. If None, defaults to CPU count."
+    )
+
+
 class AgentConfig(BaseModel):
     name: str
     display_name: Optional[str] = None
@@ -225,3 +237,8 @@ class AgentConfig(BaseModel):
         description="A list of data policies for redaction or filtering sensitive information during ingestion."
     )
 
+
+    scaling: ScalingConfig = Field(
+        default_factory=ScalingConfig,
+        description="Configuration for parallel data ingestion and processing within a single source."
+    )
