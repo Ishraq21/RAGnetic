@@ -268,8 +268,8 @@ async def _initialize_agent_session(initial_payload: dict) -> Optional[Dict]:
 
         # NEW: Register the Search Engine Tool using the custom SearchTool class
         if "search_engine" in agent_config.tools:
-            # Instantiate the custom SearchTool class. It inherently knows its name, description, and args_schema.
-            search_tool_instance = SearchTool()
+            # MODIFIED: Pass agent_config during SearchTool instantiation
+            search_tool_instance = SearchTool(agent_config=agent_config)
             all_tools.append(search_tool_instance)
 
         workflow = get_agent_workflow(all_tools)
