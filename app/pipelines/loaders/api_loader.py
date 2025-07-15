@@ -7,8 +7,10 @@ from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional
 from langchain_core.documents import Document
 import asyncio
+from datetime import datetime
 
-from app.schemas.agent import AgentConfig, DataPolicy
+# NEW: Import DataSource for lineage
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 
 logger = logging.getLogger(__name__)
 
@@ -66,16 +68,13 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
                     elif kw_config.action == 'block_chunk':
-                        # At this stage (API record/document level), we can't block just a chunk directly.
-                        # We'll redact and log a warning for now, indicating this record contains content
-                        # that should ideally be split and then blocked at chunking.
                         replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.warning(f"Keyword '{keyword}' found. This API record contains content that should ideally be blocked at chunk level. Currently redacting.")
-                    elif kw_config.action == 'block_document': # In API loader, 'document' refers to an API record
+                    elif kw_config.action == 'block_document':
                         logger.warning(f"Keyword '{keyword}' found. API record is marked for blocking by policy. Content will be discarded.")
                         document_blocked = True
-                        return "", document_blocked # Return empty content and blocked flag
+                        return "", document_blocked
 
     return processed_text, document_blocked
 
@@ -87,11 +86,13 @@ async def load(
         params: Dict = None,
         payload: Dict = None,
         json_pointer: str = None,
-        agent_config: Optional[AgentConfig] = None # NEW: Added agent_config
+        agent_config: Optional[AgentConfig] = None,
+        source: Optional[DataSource] = None # MODIFIED: Added source parameter
 ) -> List[Document]:
     """
     Fetches data from a REST API endpoint using GET or POST and creates a Document for each record,
-    with robust URL validation, timeouts, data policy application, standardized error logging, and asynchronous operations.
+    with robust URL validation, timeouts, data policy application, standardized error logging,
+    asynchronous operations, and enriched metadata for lineage.
     """
     docs = []
     try:
@@ -117,7 +118,7 @@ async def load(
             _make_request_blocking,
             url=url,
             method=method,
-            headers=headers if headers is not None else {}, # Ensure headers and params are dicts
+            headers=headers if headers is not None else {},
             params=params if params is not None else {},
             payload=payload if payload is not None else {},
             request_timeout=request_timeout
@@ -137,38 +138,49 @@ async def load(
         if not isinstance(records, list):
             records = [records]
 
-        for record in records:
+        for record_idx, record in enumerate(records): # MODIFIED: Iterate with index for record number
             content = json.dumps(record, indent=2)
 
             processed_text = content
             document_blocked = False
 
-            # Apply data policies if provided in agent_config
             if agent_config and agent_config.data_policies:
-                logger.debug(f"Applying data policies to API record from {url}...")
+                logger.debug(f"Applying data policies to API record {record_idx + 1} from {url}...")
                 processed_text, document_blocked = _apply_data_policies(content, agent_config.data_policies)
 
             if document_blocked:
-                logger.warning(f"API record from '{url}' was completely blocked by a data policy and will not be processed.")
-                continue # Skip this record if it's blocked
+                logger.warning(f"API record {record_idx + 1} from '{url}' was completely blocked by a data policy and will not be processed.")
+                continue
 
-            if processed_text.strip(): # Ensure there's actual content left after policies
+            if processed_text.strip():
+                # Create base metadata for the API record
+                metadata = {
+                    "source_url": url, # Full URL for lineage
+                    "api_method": method.upper(), # API Method (GET/POST)
+                    "json_pointer_path": json_pointer if json_pointer else "root", # JSON Pointer used
+                    "record_number": record_idx + 1, # Specific for API records
+                    "load_timestamp": datetime.now().isoformat(), # NEW: Add load timestamp
+                }
+                # Add general source info if available from the DataSource object
+                if source: # NEW: Add info from DataSource object for lineage
+                    metadata["source_type_config"] = source.model_dump() # Store entire DataSource config
+                    if source.path: metadata["source_path"] = source.path # e.g. for local OpenAPI spec file
+                    if source.db_connection: metadata["source_db_connection"] = source.db_connection
+                    if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
+                    if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
+
+                metadata["source_type"] = source.type if source else "api" # Use DataSource type or default
+
                 doc = Document(
                     page_content=processed_text,
-                    metadata={
-                        "source": url,
-                        "source_type": "api",
-                        "api_url": url, # More specific metadata
-                        "method": method.upper(),
-                        "json_pointer": json_pointer if json_pointer else "root"
-                    }
+                    metadata={**metadata} # Use the enriched metadata
                 )
                 docs.append(doc)
             else:
-                logger.debug(f"API record from '{url}' had no content after policy application or was empty.")
+                logger.debug(f"API record {record_idx + 1} from '{url}' had no content after policy application or was empty.")
 
 
-        logger.info(f"Loaded {len(docs)} processed records from API endpoint: {url}")
+        logger.info(f"Loaded {len(docs)} processed records from API endpoint: {url} with enriched metadata.")
         return docs
 
     except ValueError as e:

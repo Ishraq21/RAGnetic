@@ -6,9 +6,12 @@ from pathlib import Path
 from typing import List, Optional
 from langchain_core.documents import Document
 import asyncio
+from datetime import datetime
 
+# NEW: Import get_path_settings from centralized config
 from app.core.config import get_path_settings
-from app.schemas.agent import AgentConfig, DataPolicy
+# NEW: Import AgentConfig, DataPolicy, DataSource for policy application and lineage
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +67,6 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                     pattern = r'\b(?:4\d{3}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|5[1-5]\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|3[47]\d{13}|6(?:011|5\d{2})[- ]?\d{4}[- ]?\d{4}[- ]?\d{4})\b'
                 elif pii_type == 'name':
                     # Name redaction is complex and context-dependent.
-                    # For initial phase, might require a simple list of common names or a rule.
-                    # More advanced NLP or entity recognition would be needed for robust name redaction.
                     logger.warning(f"PII type '{pii_type}' (name) is complex and not fully implemented for regex-based redaction. Skipping for now.")
                     continue
 
@@ -98,14 +99,13 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
     return processed_text, document_blocked
 
 
-async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> List[Document]:
+async def load(file_path: str, agent_config: Optional[AgentConfig] = None, source: Optional[DataSource] = None) -> List[Document]:
     """
     Loads a .docx file and creates a single Document from its content,
     with path safety validation, data policy application, and standardized error logging.
-    Now supports asynchronous loading.
+    Now supports asynchronous loading and enriched metadata.
     """
     try:
-        # First, validate the file_path itself
         safe_file_path = _is_path_safe_and_within_allowed_dirs(file_path)
 
         if not safe_file_path.exists():
@@ -120,7 +120,6 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> Li
 
         logger.info(f"Opening DOCX file: {safe_file_path}")
 
-        # MODIFIED: Run docx.Document() in a separate thread because it's blocking I/O
         def _open_docx_blocking():
             return docx.Document(safe_file_path)
 
@@ -131,26 +130,36 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> Li
         processed_text = full_text
         document_blocked = False
 
-        # Apply data policies if provided in agent_config
         if agent_config and agent_config.data_policies:
             logger.info(f"Applying data policies to {safe_file_path.name}...")
             processed_text, document_blocked = _apply_data_policies(full_text, agent_config.data_policies)
 
         if document_blocked:
             logger.warning(f"DOCX document '{safe_file_path.name}' was completely blocked by a data policy and will not be processed.")
-            return [] # Return empty list if document is blocked
+            return []
 
-        if processed_text.strip(): # Check if content remains after policies
+        if processed_text.strip():
+            # Create base metadata from file itself
+            metadata = {
+                "source_path": str(safe_file_path.resolve()),
+                "file_name": safe_file_path.name,
+                "file_type": safe_file_path.suffix.lower(),
+                "load_timestamp": datetime.now().isoformat(),
+                # No page_number for DOCX as it's typically treated as single content block before chunking
+            }
+            # Add general source info if available from the DataSource object
+            if source:
+                metadata["source_type_config"] = source.model_dump() # Store entire DataSource config
+                if source.url: metadata["source_url"] = source.url
+                if source.db_connection: metadata["source_db_connection"] = source.db_connection
+                if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
+                if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
+
             doc = Document(
                 page_content=processed_text,
-                metadata={
-                    "source": str(safe_file_path.resolve()),
-                    "source_type": "docx",
-                    "file_name": safe_file_path.name, # Added for consistency
-                    "file_path": str(safe_file_path)  # Added for consistency
-                }
+                metadata={**metadata} # Use the enriched metadata
             )
-            logger.info(f"Loaded and processed content from {safe_file_path.name}")
+            logger.info(f"Loaded and processed content from {safe_file_path.name} with enriched metadata.")
             return [doc]
         else:
             logger.warning(f"DOCX file {safe_file_path.name} contained no readable text or all content was redacted/filtered. Skipping document creation.")

@@ -6,9 +6,10 @@ from typing import List, Optional
 from langchain_core.documents import Document
 from langchain_community.document_loaders import NotebookLoader
 import asyncio
+from datetime import datetime
 
 from app.core.config import get_path_settings
-from app.schemas.agent import AgentConfig, DataPolicy
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 
 logger = logging.getLogger(__name__)
 
@@ -82,32 +83,27 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
                     elif kw_config.action == 'block_chunk':
-                        # At this stage (cell level), we can't block just a chunk directly within the cell.
-                        # We'll redact and log a warning for now, indicating this cell contains content
-                        # that should ideally be split and then blocked at chunking.
                         replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.warning(f"Keyword '{keyword}' found. This cell contains content that should ideally be blocked at chunk level. Currently redacting.")
-                    elif kw_config.action == 'block_document': # In notebook loader, 'document' refers to a 'cell'
+                    elif kw_config.action == 'block_document':
                         logger.warning(f"Keyword '{keyword}' found. Cell is marked for blocking by policy. Content will be discarded.")
                         document_blocked = True
-                        return "", document_blocked # Return empty content and blocked flag
+                        return "", document_blocked
 
     return processed_text, document_blocked
 
 
-async def load_notebook(path: str, agent_config: Optional[AgentConfig] = None) -> List[Document]: # Added agent_config
+async def load_notebook(path: str, agent_config: Optional[AgentConfig] = None, source: Optional[DataSource] = None) -> List[Document]:
     """
     Loads a Jupyter Notebook (.ipynb) file from the given path,
     with path safety validation, data policy application, and standardized error logging.
-    Now supports asynchronous loading.
+    Now supports asynchronous loading and enriched metadata.
     """
     processed_documents = []
     try:
-        # First, validate the path itself for safety
         safe_path = _is_path_safe_and_within_allowed_dirs(path)
 
-        # Validate file existence and type
         if not safe_path.exists():
             logger.error(f"Error: Notebook file not found at {safe_path}")
             return []
@@ -121,36 +117,52 @@ async def load_notebook(path: str, agent_config: Optional[AgentConfig] = None) -
         logger.info(f"Attempting to load Jupyter Notebook from safe path: {safe_path}")
 
         loader = NotebookLoader(
-            str(safe_path),  # Ensure path is a string for NotebookLoader
+            str(safe_path),
             include_outputs=True,
             max_output_length=100,
             remove_newline=True
         )
         documents = await asyncio.to_thread(loader.load)
 
-        for doc in documents:
+        for doc_index, doc in enumerate(documents): # Iterate with index for cell metadata
             processed_text = doc.page_content
             document_blocked = False
 
-            # Apply data policies if provided in agent_config
             if agent_config and agent_config.data_policies:
-                logger.debug(f"Applying data policies to notebook cell from {safe_path.name}...")
+                logger.debug(f"Applying data policies to notebook cell {doc_index + 1} from {safe_path.name}...")
                 processed_text, document_blocked = _apply_data_policies(doc.page_content, agent_config.data_policies)
 
             if document_blocked:
-                logger.warning(f"Notebook cell from '{safe_path.name}' was completely blocked by a data policy and will not be processed.")
-                continue # Skip this cell if it's blocked
+                logger.warning(f"Notebook cell {doc_index + 1} from '{safe_path.name}' was completely blocked by a data policy and will not be processed.")
+                continue
 
-            if processed_text.strip(): # Ensure there's actual content left after policies
+            if processed_text.strip():
+                # Create base metadata for the cell
+                metadata = {
+                    "source_path": str(safe_path.resolve()), # Full path for lineage
+                    "file_name": safe_path.name,
+                    "file_type": safe_path.suffix.lower(),
+                    "load_timestamp": datetime.now().isoformat(), # NEW: Add load timestamp
+                    "cell_number": doc_index + 1, # Specific to notebooks
+                    **doc.metadata # Preserve existing metadata from NotebookLoader (e.g., cell type, execution order)
+                }
+                # Add granular DataSource info if available
+                if source: # NEW: Add info from DataSource object for lineage
+                    metadata["source_type_config"] = source.model_dump()
+                    if source.url: metadata["source_url"] = source.url
+                    if source.db_connection: metadata["source_db_connection"] = source.db_connection
+                    if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
+                    if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
+
+
                 doc.page_content = processed_text # Update the document with processed text
-                doc.metadata['file_name'] = safe_path.name # Added for consistency
-                doc.metadata['file_path'] = str(safe_path) # Added for consistency
+                doc.metadata = metadata # Overwrite with enriched metadata (or merge)
                 processed_documents.append(doc)
             else:
-                logger.debug(f"Notebook cell from '{safe_path.name}' had no content after policy application or was empty.")
+                logger.debug(f"Notebook cell {doc_index + 1} from '{safe_path.name}' had no content after policy application or was empty.")
 
 
-        logger.info(f"Successfully loaded {len(processed_documents)} processed cells from notebook: {safe_path.name}")
+        logger.info(f"Loaded {len(processed_documents)} processed cells from notebook: {safe_path.name} with enriched metadata.")
         return processed_documents
     except ValueError as e:
         logger.error(f"Security or validation error during notebook loading: {e}")

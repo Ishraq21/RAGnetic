@@ -8,8 +8,10 @@ import os
 import json
 import configparser
 import asyncio
+from datetime import datetime # NEW: Import datetime for load_timestamp
 
-from app.schemas.agent import AgentConfig, DataPolicy
+
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 
 logger = logging.getLogger(__name__)
 
@@ -75,16 +77,13 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
                     elif kw_config.action == 'block_chunk':
-                        # At this stage (document level), we can't block just a chunk directly.
-                        # We'll redact and log a warning for now, indicating this document contains content
-                        # that should ideally be split and then blocked at chunking.
                         replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.warning(f"Keyword '{keyword}' found. This document contains content that should ideally be blocked at chunk level. Currently redacting.")
-                    elif kw_config.action == 'block_document': # In GDoc loader, 'document' refers to the entire GDoc
+                    elif kw_config.action == 'block_document':
                         logger.warning(f"Keyword '{keyword}' found. Document is marked for blocking by policy. Content will be discarded.")
                         document_blocked = True
-                        return "", document_blocked # Return empty content and blocked flag
+                        return "", document_blocked
 
     return processed_text, document_blocked
 
@@ -93,11 +92,13 @@ async def load(
         folder_id: str = None,
         document_ids: List[str] = None,
         file_types: List[str] = None,
-        agent_config: Optional[AgentConfig] = None # NEW: Added agent_config
+        agent_config: Optional[AgentConfig] = None,
+        source: Optional[DataSource] = None # MODIFIED: Added source parameter
 ) -> List[Document]:
     """
     Loads documents from Google Drive using credentials stored in the RAGnetic config file.
-    Includes robust credential loading, data policy application, standardized error logging, and asynchronous operations.
+    Includes robust credential loading, data policy application, standardized error logging,
+    asynchronous operations, and enriched metadata for lineage.
     """
     processed_docs = []
     try:
@@ -142,43 +143,50 @@ async def load(
         loader = GoogleDriveLoader(
             folder_id=folder_id,
             file_ids=document_ids,
-            credentials=credentials,  # Provide credentials directly to the loader
+            credentials=credentials,
             file_types=file_types,
-            recursive=False # Set to True if you want to recursively load from subfolders
+            recursive=False
         )
 
-        docs = await asyncio.to_thread(_load_gdrive_docs_blocking, loader)
+        docs_raw = await asyncio.to_thread(_load_gdrive_docs_blocking, loader) # Renamed to docs_raw to clarify
 
-        for doc in docs:
-            doc.metadata['source_type'] = 'gdoc'
-            # Ensure metadata has consistent file_name and file_path (using id or title if available)
-            if 'id' in doc.metadata:
-                doc.metadata['file_id'] = doc.metadata['id']
-            if 'title' in doc.metadata:
-                doc.metadata['file_name'] = doc.metadata['title']
-                doc.metadata['file_path'] = f"gdrive://{doc.metadata['id']}" # Conceptual path for GDrive
-
+        for doc in docs_raw: # Iterate over raw documents
             processed_text = doc.page_content
             document_blocked = False
 
-            # Apply data policies if provided in agent_config
             if agent_config and agent_config.data_policies:
                 logger.debug(f"Applying data policies to GDoc '{doc.metadata.get('title', doc.metadata.get('id', 'unknown'))}'...")
                 processed_text, document_blocked = _apply_data_policies(doc.page_content, agent_config.data_policies)
 
             if document_blocked:
                 logger.warning(f"GDoc '{doc.metadata.get('title', doc.metadata.get('id', 'unknown'))}' was completely blocked by a data policy and will not be processed.")
-                continue # Skip this document if it's blocked
+                continue
 
-            if processed_text.strip(): # Ensure there's actual content left after policies
+            if processed_text.strip():
+                # Create base metadata for the document
+                metadata = {
+                    "source_gdoc_id": doc.metadata.get('id', 'N/A'), # Specific GDoc ID
+                    "source_gdoc_title": doc.metadata.get('title', 'N/A'), # Specific GDoc Title
+                    "file_type": doc.metadata.get('mimeType', 'N/A'), # Specific MIME Type
+                    "load_timestamp": datetime.now().isoformat(), # NEW: Add load timestamp
+                }
+                # Add general source info from the DataSource object
+                if source: # NEW: Add info from DataSource object for lineage
+                    metadata["source_type_config"] = source.model_dump() # Store entire DataSource config
+                    if source.url: metadata["source_url"] = source.url # This would be the GDoc URL
+                    if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
+                    if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
+
+                # Merge with existing metadata from raw_documents (Langchain's GDriveLoader adds some)
                 doc.page_content = processed_text # Update the document with processed text
+                doc.metadata = {**doc.metadata, **metadata} # Merge, with new metadata taking precedence
                 processed_docs.append(doc)
             else:
                 logger.debug(f"GDoc '{doc.metadata.get('title', doc.metadata.get('id', 'unknown'))}' had no content after policy application or was empty.")
 
 
         source_info = folder_id or f"[{', '.join(document_ids)}]"
-        logger.info(f"Loaded {len(processed_docs)} processed documents from Google Drive source: {source_info}")
+        logger.info(f"Loaded {len(processed_docs)} processed documents from Google Drive source: {source_info} with enriched metadata.")
         return processed_docs
 
     except ValueError as e:

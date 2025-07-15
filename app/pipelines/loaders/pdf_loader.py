@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import List, Optional
 from langchain_core.documents import Document
 import asyncio
+from datetime import datetime
 
 # NEW: Import get_path_settings from centralized config
 from app.core.config import get_path_settings
 # NEW: Import AgentConfig and DataPolicy for policy application
-from app.schemas.agent import AgentConfig, DataPolicy
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 
 logger = logging.getLogger(__name__)
 
@@ -86,30 +87,26 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
                     elif kw_config.action == 'block_chunk':
-                        # At this stage (page level), we can't block just a chunk directly.
-                        # We'll redact and log a warning for now, indicating this page contains content
-                        # that should ideally be split and then blocked at chunking.
                         replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.warning(f"Keyword '{keyword}' found. This page contains content that should ideally be blocked at chunk level. Currently redacting.")
-                    elif kw_config.action == 'block_document': # In PDF loader, 'document' refers to a 'page'
+                    elif kw_config.action == 'block_document':
                         logger.warning(f"Keyword '{keyword}' found. Page is marked for blocking by policy. Content will be discarded.")
                         document_blocked = True
-                        return "", document_blocked # Return empty content and blocked flag
+                        return "", document_blocked
 
     return processed_text, document_blocked
 
 
-async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> List[Document]:
+async def load(file_path: str, agent_config: Optional[AgentConfig] = None, source: Optional[DataSource] = None) -> List[Document]:
     """
     Loads a PDF file and creates a Document for each page,
     with path safety validation, data policy application, and standardized error logging.
-    Now supports asynchronous loading.
+    Now supports asynchronous loading and enriched metadata.
     """
     docs = []
-    pdf_document = None # Initialize to None for finally block
+    pdf_document = None
     try:
-        # First, validate the file_path itself
         safe_file_path = _is_path_safe_and_within_allowed_dirs(file_path)
 
         if not safe_file_path.exists():
@@ -136,33 +133,44 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> Li
                 processed_text = text
                 page_blocked = False
 
-                # Apply data policies if provided in agent_config
                 if agent_config and agent_config.data_policies:
                     logger.debug(f"Applying data policies to page {page_num + 1} of {safe_file_path.name}...")
                     processed_text, page_blocked = _apply_data_policies(text, agent_config.data_policies)
 
                 if page_blocked:
                     logger.warning(f"Page {page_num + 1} of '{safe_file_path.name}' was completely blocked by a data policy and will not be processed.")
-                    continue # Skip this page if it's blocked
+                    continue
 
-                # Only add the document if it's not blocked and has content after processing
-                if processed_text.strip(): # Ensure there's actual content left
+                if processed_text.strip():
+                    # Create base metadata from file itself
+                    metadata = {
+                        "source_path": str(safe_file_path.resolve()),
+                        "file_name": safe_file_path.name,
+                        "file_type": safe_file_path.suffix.lower(),
+                        "load_timestamp": datetime.now().isoformat(), # NEW: Add load timestamp
+                        "page_number": page_num + 1,
+                        "num_pages": pdf_document.page_count # NEW: Add total page count
+                    }
+                    # Add granular DataSource info if available
+                    if source: # NEW: Add info from DataSource object
+                        metadata["source_type_config"] = source.model_dump()
+                        # Add specific fields from DataSource for better traceability
+                        if source.url: metadata["source_url"] = source.url
+                        if source.db_connection: metadata["source_db_connection"] = source.db_connection
+                        if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
+                        if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
+
+
                     doc = Document(
                         page_content=processed_text,
-                        metadata={
-                            "source": str(safe_file_path.resolve()),
-                            "source_type": "pdf",
-                            "page_number": page_num + 1,
-                            "file_name": safe_file_path.name, # Added for consistency
-                            "file_path": str(safe_file_path)  # Added for consistency
-                        }
+                        metadata={**metadata} # Use the enriched metadata
                     )
                     docs.append(doc)
                 else:
                     logger.debug(f"Page {page_num + 1} of '{safe_file_path.name}' had no content after policy application or was empty.")
 
 
-        logger.info(f"Loaded {len(docs)} processed pages from {safe_file_path.name}")
+        logger.info(f"Loaded {len(docs)} processed pages from {safe_file_path.name} with enriched metadata.")
         return docs
 
     except ValueError as e:

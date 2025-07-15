@@ -1,21 +1,22 @@
 import logging
 import os
-import re # Added for PII redaction
+import re
 from pathlib import Path
 from typing import List, Optional
+
 from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document
 import asyncio
 
 from app.core.config import get_path_settings
-from app.schemas.agent import AgentConfig, DataPolicy
-
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource
+from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # --- Centralized Path Configuration ---
 _PATH_SETTINGS = get_path_settings()
-_PROJECT_ROOT_FROM_CONFIG = _PATH_SETTINGS["PROJECT_ROOT"] # Store project root if needed
-_ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"] # Store resolved allowed dirs
+_PROJECT_ROOT_FROM_CONFIG = _PATH_SETTINGS["PROJECT_ROOT"]
+_ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"]
 logger.info(f"Loaded allowed data directories for text loader from central config: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
 # --- End Centralized Configuration ---
 
@@ -29,7 +30,7 @@ def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
     resolved_path = Path(input_path).resolve()
 
     is_safe = False
-    for allowed_dir in _ALLOWED_DATA_DIRS_RESOLVED: # This variable now comes from central config
+    for allowed_dir in _ALLOWED_DATA_DIRS_RESOLVED:
         if resolved_path.is_relative_to(allowed_dir):
             is_safe = True
             break
@@ -55,24 +56,18 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                 if pii_type == 'email':
                     pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
                 elif pii_type == 'phone':
-                    # Common phone number formats (adjust or enhance regex as needed for international formats)
                     pattern = r'\b(?:\+\d{1,3}[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b'
                 elif pii_type == 'ssn':
                     pattern = r'\b\d{3}[- ]?\d{2}[- ]?\d{4}\b'
                 elif pii_type == 'credit_card':
-                    # Basic credit card pattern (major issuers, e.g., Visa, Mastercard, Amex, Discover)
                     pattern = r'\b(?:4\d{3}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|5[1-5]\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|3[47]\d{13}|6(?:011|5\d{2})[- ]?\d{4}[- ]?\d{4}[- ]?\d{4})\b'
                 elif pii_type == 'name':
-                    # Name redaction is complex and context-dependent.
-                    # For initial phase, might require a simple list of common names or a rule.
-                    # More advanced NLP or entity recognition would be needed for robust name redaction.
-                    # For now, we'll keep it as a placeholder.
                     logger.warning(f"PII type '{pii_type}' (name) is complex and not fully implemented for regex-based redaction. Skipping for now.")
                     continue
 
                 if pattern:
-                    replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 8) # Generic length
-                    if pii_type == 'credit_card': replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 16) # Specific length for CC
+                    replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 8)
+                    if pii_type == 'credit_card': replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 16)
                     processed_text = re.sub(pattern, replacement, processed_text)
                     logger.debug(f"Applied {pii_type} redaction policy. Replaced with: {replacement}")
                     logger.info(f"Applied {pii_type} redaction policy. Replaced with: {replacement}")
@@ -87,21 +82,18 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                         logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
                         logger.info(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
                     elif kw_config.action == 'block_chunk':
-                        # At this stage (document level), we can't block just a chunk directly.
-                        # We'll redact and log a warning for now, indicating this document contains content
-                        # that should ideally be split and then blocked at chunking.
                         replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
                         processed_text = processed_text.replace(keyword, replacement)
                         logger.warning(f"Keyword '{keyword}' found. This document contains content that should ideally be blocked at chunk level. Currently redacting.")
                     elif kw_config.action == 'block_document':
                         logger.warning(f"Keyword '{keyword}' found. Document is marked for blocking by policy. Content will be discarded.")
                         document_blocked = True
-                        return "", document_blocked # Return empty content and blocked flag
+                        return "", document_blocked
 
     return processed_text, document_blocked
 
 
-async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> List[Document]:
+async def load(file_path: str, agent_config: Optional[AgentConfig] = None, source: Optional[DataSource] = None) -> List[Document]: # MODIFIED: Added source parameter
     """
     Loads a plain text file, with path safety validation, data policy application,
     and standardized error logging. Now supports asynchronous loading.
@@ -130,7 +122,7 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> Li
             return [] # No content loaded by underlying loader
 
         # Apply data policies if provided
-        processed_text = raw_documents[0].page_content # Assuming TextLoader loads into one document
+        processed_text = raw_documents[0].page_content
         document_blocked = False
 
         if agent_config and agent_config.data_policies:
@@ -141,10 +133,25 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> Li
             logger.warning(f"Document '{safe_file_path.name}' was completely blocked by a data policy and will not be processed.")
             return [] # Return empty list if document is blocked
 
-        # Create a new Document object with the processed text and original metadata
-        processed_doc = Document(page_content=processed_text, metadata=raw_documents[0].metadata)
+        # Create a new Document object with the processed text and enrich metadata
+        metadata = {
+            "source_path": str(safe_file_path.resolve()), # More specific path for lineage
+            "file_name": safe_file_path.name,
+            "file_type": safe_file_path.suffix.lower(),
+            "load_timestamp": datetime.now().isoformat(), # NEW: Add load timestamp
+        }
+        # Add general source info if available from the DataSource object
+        if source:
+            metadata["source_type_config"] = source.model_dump() # NEW: Store entire DataSource config for lineage
 
-        logger.info(f"Successfully loaded and processed text file: {safe_file_path.name}")
+        # Merge with existing metadata from raw_documents (if any, though TextLoader's is basic)
+        existing_metadata = raw_documents[0].metadata if raw_documents else {}
+        processed_doc = Document(
+            page_content=processed_text,
+            metadata={**existing_metadata, **metadata} # Merge, with new metadata taking precedence
+        )
+
+        logger.info(f"Successfully loaded and processed text file: {safe_file_path.name} with enriched metadata.")
         return [processed_doc]
 
     except ValueError as e:
@@ -152,3 +159,4 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> Li
         return []
     except Exception as e:
         logger.error(f"Failed to load text file {file_path}: {e}", exc_info=True)
+        return []

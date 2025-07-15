@@ -1,15 +1,16 @@
 import logging
 import os
-import re  # Added for PII redaction
+import re
 from pathlib import Path
 from typing import List, Optional
 import asyncio
-import pandas as pd  # Import pandas
+import pandas as pd
+from datetime import datetime
 
 # NEW: Import get_path_settings from centralized config
 from app.core.config import get_path_settings
-# NEW: Import AgentConfig and DataPolicy for policy application
-from app.schemas.agent import AgentConfig, DataPolicy
+# NEW: Import AgentConfig, DataPolicy, DataSource for policy application and lineage
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
     Returns the processed text and a boolean indicating if the document (row) was blocked.
     """
     processed_text = text
-    document_blocked = False  # In Parquet/CSV context, this refers to blocking a row/document
+    document_blocked = False
 
     for policy in policies:
         if policy.type == 'pii_redaction' and policy.pii_config:
@@ -74,7 +75,7 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
                 if pattern:
                     replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 8)
                     if pii_type == 'credit_card': replacement = pii_config.redaction_placeholder or (
-                                pii_config.redaction_char * 16)
+                            pii_config.redaction_char * 16)
                     processed_text = re.sub(pattern, replacement, processed_text)
                     logger.debug(f"Applied {pii_type} redaction policy. Replaced with: {replacement}")
 
@@ -100,11 +101,12 @@ def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bo
     return processed_text, document_blocked
 
 
-async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> List[Document]:
+async def load(file_path: str, agent_config: Optional[AgentConfig] = None, source: Optional[DataSource] = None) -> List[
+    Document]:  # MODIFIED: Added source parameter
     """
     Loads a Parquet file and creates a Document for each row,
     with path safety validation, data policy application, and standardized error logging.
-    Now supports asynchronous loading.
+    Now supports asynchronous loading and enriched metadata.
     """
     docs = []
     try:
@@ -137,7 +139,7 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> Li
             row_dict = row.to_dict()
 
             # Attempt to use a meaningful identifier for the record
-            record_id = str(row_dict.get(df.columns[0], index))  # Use first column or index as ID
+            record_id = str(row_dict.get(df.columns[0], index))
 
             # Format each column-value pair on a new line
             row_details = "\n".join([f"- {str(col).replace('_', ' ').strip()}: {val}" for col, val in row_dict.items()])
@@ -156,26 +158,36 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None) -> Li
             if document_blocked:
                 logger.warning(
                     f"Row {index + 1} of '{safe_file_path.name}' (Record ID: {record_id}) was completely blocked by a data policy and will not be processed.")
-                continue  # Skip this row if it's blocked
+                continue
 
-            if processed_text.strip():  # Ensure there's actual content left after policies
+            if processed_text.strip():
+                # Create base metadata from file itself
+                metadata = {
+                    "source_path": str(safe_file_path.resolve()),
+                    "file_name": safe_file_path.name,
+                    "file_type": safe_file_path.suffix.lower(),
+                    "load_timestamp": datetime.now().isoformat(),  # NEW: Add load timestamp
+                    "row_number": index + 1,  # Specific for CSV/Parquet rows
+                    "record_id": record_id  # Specific for CSV/Parquet
+                }
+                # Add general source info if available from the DataSource object
+                if source:  # NEW: Add info from DataSource object for lineage
+                    metadata["source_type_config"] = source.model_dump()  # Store entire DataSource config
+                    if source.url: metadata["source_url"] = source.url
+                    if source.db_connection: metadata["source_db_connection"] = source.db_connection
+                    if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
+                    if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
+
                 doc = Document(
                     page_content=processed_text,
-                    metadata={
-                        "source": str(safe_file_path.resolve()),
-                        "source_type": "parquet" if safe_file_path.suffix.lower() == '.parquet' else "orc",
-                        "row_number": index + 1,
-                        "record_id": record_id,  # Add a conceptual record ID
-                        "file_name": safe_file_path.name,
-                        "file_path": str(safe_file_path)
-                    }
+                    metadata={**metadata}  # Use the enriched metadata
                 )
                 docs.append(doc)
             else:
                 logger.debug(
                     f"Row {index + 1} of '{safe_file_path.name}' (Record ID: {record_id}) had no content after policy application or was empty.")
 
-        logger.info(f"Loaded {len(docs)} processed rows from {safe_file_path.name}.")
+        logger.info(f"Loaded {len(docs)} processed rows from {safe_file_path.name} with enriched metadata.")
         return docs
     except ValueError as e:
         logger.error(f"Security or validation error during Parquet/ORC file loading: {e}")
