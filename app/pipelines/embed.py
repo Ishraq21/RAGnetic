@@ -28,7 +28,7 @@ from app.pipelines.loaders import (
     directory_loader, url_loader, db_loader, api_loader,
     code_repository_loader, gdoc_loader, web_crawler_loader,
     notebook_loader, pdf_loader, docx_loader, csv_loader,
-    text_loader, iac_loader
+    text_loader, iac_loader, parquet_loader
 )
 
 from app.core.config import get_api_key, get_path_settings
@@ -180,6 +180,11 @@ async def load_documents_from_source(source: DataSource, agent_config: AgentConf
             loaded_docs = await api_loader.load(url=source.url, method=source.method, headers=source.headers,
                                                 params=source.params, payload=source.payload,
                                                 json_pointer=source.json_pointer, **loader_args)
+        elif source_type == "parquet":
+            if not source.path:
+                logger.warning("Parquet source type requires a 'path'. Skipping.")
+                return []
+            loaded_docs = await parquet_loader.load(source.path, **loader_args)
         else:
             logger.warning(f"Unknown or unsupported source type: '{source_type}'. Skipping.")
             return []

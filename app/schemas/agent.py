@@ -27,7 +27,7 @@ class ChunkingConfig(BaseModel):
     )
 
 class DataSource(BaseModel):
-    type: Literal['local', 'url', 'code_repository','db','gdoc','web_crawler','api','notebook']
+    type: Literal['local', 'url', 'code_repository','db','gdoc','web_crawler','api','notebook','parquet']
     path: Optional[str] = None
     url: Optional[str] = None
     db_connection: Optional[str] = None
