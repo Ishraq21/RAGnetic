@@ -6,7 +6,7 @@ from uuid import uuid4
 from typing import Optional, List, Dict, Any, Tuple
 from multiprocessing import Process
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, status
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
 from app.core.validation import validate_agent_name, sanitize_for_path
+from app.core.security import get_http_api_key, get_websocket_api_key
 from app.schemas.agent import AgentConfig
 from app.agents.config_manager import save_agent_config, load_agent_config, get_agent_configs
 from app.pipelines.embed import embed_agent_data
@@ -26,7 +27,7 @@ from app.tools.retriever_tool import get_retriever_tool
 from app.tools.arxiv_tool import get_arxiv_tool
 from app.tools.extraction_tool import get_extraction_tool
 from app.watcher import start_watcher
-from app.core.config import get_path_settings
+from app.core.config import get_path_settings, get_server_api_keys # Import get_server_api_keys
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -104,13 +105,27 @@ async def home(request: Request):
     except Exception as e:
         logger.error(f"Could not load agent configs: {e}")
     default_agent = agents_list[0]['name'] if agents_list else ""
+
+    # --- Get server API keys and pass one to the template ---
+    server_api_keys = get_server_api_keys()
+    # If keys exist, take the first one; otherwise, pass an empty string.
+    # This key will be used by the frontend to authenticate WebSocket connections.
+    frontend_api_key = server_api_keys[0] if server_api_keys else ""
+
     return templates.TemplateResponse("agent_interface.html",
-                                      {"request": request, "agents": agents_list, "agent": default_agent})
+                                      {"request": request,
+                                       "agents": agents_list,
+                                       "agent": default_agent,
+                                       "api_key": frontend_api_key}) # Pass the key here
 
 
 @app.get("/history/{thread_id}", tags=["Memory"])
-async def get_history(thread_id: str, agent_name: str, user_id: str):
-    # Sanitize all inputs used to construct the file path for security.
+async def get_history(
+    thread_id: str,
+    agent_name: str,
+    user_id: str,
+    api_key: str = Depends(get_http_api_key)
+):
     safe_agent_name = sanitize_for_path(agent_name)
     safe_user_id = sanitize_for_path(user_id)
     safe_thread_id = sanitize_for_path(thread_id)
@@ -137,7 +152,11 @@ async def get_history(thread_id: str, agent_name: str, user_id: str):
 
 
 @app.post("/create-agent", tags=["Agents"])
-async def create_agent(config: AgentConfig, bg: BackgroundTasks):
+async def create_agent(
+    config: AgentConfig,
+    bg: BackgroundTasks,
+    api_key: str = Depends(get_http_api_key)
+):
     try:
         save_agent_config(config)
         bg.add_task(embed_agent_data, config)
@@ -216,13 +235,10 @@ async def _run_one_turn(
         final_state.update({"error": True, "errorMessage": "An unexpected server error occurred."})
 
     finally:
-        # This ensures cleanup on normal completion, interruption, or timeout.
         all_tasks = pending.union(done)
         for task in all_tasks:
             if not task.done():
                 task.cancel()
-
-        # Await all tasks to allow them to process the cancellation and prevent warnings.
         await asyncio.gather(*all_tasks, return_exceptions=True)
 
     return final_state, next_message
@@ -232,7 +248,6 @@ async def _initialize_agent_session(initial_payload: dict) -> Optional[Dict]:
     """Loads agent config, tools, and workflow based on the first message."""
     try:
         agent_name = initial_payload.get("agent", "unknown_agent")
-        # Use the validator for agent_name and sanitize other path components.
         validate_agent_name(agent_name)
 
         user_id = sanitize_for_path(initial_payload.get("user_id")) or f"user-{uuid4().hex[:8]}"
@@ -251,7 +266,6 @@ async def _initialize_agent_session(initial_payload: dict) -> Optional[Dict]:
 
         workflow = get_agent_workflow(all_tools)
 
-        # Return the safe, sanitized values.
         return {"workflow": workflow, "agent_config": agent_config, "all_tools": all_tools, "user_id": user_id,
                 "thread_id": thread_id}
     except Exception as e:
@@ -260,7 +274,24 @@ async def _initialize_agent_session(initial_payload: dict) -> Optional[Dict]:
 
 
 @app.websocket("/ws")
-async def websocket_chat(ws: WebSocket):
+async def websocket_chat(
+    ws: WebSocket,
+    api_key: str = Depends(get_websocket_api_key)
+):
+    if not api_key:
+        # The get_websocket_api_key function returns "" if no valid key is found.
+        # If no server keys are configured, it returns "development_mode_unsecured".
+        # We need to distinguish between 'no keys configured' and 'invalid key provided'.
+        # Assuming that if server_api_keys() returns an empty list, it's unsecured dev mode.
+        # Otherwise, if api_key is empty here, it's an invalid key.
+        configured_keys = get_server_api_keys()
+        if configured_keys: # Server has keys configured, but the client didn't provide a valid one
+            await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid or missing API Key.")
+            logger.warning(f"WebSocket connection from {ws.client.host}:{ws.client.port} rejected due to missing/invalid API key.")
+            return
+        # Else: configured_keys is empty, meaning it's development_mode_unsecured. Allow connection.
+
+
     await manager.connect(ws)
     thread_id = "uninitialized"
     try:
@@ -277,7 +308,6 @@ async def websocket_chat(ws: WebSocket):
             return
 
         thread_id = session["thread_id"]
-        # This path construction is now safe because its components have been sanitized.
         memory_path = _MEMORY_DIR / f"{session['agent_config'].name}_{session['user_id']}_{thread_id}.db"
         os.makedirs(_MEMORY_DIR, exist_ok=True)
 

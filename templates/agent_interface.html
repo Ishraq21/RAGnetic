@@ -8,7 +8,6 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono&display=swap" rel="stylesheet" />
 
-  <!-- MathJax for LaTeX rendering -->
   <script>
     MathJax = {
       tex: {
@@ -54,6 +53,9 @@
     </div>
 
     <script>
+        // NEW: Get the API key passed from the backend
+        const GLOBAL_API_KEY = "{{ api_key }}"; // This will be rendered by Jinja2
+
         const agentSelect = document.getElementById('agent-select');
         const messagesDiv = document.getElementById('messages');
         const inputField = document.getElementById('query-input');
@@ -118,7 +120,14 @@
             if (socket && socket.readyState !== WebSocket.CLOSED) {
                 socket.close(1000, "Starting new session");
             }
-            socket = new WebSocket(`${protocol}://${location.host}/ws`);
+            // Construct the WebSocket URL with the API key
+            let wsUrl = `${protocol}://${location.host}/ws`;
+            // Only add API key if it's not empty (i.e., if keys are configured on the server)
+            if (GLOBAL_API_KEY) {
+                wsUrl += `?api_key=${GLOBAL_API_KEY}`;
+            }
+
+            socket = new WebSocket(wsUrl); // Use the constructed URL
             isFirstMessage = true;
 
             socket.onopen = () => {
@@ -127,12 +136,24 @@
                     onOpenCallback();
                 }
             };
-            socket.onerror = () => showToast("Connection error.");
-            socket.onclose = () => {
+            socket.onerror = (event) => {
+                console.error("WebSocket error:", event);
+                showToast("Connection error. Check console for details.", true);
+            };
+            socket.onclose = (event) => {
                 sendStopButton.disabled = true;
                 if (isGenerating) setGeneratingState(false);
+                if (event.code === 1008) {
+                    showToast("Connection rejected: Invalid or missing API Key. Please run 'ragnetic set-server-key' if this is unexpected.", true);
+                } else if (event.code === 1000 && event.reason === "Starting new session") {
+                    // Do NOT show a toast for this normal event!
+                    // Optionally log to console for debugging:
+                    // console.log("WebSocket closed (new session):", event);
+                } else {
+                    showToast(`WebSocket disconnected: Code ${event.code}, Reason: ${event.reason}`, true);
+                }
             };
-            socket.onmessage = (event) => {
+                        socket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.token) {
                     typingIndicator.style.display = 'none';
@@ -271,7 +292,8 @@
 
         async function loadHistory(agentName, threadId, userId) {
             try {
-                const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${userId}`);
+                // IMPORTANT: Pass the API key for history requests too
+                const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${userId}&api_key=${GLOBAL_API_KEY}`);
                 if (!response.ok) {
                     showToast(`Could not load session (status: ${response.status}).`, true);
                     startNewSession(false);
@@ -325,8 +347,9 @@
           if (savedAgent) agentSelect.value = savedAgent;
           agent = agentSelect.value;
 
-          if (savedAgent && savedThreadId && savedUserId) {
-            // re‐hydrate** globals
+          // Only attempt to load history if an API key is present
+          if (GLOBAL_API_KEY && savedAgent && savedThreadId && savedUserId) {
+            // re-hydrate globals
             user_id   = savedUserId;
             thread_id = savedThreadId;
             loadHistory(agent, thread_id, user_id);
@@ -334,7 +357,7 @@
             renderEmptyState();
           }
 
-          openWebSocket();
+          openWebSocket(); // Always try to open WebSocket on load
         });
 
         newChatButton.addEventListener('click', () => showConfirmationModal(startNewSession));

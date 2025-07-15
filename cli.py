@@ -15,21 +15,17 @@ from logging.handlers import TimedRotatingFileHandler
 import signal
 import sys
 from typing import Optional, List, Dict, Any
+import secrets
 
 # Initialize a default logger for CLI startup FIRST, so it's always bound.
 logger = logging.getLogger(__name__)
 
-from app.core.config import get_path_settings, get_api_key
-
+from app.core.config import get_path_settings, get_api_key, get_server_api_keys
 from app.core.structured_logging import JSONFormatter
 from app.evaluation.dataset_generator import generate_test_set
 from app.evaluation.benchmark import run_benchmark
-
-# Local application imports
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file
-# AGENTS_DIR, CONFIG_FILE will come from _APP_PATHS (removed old constants)
 from app.pipelines.embed import embed_agent_data
-# get_api_key already imported via app.core.config
 from app.watcher import start_watcher
 import pytest
 from app.core.validation import is_valid_agent_name_cli
@@ -41,12 +37,9 @@ _DATA_DIR = _APP_PATHS["DATA_DIR"]
 _AGENTS_DIR = _APP_PATHS["AGENTS_DIR"]
 _VECTORSTORE_DIR = _APP_PATHS["VECTORSTORE_DIR"]
 _MEMORY_DIR = _APP_PATHS["MEMORY_DIR"]
-_CONFIG_FILE = _APP_PATHS["CONFIG_FILE_PATH"]  # Absolute path to config.ini
-_RAGNETIC_DIR = _APP_PATHS["RAGNETIC_DIR"]  # For init command
-_TEMP_CLONES_DIR = _APP_PATHS["TEMP_CLONES_DIR"]  # For code_repository_loader setup in init if needed
-
-
-# --- End Centralized Configuration ---
+_CONFIG_FILE = _APP_PATHS["CONFIG_FILE_PATH"]
+_RAGNETIC_DIR = _APP_PATHS["RAGNETIC_DIR"]
+_TEMP_CLONES_DIR = _APP_PATHS["TEMP_CLONES_DIR"]
 
 
 def _validate_agent_name_cli(agent_name: str):
@@ -59,71 +52,48 @@ def _validate_agent_name_cli(agent_name: str):
         raise typer.Exit(code=1)
 
 
-# Logging Setup
 def setup_logging(json_format: bool = False):
     """Configures the root logger for either human-readable or JSON output with rotation."""
-    # Use centralized LOGS_DIR and create with stricter permissions
     if not os.path.exists(_LOGS_DIR):
         os.makedirs(_LOGS_DIR, mode=0o750, exist_ok=True)
 
     root_logger = logging.getLogger()
-    # Remove any existing handlers to avoid duplicate logs if setup_logging is called multiple times
     if root_logger.hasHandlers():
         root_logger.handlers.clear()
 
-    # Determine environment for dynamic log levels
     is_production = os.environ.get("ENVIRONMENT", "development").lower() == "production"
 
-    # 1. Root Logger Level: Set overall verbosity
-    # To suppress DEBUG from libraries even in development console, set root_logger to INFO.
     if is_production:
-        root_logger.setLevel(logging.INFO)  # Keep INFO to allow RAGnetic's own INFOs, but handlers will filter.
+        root_logger.setLevel(logging.INFO)
         logger.info("Logging configured for PRODUCTION environment.")
     else:
-        root_logger.setLevel(
-            logging.INFO)  # MODIFIED: Changed from DEBUG to INFO to suppress most library DEBUG by default in dev
+        root_logger.setLevel(logging.INFO)
         logger.info("Logging configured for DEVELOPMENT environment (minimal DEBUG on console).")
 
-    # 2. Console Handler: Logs to stdout/stderr
     console_handler = logging.StreamHandler()
     if is_production:
-        console_handler.setLevel(
-            logging.WARNING)  # MODIFIED: Changed from INFO to WARNING for a much quieter console in production
+        console_handler.setLevel(logging.WARNING)
     else:
-        console_handler.setLevel(
-            logging.INFO)  # MODIFIED: Changed from DEBUG to INFO for a quieter console in development
-        # This will suppress most DEBUG messages from external libraries like httpx, sqlite3.
+        console_handler.setLevel(logging.INFO)
 
     if json_format:
         formatter = JSONFormatter()
         console_handler.setFormatter(formatter)
-
-        # 3. File Handler (JSON with rotation)
         log_file_base_name = "ragnetic_app.jsonl"
         file_handler_path = os.path.join(_LOGS_DIR, log_file_base_name)
-
         file_handler = TimedRotatingFileHandler(
-            file_handler_path,
-            when="midnight",  # Rotate every day at midnight
-            interval=1,
-            backupCount=7,  # Keep 7 days of backups
-            encoding="utf-8",
+            file_handler_path, when="midnight", interval=1, backupCount=7, encoding="utf-8"
         )
         file_handler.setFormatter(formatter)
-
-        # Set file handler level (e.g., WARNING+ for prod to avoid filling disk with routine chatter)
         if is_production:
-            file_handler.setLevel(logging.WARNING)  # Only WARNING, ERROR, CRITICAL logs go to disk in prod
+            file_handler.setLevel(logging.WARNING)
         else:
-            file_handler.setLevel(logging.INFO)  # All INFO+ logs go to disk in dev
-
+            file_handler.setLevel(logging.INFO)
         root_logger.addHandler(file_handler)
     else:
-        # For non-JSON (development mode to console)
         formatter = logging.Formatter('%(levelname)s: %(message)s')
         console_handler.setFormatter(formatter)
 
-    # Always add the console handler
     root_logger.addHandler(console_handler)
 
 
@@ -141,13 +111,12 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-auth_app = typer.Typer(name="auth", help="Manage authentication for external services.")
+auth_app = typer.Typer(name="auth", help="Manage authentication for external services like Google Drive.")
 app.add_typer(auth_app)
 
 eval_app = typer.Typer(name="evaluate", help="Commands for evaluating agent performance.")
 app.add_typer(eval_app)
 
-# --- Constants ---
 MODEL_PROVIDERS = {
     "OpenAI": "OPENAI_API_KEY",
     "Anthropic": "ANTHROPIC_API_KEY",
@@ -161,15 +130,12 @@ MODEL_PROVIDERS = {
 
 @app.command(help="Initialize a new RAGnetic project in the current directory.")
 def init():
-    """
-    Creates the necessary folders and a default config.ini file.
-    """
-    setup_logging()  # MODIFIED: Removed json_logs parameter
+    setup_logging()
     logger.info("Initializing new RAGnetic project...")
-    # MODIFIED: Use centralized paths for folders to create and set mode
-    folders_to_create = [_AGENTS_DIR, _DATA_DIR,
-                         _VECTORSTORE_DIR, _MEMORY_DIR,
-                         _LOGS_DIR, _RAGNETIC_DIR, _TEMP_CLONES_DIR]
+    folders_to_create = [
+        _AGENTS_DIR, _DATA_DIR, _VECTORSTORE_DIR, _MEMORY_DIR,
+        _LOGS_DIR, _RAGNETIC_DIR, _TEMP_CLONES_DIR
+    ]
     for folder_path in folders_to_create:
         if not os.path.exists(folder_path):
             os.makedirs(folder_path, mode=0o750, exist_ok=True)
@@ -182,20 +148,48 @@ def init():
             '# For production, it is strongly recommended to use environment variables.': '',
             'OPENAI_API_KEY': '...',
         }
+        config['AUTH'] = {
+            '# A comma-separated list of secret keys to protect the RAGnetic server API.': '',
+            '# Use the `ragnetic set-server-key` command to generate a secure key.': '',
+            'server_api_keys': ''
+        }
         with open(_CONFIG_FILE, 'w') as configfile:
             config.write(configfile)
         logger.info(f"  - Created config file at: {_CONFIG_FILE}")
+        typer.secho("\nProject initialized. To secure your server, run:", fg=typer.colors.CYAN)
+        # MODIFIED: Updated command prompt
+        typer.secho("  ragnetic set-server-key", bold=True)
+    else:
+        logger.info("Project already initialized.")
 
-    logger.info("Project initialized successfully.")
+
+@app.command(name="set-server-key", help="Generate and set a new secret key to protect the server API.")
+def set_server_key():
+    """
+    Generates a new secure key and saves it to config.ini.
+    """
+    setup_logging()
+    config = configparser.ConfigParser()
+    config.read(_CONFIG_FILE)
+    if 'AUTH' not in config:
+        config['AUTH'] = {}
+
+    new_key = secrets.token_hex(32)
+    config['AUTH']['server_api_keys'] = new_key
+
+    with open(_CONFIG_FILE, 'w') as configfile:
+        config.write(configfile)
+
+    typer.secho("Successfully set a new server API key.", fg=typer.colors.GREEN)
+    typer.echo("Your new key is:")
+    typer.secho(f"  {new_key}", bold=True)
+    typer.echo("\nUse this key in the 'X-API-Key' header for all API requests.")
 
 
-@app.command(help="Set and save API keys for local development.")
+@auth_app.command(name="set-api-key", help="Set and save API keys for external services (e.g., OpenAI).")
 def set_api():
-    """
-    Guides the user through setting API keys in the local config.ini file.
-    """
-    setup_logging()  # MODIFIED: Removed json_logs parameter
-    typer.secho("--- API Key Configuration for Local Development ---", bold=True)
+    setup_logging()
+    typer.secho("--- External Service API Key Configuration ---", bold=True)
     typer.secho(
         "This wizard saves keys to the local .ragnetic/config.ini file.\n"
         "For production, setting environment variables is the recommended approach.",
@@ -242,41 +236,35 @@ def start_server(
         port: int = typer.Option(8000, help="The port to run the server on."),
         reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
         no_watcher: bool = typer.Option(False, "--no-watcher", help="Do not start the file watcher process."),
-        json_logs: bool = typer.Option(False, "--json-logs",
-                                       help="Output logs in structured JSON format for production."),
+        json_logs: bool = typer.Option(False, "--json-logs", help="Output logs in structured JSON format."),
 ):
-    """Starts the Uvicorn server."""
     setup_logging(json_logs)
+    if not get_server_api_keys():
+        typer.secho("--- SECURITY WARNING ---", fg=typer.colors.YELLOW, bold=True)
+        typer.secho("The server is starting without an API key. The API will be open to anyone who can access it.",
+                    fg=typer.colors.YELLOW)
+        typer.secho("For production or shared environments, please secure your server by running:",
+                    fg=typer.colors.YELLOW)
+        # Updated command prompt
+        typer.secho("  ragnetic set-server-key\n", bold=True)
 
     if reload:
         logger.warning("Running in --reload mode. The file watcher will be disabled.")
         uvicorn.run("app.main:app", host=host, port=port, reload=True)
         return
 
-    # Watcher process management is now handled by FastAPI's app.on_event handlers in app/main.py
     logger.info(f"Starting RAGnetic server on http://{host}:{port}")
     try:
         get_api_key("openai")
     except ValueError as e:
         logger.warning(f"{e} - some models may not work.")
 
-    # Uvicorn itself handles graceful shutdown via SIGINT/SIGTERM,
-    # and it will trigger FastAPI's app.on_event("shutdown") hook to stop the watcher.
-
     uvicorn.run("app.main:app", host=host, port=port)
 
-    # The following block is now redundant as watcher is managed by app.on_event("shutdown")
-    # if watcher_process and watcher_process.is_alive():
-    #     watcher_process.terminate()
-    #     watcher_process.join()
-    #     logger.info("File watcher process stopped.")
-
-
-# --- Agent Management Commands ---
 
 @app.command(help="Lists all configured agents.")
 def list_agents():
-    setup_logging()  # MODIFIED: Removed json_logs parameter
+    setup_logging()
     if not os.path.exists(_AGENTS_DIR):
         logger.error(f"Error: Directory '{_AGENTS_DIR}' not found. Have you run 'ragnetic init'?")
         raise typer.Exit(code=1)
@@ -296,7 +284,6 @@ def deploy_agent_by_name(
         json_logs: bool = typer.Option(False, "--json-logs", help="Output logs in structured JSON format."),
 ):
     _validate_agent_name_cli(agent_name)
-    """Loads an agent config from YAML and creates a vector store."""
     setup_logging(json_logs)
     try:
         config_path = _AGENTS_DIR / f"{agent_name}.yaml"
@@ -317,13 +304,12 @@ def deploy_agent_by_name(
         agent_config = load_agent_from_yaml_file(config_path)
         typer.echo(f"\nDeploying agent '{agent_config.name}' using embedding model '{agent_config.embedding_model}'...")
 
-        # MODIFIED: Check return value from embed_agent_data
         vector_store_created = asyncio.run(embed_agent_data(agent_config))
 
         typer.secho("\nAgent deployment successful!", fg=typer.colors.GREEN)
-        if vector_store_created:  # NEW: Conditional check
+        if vector_store_created:
             typer.echo(f"  - Vector store created at: {vectorstore_path}")
-        else:  # NEW: Message for no vector store
+        else:
             typer.echo("  - No vector store created (no sources provided or no valid documents found).")
 
     except Exception as e:
@@ -336,7 +322,7 @@ def inspect_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to inspect.")
 ):
     _validate_agent_name_cli(agent_name)
-    setup_logging()  # MODIFIED: Removed json_logs parameter
+    setup_logging()
     try:
         typer.echo(f"Inspecting configuration for agent: '{agent_name}'")
         config = load_agent_config(agent_name)
@@ -354,9 +340,7 @@ def validate_agent(
         json_logs: bool = typer.Option(False, "--json-logs", help="Structured JSON logs"),
 ):
     _validate_agent_name_cli(agent_name)
-
-    """Validates an agent's configuration, checking YAML syntax, file existence, and external connections."""
-    setup_logging(json_logs)  # This command HAS json_logs parameter, so it's correct
+    setup_logging(json_logs)
     typer.echo(f"Validating agent: '{agent_name}'...")
     errors = 0
     try:
@@ -377,10 +361,8 @@ def validate_agent(
         for i, source in enumerate(agent_config.sources):
             source_info = f"Source #{i + 1} (type: {source.type})"
             if source.type == 'db' and source.db_connection:
-                # ... (Database connection check logic) ...
                 pass
             elif source.type == 'url' and source.url:
-                # ... (URL connection check logic) ...
                 pass
 
     typer.echo("-" * 20)
@@ -397,7 +379,7 @@ def reset_agent(
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
 ):
     _validate_agent_name_cli(agent_name)
-    setup_logging()  # MODIFIED: Removed json_logs parameter
+    setup_logging()
     vectorstore_path = _VECTORSTORE_DIR / agent_name
     memory_pattern = _MEMORY_DIR / f"{agent_name}_*.db"
     typer.secho(f"Warning: This will reset agent '{agent_name}' by deleting its generated data:",
@@ -408,7 +390,6 @@ def reset_agent(
         typer.confirm("Are you sure you want to proceed?", abort=True)
     try:
         if os.path.exists(vectorstore_path): shutil.rmtree(vectorstore_path)
-        # Convert Path object to string for glob.glob if it doesn't accept Path directly
         memory_files = glob.glob(str(memory_pattern))
         if memory_files:
             for f in memory_files: os.remove(f)
@@ -424,7 +405,7 @@ def delete_agent(
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
 ):
     _validate_agent_name_cli(agent_name)
-    setup_logging()  # MODIFIED: Removed json_logs parameter
+    setup_logging()
     vectorstore_path = _VECTORSTORE_DIR / agent_name
     memory_pattern = _MEMORY_DIR / f"{agent_name}_*.db"
     config_path = _AGENTS_DIR / f"{agent_name}.yaml"
@@ -433,7 +414,6 @@ def delete_agent(
         typer.confirm("This action is irreversible. Are you absolutely sure?", abort=True)
     try:
         if os.path.exists(vectorstore_path): shutil.rmtree(vectorstore_path)
-        # Convert Path object to string for glob.glob
         memory_files = glob.glob(str(memory_pattern))
         if memory_files:
             for f in memory_files: os.remove(f)
@@ -446,7 +426,7 @@ def delete_agent(
 
 @auth_app.command("gdrive", help="Authenticate with Google Drive.")
 def auth_gdrive():
-    setup_logging()  # MODIFIED: Removed json_logs parameter
+    setup_logging()
     typer.echo("Google Drive Authentication Setup")
     typer.echo("Please provide the path to your service account JSON key file.")
     json_path = typer.prompt("Path to service account .json file")
@@ -478,10 +458,8 @@ def auth_gdrive():
 @app.command(help="Runs the entire test suite using pytest.")
 def test():
     """Discovers and runs all automated tests in the 'tests/' directory."""
-    setup_logging()  # MODIFIED: Removed json_logs parameter
+    setup_logging()
     typer.echo("Running the RAGnetic test suite...")
-    # MODIFIED: Use _APP_PATHS for tests directory if you want to centralize that too
-    # For now, keeping "tests/" as it's typically relative to project root for pytest.
     result_code = pytest.main(["-v", "tests/"])
     if result_code == 0:
         typer.secho("\nAll tests passed!", fg=typer.colors.GREEN)
@@ -517,16 +495,12 @@ def benchmark_command(
         agent_name: str = typer.Argument(..., help="The agent to benchmark."),
         test_set_file: str = typer.Option(..., "--test-set", "-t", help="Path to a JSON test set file."),
         json_logs: bool = typer.Option(False, "--json-logs", help="Output logs in structured JSON format."),
-        # NEW: Add option to show detailed results non-interactively
         show_detailed_results: Optional[bool] = typer.Option(
             None, "--show-detailed-results", "-s",
             help="Explicitly show/hide detailed results in console (overrides prompt)."
         ),
 ):
     _validate_agent_name_cli(agent_name)
-    """
-    Uses a ground truth test set to calculate metrics, including token usage and cost.
-    """
     setup_logging(json_logs)
     logger.info(f"--- Running Benchmark for Agent: '{agent_name}' ---")
 
@@ -554,14 +528,14 @@ def benchmark_command(
             typer.secho(f"  - Total Estimated Cost: ${total_cost:.6f} USD", fg=typer.colors.BLUE)
             typer.secho(f"\nDetailed results saved to: {results_filename}", fg=typer.colors.BLUE)
 
-            # MODIFIED: Control prompt based on show_detailed_results
             should_show_console_results = False
             if show_detailed_results is True:
                 should_show_console_results = True
             elif show_detailed_results is False:
                 should_show_console_results = False
-            else:  # show_detailed_results is None, prompt user
-                should_show_console_results = typer.confirm("\nShow detailed results in console?", default=False, abort=False)
+            else:
+                should_show_console_results = typer.confirm("\nShow detailed results in console?", default=False,
+                                                            abort=False)
 
             if should_show_console_results:
                 display_columns = [
