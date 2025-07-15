@@ -8,12 +8,17 @@ from typing import List, Dict, Any, Optional, Type
 from langchain_core.tools import BaseTool, ToolException
 from pydantic import Field, BaseModel
 
-from app.schemas.agent import SearchEngineToolInput
-from app.core.config import get_api_key
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import SystemMessage, HumanMessage
+
+from app.schemas.agent import SearchEngineToolInput, AgentConfig
+from app.core.config import get_api_key, get_llm_model
 
 logger = logging.getLogger(__name__)
 
 SEARCH_API_PROVIDER = os.environ.get("SEARCH_API_PROVIDER", "BRAVE")
+MAX_SNIPPET_LENGTH = 300
+
 
 class SearchTool(BaseTool):
     name: str = "search_engine"
@@ -24,30 +29,25 @@ class SearchTool(BaseTool):
         "Example: search_engine(query='latest developments in quantum computing', num_results=3)"
     )
     args_schema: Type[SearchEngineToolInput] = SearchEngineToolInput
+    return_direct: bool = True
+
+    agent_config: AgentConfig
 
     def _run(self, *args: Any, **kwargs: Any) -> str:
-        """
-        Synchronous entrypoint for the tool.
-        This will run the asynchronous _arun method in the current event loop.
-        """
+        """Synchronous entrypoint, runs _arun."""
         try:
-            # We must run the async _arun method using asyncio.run
-            # This is a common pattern for exposing async tools to sync contexts.
             return asyncio.run(self._arun(*args, **kwargs))
         except ToolException as e:
-            # Propagate ToolExceptions which LangChain/LangGraph can handle
             raise e
         except Exception as e:
-            # Catch any other unexpected errors during sync execution
             logger.error(f"Unexpected error in SearchTool._run: {e}", exc_info=True)
             raise ToolException(f"SearchTool encountered an unexpected synchronous error: {e}")
 
-    async def _arun(self, **kwargs: Any) -> str:
+    async def _arun(self, *args: Any, **kwargs: Any) -> str:
         """
         Asynchronous execution logic for the Search Tool.
-        Accepts keyword arguments and parses them into the Pydantic schema.
+        Performs web search and then synthesizes the results using the agent's configured LLM.
         """
-        # Parse kwargs into SearchEngineToolInput object
         try:
             tool_input = SearchEngineToolInput(**kwargs)
         except Exception as e:
@@ -61,7 +61,7 @@ class SearchTool(BaseTool):
 
         logger.info(f"SearchTool._arun called for query: '{query[:80]}...'")
 
-        search_results = []
+        search_results_raw = []
         try:
             if SEARCH_API_PROVIDER.upper() == "BRAVE":
                 logger.info("Attempting to get Brave Search API key...")
@@ -89,17 +89,23 @@ class SearchTool(BaseTool):
                 if region:
                     params['country'] = region
 
-                logger.info(f"Calling Brave Search API for query: '{query}' with {num_results} results. Params: {params}")
-                response = await asyncio.to_thread(requests.get, "https://api.search.brave.com/res/v1/web/search", headers=headers, params=params, timeout=10)
+                logger.info(
+                    f"Calling Brave Search API for query: '{query}' with {num_results} results. Params: {params}")
+                response = await asyncio.to_thread(requests.get, "https://api.search.brave.com/res/v1/web/search",
+                                                   headers=headers, params=params, timeout=10)
                 response.raise_for_status()
                 data = response.json()
 
                 if data and data.get("web") and data["web"].get("results"):
                     logger.info(f"Successfully received {len(data['web']['results'])} results from Brave Search.")
                     for idx, result in enumerate(data["web"]["results"]):
-                        search_results.append({
+                        snippet = result.get('description', 'N/A')
+                        if len(snippet) > MAX_SNIPPET_LENGTH:
+                            snippet = snippet[:MAX_SNIPPET_LENGTH] + "..."
+
+                        search_results_raw.append({
                             "title": result.get("title"),
-                            "snippet": result.get("description"),
+                            "snippet": snippet,
                             "url": result.get("url"),
                             "position": idx + 1
                         })
@@ -123,23 +129,62 @@ class SearchTool(BaseTool):
             logger.error(f"An unexpected error occurred during web search for '{query}': {e}", exc_info=True)
             raise ToolException(f"An unexpected search error occurred: {e}")
 
-        if not search_results:
+        if not search_results_raw:
             logger.info("Search results are empty after tool execution.")
             return "No relevant information found on the web for your query."
 
-        formatted_results = []
-        sources_section = "\n**Sources:**\n"
-        for idx, result in enumerate(search_results):
-            formatted_results.append(
-                f"--- Result {idx + 1} ---\n"
-                f"Title: {result.get('title', 'N/A')}\n"
-                f"URL: {result.get('url', 'N/A')}\n"
-                f"Snippet: {result.get('snippet', 'N/A')}\n"
+        try:
+            llm_for_summarization = get_llm_model(
+                model_name=self.agent_config.llm_model,
+                model_params=self.agent_config.model_params,
+                retries=self.agent_config.llm_retries,
+                timeout=self.agent_config.llm_timeout
             )
-            sources_section += f"- [{result.get('title', f'Link {idx+1}')}]({result.get('url', '#')})\n"
 
-        return (
-            f"Retrieved Web Search Results:\n"
-            f"{'\\n'.join(formatted_results)}\n\n"
-            f"{sources_section}"
-        )
+            prompt_messages = [
+                SystemMessage(content=SUMMARIZATION_PROMPT_TEMPLATE.format(
+                    query=query,
+                    # Pass the raw results as a JSON string to the template
+                    search_results_context=json.dumps(search_results_raw, indent=2)
+                ))
+            ]
+
+            logger.info("Invoking LLM within SearchTool to summarize results...")
+            llm_response = await asyncio.to_thread(llm_for_summarization.invoke, prompt_messages)
+
+            logger.info("LLM summarization successful within SearchTool.")
+            return llm_response.content
+
+        except Exception as e:
+            logger.error(f"Error during LLM summarization within SearchTool for query '{query}': {e}", exc_info=True)
+            raise ToolException(f"Failed to summarize search results: {e}")
+
+
+SUMMARIZATION_PROMPT_TEMPLATE = """
+You are a highly skilled information synthesizer. Your task is to analyze the provided raw web search results
+and present them *in the following order*:
+
+**ORIGINAL USER QUERY:**  
+{query}
+
+**RAW WEB SEARCH RESULTS (LIST OF DICTIONARIES):**  
+{search_results_context}
+
+1. Summary (a few coherent paragraphs answering the query)  
+2. Key Findings (5–7 bullet points)  
+3. Sources:  
+   For each result:  
+   - Authors, Year, *Title*  
+   - One-sentence summary  
+   - Link  
+
+Use Markdown format. Add inline citations [↩] in your bullets and narrative, then list the matching references under “Sources.”
+
+**Instructions for Formatting:** 
+
+    - Use Markdown for all your responses. 
+    - Use headings (`##`, `###`) to structure main topics. 
+    - Use bold text (`**text**`) to highlight key terms, figures, or important information. 
+    - Use bullet points (`- `) or numbered lists (`1. `) for detailed points or steps.
+
+"""
