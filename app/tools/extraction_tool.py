@@ -86,7 +86,8 @@ def get_extraction_tool(agent_config: AgentConfig) -> Tool:
 
             data = result.data.model_dump() if hasattr(result, "data") else {}
 
-            output_lines = ["## Invoice Details"]
+            section_title = agent_config.extraction_section_title or f"{agent_config.display_name} Extraction"
+            output_lines = [f"## {section_title}"]
             for key, value in data.items():
                 if value:
                     formatted_key = key.replace('_', ' ').title()
