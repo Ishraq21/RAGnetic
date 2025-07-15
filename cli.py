@@ -124,7 +124,8 @@ MODEL_PROVIDERS = {
     "Pinecone": "PINECONE_API_KEY",
     "MongoDB Atlas": "MONGODB_CONN_STRING",
     "Hugging Face": None,
-    "Ollama (Local LLMs)": None
+    "Ollama (Local LLMs)": None,
+    "Brave Search": "BRAVE_SEARCH_API_KEY"
 }
 
 
@@ -186,7 +187,7 @@ def set_server_key():
     typer.echo("\nUse this key in the 'X-API-Key' header for all API requests.")
 
 
-@auth_app.command(name="set-api-key", help="Set and save API keys for external services (e.g., OpenAI).")
+@app.command(name="set-api-key", help="Set and save API keys for external services (e.g., OpenAI).")
 def set_api():
     setup_logging()
     typer.secho("--- External Service API Key Configuration ---", bold=True)

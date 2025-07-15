@@ -16,7 +16,7 @@ from starlette.websockets import WebSocketState
 
 from app.core.validation import validate_agent_name, sanitize_for_path
 from app.core.security import get_http_api_key, get_websocket_api_key
-from app.schemas.agent import AgentConfig
+from app.schemas.agent import AgentConfig, SearchEngineToolInput
 from app.agents.config_manager import save_agent_config, load_agent_config, get_agent_configs
 from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow, AgentState
@@ -25,6 +25,9 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
 from app.tools.arxiv_tool import get_arxiv_tool
+from app.tools.search_engine_tool import SearchTool
+from langchain_core.tools import Tool
+
 from app.watcher import start_watcher
 from app.core.config import get_path_settings, get_server_api_keys # Import get_server_api_keys
 
@@ -243,6 +246,7 @@ async def _run_one_turn(
     return final_state, next_message
 
 
+
 async def _initialize_agent_session(initial_payload: dict) -> Optional[Dict]:
     """Loads agent config, tools, and workflow based on the first message."""
     try:
@@ -261,6 +265,12 @@ async def _initialize_agent_session(initial_payload: dict) -> Optional[Dict]:
                 create_sql_toolkit(db_connection_string=db_source.db_connection, llm_model_name=agent_config.llm_model,
                                    llm_model_params=agent_config.model_params))
         if "arxiv" in agent_config.tools: all_tools.extend(get_arxiv_tool())
+
+        # NEW: Register the Search Engine Tool using the custom SearchTool class
+        if "search_engine" in agent_config.tools:
+            # Instantiate the custom SearchTool class. It inherently knows its name, description, and args_schema.
+            search_tool_instance = SearchTool()
+            all_tools.append(search_tool_instance)
 
         workflow = get_agent_workflow(all_tools)
 

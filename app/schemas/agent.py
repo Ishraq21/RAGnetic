@@ -180,6 +180,27 @@ class ScalingConfig(BaseModel):
         description="Number of parallel workers/processes to use for ingestion. If None, defaults to CPU count."
     )
 
+class SearchEngineToolInput(BaseModel):
+    """Input schema for the AI Search Engine Tool."""
+    query: str = Field(
+        ...,
+        description="The search query to send to the web search engine."
+    )
+    num_results: int = Field(
+        5, # Default to 5 results
+        description="The maximum number of search results to retrieve."
+    )
+    # Optional fields for more advanced filtering (can be expanded later)
+    time_period: Optional[Literal['past_day', 'past_week', 'past_month', 'past_year']] = Field(
+        None,
+        description="Filter search results by a specific time period."
+    )
+    region: Optional[str] = Field(
+        None,
+        description="Filter search results by a geographical region (e.g., 'US', 'GB', 'DE')."
+    )
+
+
 
 class AgentConfig(BaseModel):
     name: str
@@ -201,7 +222,7 @@ class AgentConfig(BaseModel):
         default_factory=list,
         description="A list of data sources for the agent to retrieve information from. Optional for generic chatbots."
     )
-    tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv']]] = Field(
+    tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv','search_engine']]] = Field(
         default_factory=list,
         description="A list of tools the agent can use. Defaults to an empty list, meaning no tools are used unless specified."
     )

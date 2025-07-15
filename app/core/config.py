@@ -18,6 +18,7 @@ SERVICE_KEY_MAPPING: Dict[str, str] = {
     "google": "GOOGLE_API_KEY",
     "pinecone": "PINECONE_API_KEY",
     "mongodb": "MONGODB_CONN_STRING",
+    "brave_search": "BRAVE_SEARCH_API_KEY"
 }
 
 # Maps model prefixes to their respective classes and required service keys
