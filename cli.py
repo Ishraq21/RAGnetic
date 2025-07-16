@@ -16,6 +16,8 @@ import signal
 import sys
 from typing import Optional, List, Dict, Any
 import secrets
+from pathlib import Path
+from dotenv import load_dotenv
 
 # IMPORTS for inspect_agent dynamic vector store loading
 from langchain_community.vectorstores import FAISS, Chroma
@@ -27,7 +29,6 @@ from pinecone import Pinecone as PineconeClient
 from app.core.embed_config import get_embedding_model
 from langchain_core.documents import Document as LangChainDocument
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file
-from pathlib import Path
 
 # IMPORTS for connection checks
 from sqlalchemy import create_engine, text
@@ -40,7 +41,8 @@ from google.oauth2 import service_account
 # Initialize a default logger for CLI startup FIRST, so it's always bound.
 logger = logging.getLogger(__name__)
 
-from app.core.config import get_path_settings, get_api_key, get_server_api_keys
+from app.core.config import get_path_settings, get_api_key, get_server_api_keys, get_log_storage_config, \
+    get_memory_storage_config, get_db_connection
 from app.core.structured_logging import JSONFormatter
 from app.evaluation.dataset_generator import generate_test_set
 from app.evaluation.benchmark import run_benchmark
@@ -51,6 +53,7 @@ from app.core.validation import is_valid_agent_name_cli
 
 # --- Centralized Path Configuration ---
 _APP_PATHS = get_path_settings()
+_PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
 _LOGS_DIR = _APP_PATHS["LOGS_DIR"]
 _DATA_DIR = _APP_PATHS["DATA_DIR"]
 _AGENTS_DIR = _APP_PATHS["AGENTS_DIR"]
@@ -59,6 +62,40 @@ _MEMORY_DIR = _APP_PATHS["MEMORY_DIR"]
 _CONFIG_FILE = _APP_PATHS["CONFIG_FILE_PATH"]
 _RAGNETIC_DIR = _APP_PATHS["RAGNETIC_DIR"]
 _TEMP_CLONES_DIR = _APP_PATHS["TEMP_CLONES_DIR"]
+
+# --- Load Environment Variables ---
+# Load .env file from the project root for all CLI commands
+load_dotenv(dotenv_path=_PROJECT_ROOT / ".env")
+
+
+def _update_env_file(env_vars: Dict[str, str]):
+    """
+    Reads an existing .env file, updates or adds the specified
+    environment variables, and writes it back securely.
+    """
+    env_file_path = _PROJECT_ROOT / ".env"
+    env_lines = []
+    if os.path.exists(env_file_path):
+        with open(env_file_path, 'r') as f:
+            env_lines = f.readlines()
+
+    for key, value in env_vars.items():
+        # Wrap value in quotes if it contains spaces or special characters
+        formatted_value = f"'{value}'" if any(c in value for c in ' #=') else value
+        found = False
+        for i, line in enumerate(env_lines):
+            if line.strip().startswith(f"{key}="):
+                env_lines[i] = f"{key}={formatted_value}\n"
+                found = True
+                break
+        if not found:
+            # Ensure there's a newline before adding a new key
+            if env_lines and not env_lines[-1].endswith('\n'):
+                env_lines.append('\n')
+            env_lines.append(f"{key}={formatted_value}\n")
+
+    with open(env_file_path, 'w') as f:
+        f.writelines(env_lines)
 
 
 def _validate_agent_name_cli(agent_name: str):
@@ -84,35 +121,23 @@ def setup_logging(json_format: bool = False):
 
     if is_production:
         root_logger.setLevel(logging.INFO)
-        logger.info("Logging configured for PRODUCTION environment.")
     else:
-        root_logger.setLevel(logging.INFO)
-        logger.info("Logging configured for DEVELOPMENT environment (minimal DEBUG on console).")
+        root_logger.setLevel(logging.DEBUG)
 
     console_handler = logging.StreamHandler()
-    if is_production:
-        console_handler.setLevel(logging.WARNING)
-    else:
-        console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.INFO)
 
     if json_format:
         formatter = JSONFormatter()
-        console_handler.setFormatter(formatter)
-        log_file_base_name = "ragnetic_app.jsonl"
-        file_handler_path = os.path.join(_LOGS_DIR, log_file_base_name)
         file_handler = TimedRotatingFileHandler(
-            file_handler_path, when="midnight", interval=1, backupCount=7, encoding="utf-8"
+            os.path.join(_LOGS_DIR, "ragnetic_app.jsonl"), when="midnight", interval=1, backupCount=7, encoding="utf-8"
         )
         file_handler.setFormatter(formatter)
-        if is_production:
-            file_handler.setLevel(logging.WARNING)
-        else:
-            file_handler.setLevel(logging.INFO)
         root_logger.addHandler(file_handler)
     else:
         formatter = logging.Formatter('%(levelname)s: %(message)s')
-        console_handler.setFormatter(formatter)
 
+    console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
 
@@ -142,138 +167,13 @@ MODEL_PROVIDERS = {
     "Google (Gemini)": "GOOGLE_API_KEY",
     "Pinecone": "PINECONE_API_KEY",
     "MongoDB Atlas": "MONGODB_CONN_STRING",
+    "Brave Search": "BRAVE_SEARCH_API_KEY",
     "Hugging Face": None,
     "Ollama (Local LLMs)": None,
-    "Brave Search": "BRAVE_SEARCH_API_KEY"
 }
 
 
-@app.command(help="Initialize a new RAGnetic project in the current directory.")
-def init():
-    setup_logging()
-    logger.info("Initializing new RAGnetic project...")
-
-    # Use get_path_settings to calculate all the necessary paths
-    paths = get_path_settings()
-
-    # Create all directories
-    for key, path in paths.items():
-        if key.endswith("_DIR"):
-            if not os.path.exists(path):
-                os.makedirs(path, mode=0o750, exist_ok=True)
-                logger.info(f"  - Created directory: {path}")
-
-    # Check if the config file needs to be created
-    if not os.path.exists(paths["CONFIG_FILE_PATH"]):
-        config = configparser.ConfigParser()
-
-        config['PATH_SETTINGS'] = {
-            '# You can override default paths here if needed. Paths are relative to your project root.': '',
-            '# Example: To change the data directory to a folder named "my_data", uncomment the next line:': '',
-            '# data_dir': 'my_data',
-        }
-
-        config['API_KEYS'] = {
-            '# For production, it is STRONGLY recommended to use environment variables:': '',
-            '# export OPENAI_API_KEY="sk-..."': '',
-            '#': '',
-            '# For local development, you can set keys here or use `ragnetic set-api-key`.': '',
-            'OPENAI_API_KEY': '...',
-        }
-        config['AUTH'] = {
-            '# Use the `ragnetic set-server-key` command to generate a secure key for the API.': '',
-            'server_api_keys': ''
-        }
-        config['SERVER'] = {
-            '# Use `ragnetic configure` to change these settings interactively.': '',
-            'host': '127.0.0.1',
-            'port': '8000',
-            'json_logs': 'false'
-        }
-
-        with open(paths["CONFIG_FILE_PATH"], 'w') as configfile:
-            config.write(configfile)
-
-        logger.info(f"  - Created config file at: {paths['CONFIG_FILE_PATH']}")
-        typer.secho("\nProject initialized successfully!", fg=typer.colors.GREEN)
-        typer.secho("Next steps:", bold=True)
-        typer.echo("  1. Set your API keys for services like OpenAI:")
-        typer.secho("     ragnetic set-api-key", bold=True)
-        typer.echo("  2. (Optional) Configure your server settings:")
-        typer.secho("     ragnetic configure", bold=True)
-        typer.echo("  3. Secure your server with an API key:")
-        typer.secho("     ragnetic set-server-key", bold=True)
-    else:
-        logger.info("Project already initialized.")
-
-@app.command(name="set-server-key", help="Generate and set a new secret key to protect the server API.")
-def set_server_key():
-    """
-    Generates a new secure key and saves it to config.ini.
-    """
-    setup_logging()
-    config = configparser.ConfigParser()
-    config.read(_CONFIG_FILE)
-    if 'AUTH' not in config:
-        config['AUTH'] = {}
-
-    new_key = secrets.token_hex(32)
-    config['AUTH']['server_api_keys'] = new_key
-
-    with open(_CONFIG_FILE, 'w') as configfile:
-        config.write(configfile)
-
-    typer.secho("Successfully set a new server API key.", fg=typer.colors.GREEN)
-    typer.echo("Your new key is:")
-    typer.secho(f"  {new_key}", bold=True)
-    typer.echo("\nUse this key in the 'X-API-Key' header for all API requests.")
-
-
-@app.command(name="set-api-key", help="Set and save API keys for external services (e.g., OpenAI).")
-def set_api():
-    setup_logging()
-    typer.secho("--- External Service API Key Configuration ---", bold=True)
-    typer.secho(
-        "This wizard saves keys to the local .ragnetic/config.ini file.\n"
-        "For production, setting environment variables is the recommended approach.",
-        fg=typer.colors.YELLOW
-    )
-    typer.echo("Example: export OPENAI_API_KEY='sk-...'")
-
-    while True:
-        typer.echo("\nPlease select a provider to configure:")
-        provider_menu = list(MODEL_PROVIDERS.keys())
-        for i, provider in enumerate(provider_menu, 1):
-            typer.echo(f"  [{i}] {provider}")
-        try:
-            choice_str = typer.prompt("Enter the number of your choice")
-            choice_index = int(choice_str) - 1
-            if not 0 <= choice_index < len(provider_menu): raise ValueError
-            selected_provider = provider_menu[choice_index]
-            if MODEL_PROVIDERS[selected_provider] is None:
-                typer.secho(f"\n{selected_provider} models run locally and do not require an API key.",
-                            fg=typer.colors.GREEN)
-            else:
-                config_key_name = MODEL_PROVIDERS[selected_provider]
-                api_key = typer.prompt(f"Enter your {selected_provider} API Key", hide_input=True)
-                if not api_key:
-                    typer.secho("Error: API Key cannot be empty.", fg=typer.colors.RED)
-                    continue
-                config = configparser.ConfigParser()
-                config.read(_CONFIG_FILE)
-                if 'API_KEYS' not in config: config['API_KEYS'] = {}
-                config['API_KEYS'][config_key_name] = api_key
-                with open(_CONFIG_FILE, 'w') as configfile:
-                    config.write(configfile)
-                typer.secho(f"Successfully saved {selected_provider} API key to {_CONFIG_FILE}.", fg=typer.colors.GREEN)
-        except (ValueError, IndexError):
-            typer.secho("Error: Invalid selection.", fg=typer.colors.RED)
-        if not typer.confirm("Do you want to set another API key?", default=False):
-            break
-    typer.echo("\nLocal API key configuration complete.")
-
-
-@app.command(help="Configure system settings like server host and port.")
+@app.command(help="Configure system settings, databases, and secrets.")
 def configure():
     setup_logging()
     typer.secho("--- RAGnetic System Configuration ---", bold=True)
@@ -281,65 +181,275 @@ def configure():
     config = configparser.ConfigParser()
     config.read(_CONFIG_FILE)
 
-    if 'SERVER' not in config: config.add_section('SERVER')
+    # --- Configure Server Settings ---
+    if typer.confirm("\nDo you want to configure SERVER settings (host, port)?", default=True):
+        if 'SERVER' not in config: config.add_section('SERVER')
+        host = typer.prompt("Enter server host", default=config.get('SERVER', 'host', fallback='127.0.0.1'))
+        port = typer.prompt("Enter server port", default=config.get('SERVER', 'port', fallback='8000'))
+        json_logs = typer.confirm("Use JSON format for console logs?",
+                                  default=config.getboolean('SERVER', 'json_logs', fallback=False))
+        config.set('SERVER', 'host', host)
+        config.set('SERVER', 'port', str(port))
+        config.set('SERVER', 'json_logs', str(json_logs).lower())
+        typer.secho("Server settings updated.", fg=typer.colors.GREEN)
 
-    host = typer.prompt("Enter server host", default=config.get('SERVER', 'host', fallback='127.0.0.1'))
-    port = typer.prompt("Enter server port", default=config.get('SERVER', 'port', fallback='8000'))
-    json_logs = typer.confirm("Use JSON format for logs?",
-                              default=config.getboolean('SERVER', 'json_logs', fallback=False))
+    # --- Configure System Database Connections ---
+    if typer.confirm("\nDo you want to configure SYSTEM database connections?", default=False):
+        if 'DATABASE_CONNECTIONS' not in config: config.add_section('DATABASE_CONNECTIONS')
 
-    config.set('SERVER', 'host', host)
-    config.set('SERVER', 'port', str(port))
-    config.set('SERVER', 'json_logs', str(json_logs).lower())
+        DIALECT_MAP = {"postgresql": "postgresql+psycopg2", "mysql": "mysql+mysqlconnector", "sqlite": "sqlite"}
+
+        while True:
+            if not typer.confirm("Add or update a database connection?", default=True):
+                break
+
+            conn_name = typer.prompt("Enter a unique name for this connection (e.g., 'prod_db')")
+            typer.secho(f"\n--- Configuring '{conn_name}' ---", bold=True)
+            db_type = typer.prompt(f"Database type? Choose from: {list(DIALECT_MAP.keys())}", default="postgresql")
+            while db_type not in DIALECT_MAP:
+                typer.secho("Invalid selection.", fg=typer.colors.RED)
+                db_type = typer.prompt(f"Database type? Choose from: {list(DIALECT_MAP.keys())}", default="postgresql")
+
+            dialect = DIALECT_MAP[db_type]
+            section_name = f"DATABASE_{conn_name}"
+
+            if db_type == "sqlite":
+                db_path = typer.prompt("Enter the path for the SQLite file (e.g., data/system.db)")
+                config[section_name] = {'dialect': dialect, 'database_path': db_path}
+            else:
+                username = typer.prompt("Username")
+                host = typer.prompt("Host", default="localhost")
+                port = typer.prompt("Port", default="5432" if db_type == "postgresql" else "3306")
+                database = typer.prompt("Database Name")
+                password = typer.prompt(f"Enter password for user '{username}'", hide_input=True)
+
+                config[section_name] = {'dialect': dialect, 'username': username, 'host': host, 'port': port,
+                                        'database': database}
+
+                if password:
+                    if typer.confirm(f"Save password for '{conn_name}' to the local .env file?", default=True):
+                        password_env_var = f"{conn_name.upper()}_PASSWORD"
+                        _update_env_file({password_env_var: password})
+                        typer.secho(f"Password saved to the .env file.", fg=typer.colors.GREEN)
+                else:
+                    typer.secho("Password not provided. It will be prompted for at runtime.", fg=typer.colors.YELLOW)
+
+            existing_conns = {c.strip() for c in config.get('DATABASE_CONNECTIONS', 'names', fallback='').split(',') if
+                              c.strip()}
+            existing_conns.add(conn_name)
+            config.set('DATABASE_CONNECTIONS', 'names', ','.join(sorted(list(existing_conns))))
+            typer.secho(f"\nConnection '{conn_name}' configured successfully.", fg=typer.colors.GREEN)
+
+    # --- Configure Memory and Log Storage ---
+    if typer.confirm("\nDo you want to configure MEMORY (chat history) storage?", default=False):
+        if 'MEMORY_STORAGE' not in config: config.add_section('MEMORY_STORAGE')
+        mem_type = typer.prompt("Enter memory storage type (sqlite, db)",
+                                default=config.get('MEMORY_STORAGE', 'type', fallback='sqlite'))
+        config.set('MEMORY_STORAGE', 'type', mem_type)
+        if mem_type == 'db':
+            conn_name = typer.prompt("Enter the database connection name to use",
+                                     default=config.get('MEMORY_STORAGE', 'connection_name', fallback=""))
+            config.set('MEMORY_STORAGE', 'connection_name', conn_name)
+
+    if typer.confirm("\nDo you want to configure LOG storage?", default=False):
+        if 'LOG_STORAGE' not in config: config.add_section('LOG_STORAGE')
+        log_type = typer.prompt("Enter log storage type (file, db)",
+                                default=config.get('LOG_STORAGE', 'type', fallback='file'))
+        config.set('LOG_STORAGE', 'type', log_type)
+        if log_type == 'db':
+            conn_name = typer.prompt("Enter the database connection name to use",
+                                     default=config.get('LOG_STORAGE', 'connection_name', fallback=""))
+            table_name = typer.prompt("Enter the table name for logs",
+                                      default=config.get('LOG_STORAGE', 'log_table_name', fallback='ragnetic_logs'))
+            config.set('LOG_STORAGE', 'connection_name', conn_name)
+            config.set('LOG_STORAGE', 'log_table_name', table_name)
 
     with open(_CONFIG_FILE, 'w') as configfile:
         config.write(configfile)
+    typer.secho("\nConfiguration saved successfully to .ragnetic/config.ini", fg=typer.colors.GREEN)
 
-    typer.secho("\nServer settings updated successfully in .ragnetic/config.ini", fg=typer.colors.GREEN)
+
+@app.command(name="show-config", help="Displays the current system configurations.")
+def show_config():
+    """Reads and prints the contents of the .ragnetic/config.ini file."""
+    setup_logging()
+    typer.secho("--- Current RAGnetic Configuration ---", bold=True)
+
+    if not os.path.exists(_CONFIG_FILE):
+        typer.secho(f"Configuration file not found at: {_CONFIG_FILE}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    config = configparser.ConfigParser()
+    config.read(_CONFIG_FILE)
+    for section in config.sections():
+        typer.secho(f"\n[{section}]", fg=typer.colors.CYAN, bold=True)
+        for key, value in config.items(section):
+            if not key.startswith('#'):
+                typer.echo(f"  {key} = {value}")
+    typer.echo("")
 
 
-@app.command(help="Starts the RAGnetic server and the file watcher.")
+@app.command(name="check-system-db", help="Verifies connections to configured system databases.")
+def check_system_db():
+    setup_logging()
+    typer.secho("--- Checking System Database Connections ---", bold=True)
+    log_config = get_log_storage_config()
+    memory_config = get_memory_storage_config()
+    connections_to_check = {}
+
+    if log_config.get("type") == "db" and log_config.get("connection_name"):
+        conn_name = log_config["connection_name"]
+        connections_to_check[conn_name] = connections_to_check.get(conn_name, []) + ["Logging"]
+    if memory_config.get("type") == "db" and memory_config.get("connection_name"):
+        conn_name = memory_config["connection_name"]
+        connections_to_check[conn_name] = connections_to_check.get(conn_name, []) + ["Memory"]
+
+    if not connections_to_check:
+        typer.secho("No system database connections are configured.", fg=typer.colors.YELLOW)
+        raise typer.Exit()
+
+    has_failure = False
+    for conn_name, purposes in connections_to_check.items():
+        typer.echo(f"\nVerifying '{conn_name}' used for: {' and '.join(purposes)}")
+        try:
+            conn_str = get_db_connection(conn_name)
+            engine = create_engine(conn_str, echo=False, connect_args={'connect_timeout': 5})
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            engine.dispose()
+            typer.secho(f"  - [PASS] Connection successful.", fg=typer.colors.GREEN)
+        except Exception as e:
+            typer.secho(f"  - [FAIL] Connection failed. Error: {e}", fg=typer.colors.RED)
+            has_failure = True
+
+    typer.secho("\n--- Check Complete ---", bold=True)
+    if has_failure:
+        raise typer.Exit(code=1)
+
+
+@app.command(help="Initialize a new RAGnetic project.")
+def init():
+    setup_logging()
+    typer.secho("Initializing new RAGnetic project...", bold=True)
+    for key, path in _APP_PATHS.items():
+        if key.endswith("_DIR") and not os.path.exists(path):
+            os.makedirs(path, mode=0o750, exist_ok=True)
+            typer.echo(f"  - Created directory: {path}")
+
+    if not os.path.exists(_CONFIG_FILE):
+        config = configparser.ConfigParser()
+        config['SERVER'] = {'host': '127.0.0.1', 'port': '8000', 'json_logs': 'false'}
+        config['API_KEYS'] = {
+            '# Secrets are managed in the .env file. Use `ragnetic set-api-key`.': '',
+            'OPENAI_API_KEY': '...',
+        }
+        with open(_CONFIG_FILE, 'w') as configfile:
+            config.write(configfile)
+        typer.echo(f"  - Created config file: {_CONFIG_FILE}")
+
+    typer.secho("\nProject initialized successfully!", fg=typer.colors.GREEN)
+    typer.secho("Next steps:", bold=True)
+    typer.echo("  1. Set your API keys: " + typer.style("ragnetic set-api-key", bold=True))
+    typer.echo("  2. Configure your database (optional): " + typer.style("ragnetic configure", bold=True))
+    typer.echo("  3. Secure your server: " + typer.style("ragnetic set-server-key", bold=True))
+
+
+@app.command(name="set-server-key", help="Generate and set a secret key for the server API.")
+def set_server_key():
+    setup_logging()
+    new_key = secrets.token_hex(32)
+    _update_env_file({"RAGNETIC_API_KEYS": new_key})
+    typer.secho("Successfully set a new server API key in the .env file.", fg=typer.colors.GREEN)
+    typer.echo("Your new key is: " + typer.style(new_key, bold=True))
+
+
+@app.command(name="set-api-key", help="Set and save API keys to the secure .env file.")
+def set_api():
+    setup_logging()
+    typer.secho("--- External Service API Key Configuration ---", bold=True)
+    typer.secho("This wizard saves keys securely to the project's local .env file.", fg=typer.colors.CYAN)
+
+    while True:
+        typer.echo("\nPlease select a provider to configure:")
+        for i, provider in enumerate(MODEL_PROVIDERS.keys(), 1):
+            typer.echo(f"  [{i}] {provider}")
+        try:
+            choice_index = int(typer.prompt("Enter the number of your choice")) - 1
+            selected_provider = list(MODEL_PROVIDERS.keys())[choice_index]
+            env_key_name = MODEL_PROVIDERS[selected_provider]
+
+            if not env_key_name:
+                typer.secho(f"\n{selected_provider} models run locally and do not require an API key.",
+                            fg=typer.colors.GREEN)
+                continue
+
+            api_key = typer.prompt(f"Enter your {selected_provider} API Key", hide_input=True)
+            if not api_key:
+                typer.secho("Error: API Key cannot be empty.", fg=typer.colors.RED)
+                continue
+
+            _update_env_file({env_key_name: api_key})
+            typer.secho(f"Successfully saved {selected_provider} API key to the .env file.", fg=typer.colors.GREEN)
+
+        except (ValueError, IndexError):
+            typer.secho("Error: Invalid selection.", fg=typer.colors.RED)
+
+        if not typer.confirm("Do you want to set another API key?", default=False):
+            break
+
+    typer.echo("\nAPI key configuration complete.")
+
+
+@auth_app.command("gdrive", help="Authenticate with Google Drive securely.")
+def auth_gdrive():
+    setup_logging()
+    typer.secho("--- Google Drive Authentication Setup ---", bold=True)
+    json_path_str = typer.prompt("Path to your service account JSON key file")
+    json_path = Path(json_path_str)
+
+    if not json_path.is_file() or not json_path.name.endswith('.json'):
+        typer.secho(f"Error: File not found or not a .json file at '{json_path_str}'", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    try:
+        creds_file_path = _RAGNETIC_DIR / "gdrive_credentials.json"
+        shutil.copy(json_path, creds_file_path)
+        if os.name == 'posix':
+            os.chmod(creds_file_path, 0o600)
+
+        _update_env_file({"GOOGLE_APPLICATION_CREDENTIALS": str(creds_file_path.resolve())})
+
+        typer.secho(f"\nCredentials file secured at: {creds_file_path}", fg=typer.colors.GREEN)
+        typer.secho("Authentication setup is complete.", bold=True)
+
+    except Exception as e:
+        typer.secho(f"An error occurred: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@app.command(help="Starts the RAGnetic server.")
 def start_server(
-        host: str = typer.Option(None, help="The host to bind the server to. Overrides config file setting."),
-        port: int = typer.Option(None, help="The port to run the server on. Overrides config file setting."),
+        host: str = typer.Option(None, help="Server host. Overrides config."),
+        port: int = typer.Option(None, help="Server port. Overrides config."),
         reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
-        no_watcher: bool = typer.Option(False, "--no-watcher", help="Do not start the file watcher process."),
-        json_logs: bool = typer.Option(None, "--json-logs",
-                                       help="Output logs in structured JSON format. Overrides config file setting."),
+        json_logs: bool = typer.Option(None, "--json-logs", help="Output logs in JSON format. Overrides config."),
 ):
     config = configparser.ConfigParser()
     config.read(_CONFIG_FILE)
-
-    config_host = config.get('SERVER', 'host', fallback="127.0.0.1")
-    config_port = config.getint('SERVER', 'port', fallback=8000)
-    config_json_logs = config.getboolean('SERVER', 'json_logs', fallback=False)
-
-    final_host = host if host is not None else config_host
-    final_port = port if port is not None else config_port
-    final_json_logs = json_logs if json_logs is not None else config_json_logs
+    final_host = host or config.get('SERVER', 'host', fallback="127.0.0.1")
+    final_port = port or config.getint('SERVER', 'port', fallback=8000)
+    final_json_logs = json_logs if json_logs is not None else config.getboolean('SERVER', 'json_logs', fallback=False)
 
     setup_logging(final_json_logs)
 
     if not get_server_api_keys():
-        typer.secho("--- SECURITY WARNING ---", fg=typer.colors.YELLOW, bold=True)
-        typer.secho("The server is starting without an API key. The API will be open to anyone who can access it.",
-                    fg=typer.colors.YELLOW)
-        typer.secho("For production or shared environments, please secure your server by running:",
-                    fg=typer.colors.YELLOW)
-        typer.secho("  ragnetic set-server-key\n", bold=True)
+        typer.secho("SECURITY WARNING: Server starting without an API key.", fg=typer.colors.YELLOW, bold=True)
+        typer.secho("Run 'ragnetic set-server-key' to secure the API.", fg=typer.colors.YELLOW)
 
     if reload:
-        logger.warning("Running in --reload mode. The file watcher will be disabled.")
-        uvicorn.run("app.main:app", host=final_host, port=final_port, reload=True)
-        return
+        logger.warning("Running in --reload mode.")
 
-    logger.info(f"Starting RAGnetic server on http://{final_host}:{final_port}")
-    try:
-        get_api_key("openai")
-    except ValueError as e:
-        logger.warning(f"{e} - some models may not work.")
-
-    uvicorn.run("app.main:app", host=final_host, port=final_port)
+    uvicorn.run("app.main:app", host=final_host, port=final_port, reload=reload)
 
 
 @app.command(help="Lists all configured agents.")
@@ -395,6 +505,7 @@ def deploy_agent_by_name(
     except Exception as e:
         logger.error(f"An unexpected error occurred during deployment: {e}", exc_info=True)
         raise typer.Exit(code=1)
+
 
 @app.command(name='inspect-agent', help="Displays the configuration of a specific agent.")
 def inspect_agent(
@@ -564,13 +675,10 @@ def inspect_agent(
                         r.raise_for_status()
                         status = "[PASS]"
                     elif source.type == "gdoc":
-                        cfg = configparser.ConfigParser()
-                        cfg.read(_CONFIG_FILE)
-                        if cfg.has_section("GOOGLE_CREDENTIALS") and cfg.get("GOOGLE_CREDENTIALS", "json_key",
-                                                                             fallback=None):
-                            status = "[PASS] GDrive creds"
+                        if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+                            status = "[PASS] GDrive creds found in environment"
                         else:
-                            status = "[FAIL] Missing GDrive creds"
+                            status = "[FAIL] Missing GDrive creds. Run 'ragnetic auth gdrive'."
                             errors += 1
                     else:
                         status = "[SKIP]"
@@ -636,37 +744,6 @@ def delete_agent(
         typer.secho(f"\nAgent '{agent_name}' has been permanently deleted.", fg=typer.colors.GREEN)
     except Exception as e:
         typer.secho(f"An error occurred during deletion: {e}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-
-
-@auth_app.command("gdrive", help="Authenticate with Google Drive.")
-def auth_gdrive():
-    setup_logging()
-    typer.echo("Google Drive Authentication Setup")
-    typer.echo("Please provide the path to your service account JSON key file.")
-    json_path = typer.prompt("Path to service account .json file")
-    if not os.path.exists(json_path) or not json_path.endswith('.json'):
-        typer.secho(f"Error: File not found or not a .json file at '{json_path}'", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    try:
-        with open(json_path, 'r') as f:
-            credentials_json_str = f.read()
-        json.loads(credentials_json_str)
-        config = configparser.ConfigParser()
-        config.read(_CONFIG_FILE)
-        if 'GOOGLE_CREDENTIALS' not in config:
-            config.add_section('GOOGLE_CREDENTIALS')
-        safe_credentials_str = credentials_json_str.replace('%', '%%')
-        config.set('GOOGLE_CREDENTIALS', 'json_key', safe_credentials_str)
-        with open(_CONFIG_FILE, 'w') as configfile:
-            config.write(configfile)
-        typer.secho(f"Google Drive credentials saved successfully!",
-                    fg=typer.colors.GREEN)
-    except json.JSONDecodeError:
-        typer.secho("Error: The provided file is not a valid JSON file.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    except Exception as e:
-        typer.secho(f"An error occurred: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
 

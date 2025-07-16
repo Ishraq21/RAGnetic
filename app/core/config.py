@@ -10,12 +10,12 @@ from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.chat_models.ollama import ChatOllama
 from app.schemas.agent import ModelParams
+import typer
 
 # --- Logging ---
 logger = logging.getLogger(__name__)
 
 # --- Mappings ---
-# Maps service names to their environment variable and config.ini key names
 SERVICE_KEY_MAPPING: Dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
@@ -25,12 +25,11 @@ SERVICE_KEY_MAPPING: Dict[str, str] = {
     "brave_search": "BRAVE_SEARCH_API_KEY",
 }
 
-# Maps model prefixes to their respective classes and required service keys
 MODEL_PROVIDER_MAPPING = {
     "gpt-": (ChatOpenAI, "openai"),
     "claude-": (ChatAnthropic, "anthropic"),
     "gemini-": (ChatGoogleGenerativeAI, "google"),
-    "ollama/": (ChatOllama, None),  # Local models don't need a key
+    "ollama/": (ChatOllama, None),
 }
 
 # --- Caching ---
@@ -41,15 +40,9 @@ _llm_cache: Dict[str, Any] = {}
 
 @lru_cache(maxsize=1)
 def _get_config_parser() -> configparser.ConfigParser:
-    """
-    Reads and caches the main config.ini file. Using a cached function
-    prevents reading the file from disk multiple times per command.
-    """
-    # This assumes get_project_root() is defined or paths are handled consistently.
-    # For simplicity, we'll calculate the config file path here directly.
+    """Reads and caches the main config.ini file."""
     project_root = Path(os.environ.get("RAGNETIC_PROJECT_ROOT", Path.cwd()))
     config_file_path = project_root / ".ragnetic" / "config.ini"
-
     config = configparser.ConfigParser()
     if config_file_path.exists():
         config.read(config_file_path)
@@ -60,22 +53,12 @@ def _get_config_parser() -> configparser.ConfigParser:
 
 @lru_cache(maxsize=1)
 def get_path_settings() -> Dict[str, Path | List[Path]]:
-    """
-    Retrieves and resolves all critical application paths.
-    It establishes sensible defaults and allows overrides from config.ini
-    without printing warnings for default usage.
-    """
+    """Retrieves and resolves all critical application paths."""
     config = _get_config_parser()
-
-    # 1. Determine Project Root
-    # The default is the current working directory.
     project_root = Path(os.environ.get("RAGNETIC_PROJECT_ROOT", Path.cwd())).resolve()
-
-    # Allow override from config file, relative to the project root.
     if config.has_option('PATH_SETTINGS', 'PROJECT_ROOT'):
         project_root = (project_root / config.get('PATH_SETTINGS', 'PROJECT_ROOT')).resolve()
 
-    # 2. Define all other paths based on the final project root
     paths = {
         "PROJECT_ROOT": project_root,
         "RAGNETIC_DIR": project_root / ".ragnetic",
@@ -88,7 +71,6 @@ def get_path_settings() -> Dict[str, Path | List[Path]]:
         "TEMP_CLONES_DIR": project_root / ".ragnetic" / ".ragnetic_temp_clones",
     }
 
-    # 3. Define allowed data directories for security
     default_allowed_dirs = f"{paths['DATA_DIR']},{paths['AGENTS_DIR']},{paths['TEMP_CLONES_DIR']}"
     allowed_dirs_str = config.get('PATH_SETTINGS', 'ALLOWED_DATA_DIRS', fallback=default_allowed_dirs)
     paths["ALLOWED_DATA_DIRS"] = [Path(p.strip()).resolve() for p in allowed_dirs_str.split(',')]
@@ -97,69 +79,89 @@ def get_path_settings() -> Dict[str, Path | List[Path]]:
 
 
 def get_api_key(service_name: str) -> Optional[str]:
-    """
-    Retrieves an API key, prioritizing environment variables over the config file.
-    """
+    """Retrieves an API key, prioritizing environment variables."""
     key_name = SERVICE_KEY_MAPPING.get(service_name.lower())
     if not key_name:
         raise ValueError(f"Service '{service_name}' is not a valid service.")
-
-    # 1. Prioritize Environment Variable (ideal for production)
     api_key = os.environ.get(key_name)
     if api_key:
-        logger.debug(f"Loaded API key for '{service_name}' from environment variable.")
         return api_key
-
-    # 2. Fallback to config.ini for local development
     config = _get_config_parser()
     if config.has_option('API_KEYS', key_name):
         api_key = config.get('API_KEYS', key_name)
         if api_key and api_key != "...":
-            logger.debug(f"Loaded API key for '{service_name}' from config file (development fallback).")
             return api_key
-
-    logger.warning(f"API key for '{service_name}' not found. Calls to this service will likely fail.")
     return None
 
 
 def get_server_api_keys() -> List[str]:
-    """
-    Retrieves a list of valid RAGnetic server API keys to protect the API.
-    Prioritizes environment variables, then falls back to config.ini.
-    """
-    # 1. Prioritize Environment Variable
+    """Retrieves server API keys, prioritizing environment variables."""
     keys_str = os.environ.get("RAGNETIC_API_KEYS")
     if keys_str:
-        logger.info("Loaded server API keys from RAGNETIC_API_KEYS environment variable.")
         return [key.strip() for key in keys_str.split(",") if key.strip()]
-
-    # 2. Fallback to config.ini
     config = _get_config_parser()
     if config.has_option('AUTH', 'server_api_keys'):
         keys_str = config.get('AUTH', 'server_api_keys')
         if keys_str:
-            logger.info("Loaded server API keys from config.ini.")
             return [key.strip() for key in keys_str.split(",") if key.strip()]
-
-    # 3. If no keys are found anywhere, run in insecure mode.
-    logger.warning("No server API keys found. API is running without authentication.")
     return []
 
 
-def get_db_connection(name_or_string: str) -> str:
-    """
-    Resolves a database connection name into a full connection string from config.ini.
-    If the input already looks like a connection string, it's returned directly.
-    """
-    if "://" in name_or_string:
-        return name_or_string
 
+def get_db_connection(name: str) -> str:
+    """
+    Constructs a database connection string from a structured configuration
+    section in config.ini. It prioritizes reading the password from an
+    environment variable and falls back to a secure interactive prompt.
+    """
     config = _get_config_parser()
-    if config.has_option('DATABASE_CONNECTIONS', name_or_string):
-        return config.get('DATABASE_CONNECTIONS', name_or_string)
+    section_name = f"DATABASE_{name}"
 
-    raise ValueError(
-        f"Database connection name '{name_or_string}' not found in [DATABASE_CONNECTIONS] section of .ragnetic/config.ini")
+    if not config.has_section(section_name):
+        raise ValueError(f"Configuration section '[{section_name}]' not found in .ragnetic/config.ini.")
+
+    dialect = config.get(section_name, 'dialect')
+
+    if 'sqlite' in dialect:
+        project_root = get_path_settings()["PROJECT_ROOT"]
+        db_path_str = config.get(section_name, 'database_path')
+        db_path = project_root / db_path_str
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        return f"{dialect}:///{db_path.resolve()}"
+
+    username = config.get(section_name, 'username')
+    host = config.get(section_name, 'host')
+    port = config.get(section_name, 'port')
+    database = config.get(section_name, 'database')
+
+    password_env_var = f"{name.upper()}_PASSWORD"
+    password = os.environ.get(password_env_var)
+
+    if not password:
+        logger.warning(f"Environment variable '{password_env_var}' not set for db connection '{name}'.")
+        if "CI" not in os.environ:
+            password = typer.prompt(f"Enter password for database user '{username}' on '{host}'", hide_input=True)
+
+    if not password:
+        raise ValueError(f"Password for database connection '{name}' is required but was not provided via the '{password_env_var}' environment variable or interactive prompt.")
+
+    return f"{dialect}://{username}:{password}@{host}:{port}/{database}"
+
+
+def get_memory_storage_config() -> Dict[str, str]:
+    """Reads the [MEMORY_STORAGE] section from the config file."""
+    config = _get_config_parser()
+    if config.has_section('MEMORY_STORAGE'):
+        return dict(config.items('MEMORY_STORAGE'))
+    return {"type": "sqlite"}  # Default
+
+
+def get_log_storage_config() -> Dict[str, str]:
+    """Reads the [LOG_STORAGE] section from the config file."""
+    config = _get_config_parser()
+    if config.has_section('LOG_STORAGE'):
+        return dict(config.items('LOG_STORAGE'))
+    return {"type": "file"}  # Default
 
 
 def get_llm_model(
