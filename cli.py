@@ -396,7 +396,6 @@ def deploy_agent_by_name(
         logger.error(f"An unexpected error occurred during deployment: {e}", exc_info=True)
         raise typer.Exit(code=1)
 
-
 @app.command(name='inspect-agent', help="Displays the configuration of a specific agent.")
 def inspect_agent(
         agent_name: str = typer.Argument(..., help="The name of the agent to inspect."),
@@ -421,6 +420,7 @@ def inspect_agent(
 
     typer.echo(f"Inspecting configuration for agent: '{agent_name}'")
 
+    # 1) Validate YAML config
     try:
         agent_config = load_agent_config(agent_name)
         typer.echo(yaml.dump(agent_config.model_dump(), indent=2, sort_keys=False))
@@ -432,26 +432,104 @@ def inspect_agent(
         typer.secho(f"  - [FAIL] Could not load or parse YAML config: {e}", fg=typer.colors.RED, err=True)
         errors += 1
 
+    # 2) Optionally inspect vector-store documents
     if show_documents_metadata:
-        typer.secho(f"\n--- Inspecting Knowledge Base Entries for '{agent_name}' ---", bold=True)
+        typer.secho(f"\n--- Inspecting Document Metadata for '{agent_name}' ---", bold=True)
         vectorstore_path = _VECTORSTORE_DIR / agent_name
 
         if not os.path.exists(vectorstore_path):
-            typer.secho(f"Error: Vector store not found at {vectorstore_path}. Please deploy the agent first.",
-                        fg=typer.colors.RED)
+            typer.secho(
+                f"Error: Vector store not found at {vectorstore_path}. Please deploy the agent first.",
+                fg=typer.colors.RED
+            )
             errors += 1
         else:
             async def _inspect_vector_store_async(k_value: int):
-                # ... (this async function remains the same) ...
+                # load embeddings
+                embeddings = get_embedding_model(agent_config.embedding_model)
+                typer.echo(f"Loading vector store: {agent_config.vector_store.type}")
+
+                # choose the right loader
+                cls_map = {
+                    'faiss': FAISS,
+                    'chroma': Chroma,
+                    'qdrant': Qdrant,
+                    'pinecone': PineconeLangChain,
+                    'mongodb_atlas': MongoDBAtlasVectorSearch,
+                }
+                db_type = agent_config.vector_store.type
+                if db_type not in cls_map:
+                    typer.secho(f"Unsupported vector store type '{db_type}'", fg=typer.colors.RED)
+                    return False
+
+                # handle external API keys
+                if db_type in ('pinecone', 'mongodb_atlas', 'qdrant'):
+                    key_map = {'pinecone': 'pinecone', 'mongodb_atlas': 'mongodb', 'qdrant': 'qdrant'}
+                    key = get_api_key(key_map[db_type])
+                    if not key:
+                        typer.secho(f"Missing API key for {db_type}", fg=typer.colors.YELLOW)
+                        return False
+                    if db_type == 'pinecone':
+                        PineconeClient(api_key=key)
+
+                # load the store
+                if db_type == 'faiss':
+                    db = await asyncio.to_thread(
+                        FAISS.load_local, str(vectorstore_path), embeddings, allow_dangerous_deserialization=True
+                    )
+                elif db_type == 'chroma':
+                    db = await asyncio.to_thread(Chroma, persist_directory=str(vectorstore_path),
+                                                 embedding_function=embeddings)
+                elif db_type == 'qdrant':
+                    cfg = agent_config.vector_store
+                    db = await asyncio.to_thread(
+                        Qdrant, client=None, collection_name=agent_name,
+                        embeddings=embeddings, host=cfg.qdrant_host, port=cfg.qdrant_port, prefer_grpc=True
+                    )
+                elif db_type == 'pinecone':
+                    idx = agent_config.vector_store.pinecone_index_name
+                    db = await asyncio.to_thread(PineconeLangChain.from_existing_index, index_name=idx,
+                                                 embedding=embeddings)
+                else:  # mongodb_atlas
+                    vs = agent_config.vector_store
+                    db = await asyncio.to_thread(
+                        MongoDBAtlasVectorSearch.from_connection_string,
+                        get_api_key("mongodb"),
+                        vs.mongodb_db_name,
+                        vs.mongodb_collection_name,
+                        embeddings,
+                        vs.mongodb_index_name
+                    )
+
+                if not db:
+                    typer.secho("Failed to initialize vector store.", fg=typer.colors.RED)
+                    return False
+
+                typer.echo("Vector store loaded successfully.")
+                typer.echo("\nRetrieving sample entries…")
+                docs = await asyncio.to_thread(db.similarity_search_with_score, "document", k=k_value)
+                if docs:
+                    for i, (doc, score) in enumerate(docs, 1):
+                        typer.secho(f"\n--- Entry {i} (Distance Score: {score:.4f} | Lower is More Relevant) ---",
+                                    fg=typer.colors.CYAN, bold=True)
+                        typer.echo(f"{doc.page_content[:400]}…")
+                        typer.secho("Metadata:", fg=typer.colors.BLUE)
+                        typer.echo(json.dumps(doc.metadata, indent=2))
+                        typer.secho("-" * 60, fg=typer.colors.MAGENTA)
+                else:
+                    typer.secho("No entries retrieved; store may be empty.", fg=typer.colors.YELLOW)
                 return True
 
             try:
                 success = asyncio.run(_inspect_vector_store_async(k_value=num_docs))
-                if not success: errors += 1
+
+                if not success:
+                    errors += 1
             except Exception as e:
                 typer.secho(f"Error during metadata inspection: {e}", fg=typer.colors.RED)
                 errors += 1
 
+    # 3) Optionally check external connections
     if check_connections:
         typer.secho(f"\n--- Performing Connection Checks for '{agent_name}' ---", bold=True)
         if not agent_config.sources:
@@ -462,15 +540,19 @@ def inspect_agent(
                 status = "[UNKNOWN]"
                 try:
                     if source.type == "db" and source.db_connection:
-                        # Since we are NOT using centralized connections, this logic is simpler
-                        conn_str = source.db_connection
                         connect_args = {}
+                        conn_str = source.db_connection
+
                         if conn_str.startswith("postgresql"):
                             connect_args['connect_timeout'] = 5
                         elif conn_str.startswith("mysql"):
+                            # The mysql-connector-python driver uses 'connect_timeout'
+                            # Other MySQL drivers might use 'connection_timeout'
                             connect_args['connect_timeout'] = 5
                         elif not conn_str.startswith("sqlite"):
+                            # Generic fallback for other network-based DBs
                             connect_args['timeout'] = 5
+                        # SQLite does not need a network timeout
 
                         eng = create_engine(conn_str, connect_args=connect_args)
                         with eng.connect() as conn:
@@ -495,6 +577,7 @@ def inspect_agent(
                 except Exception as e:
                     status = f"[FAIL] {e}"
                     errors += 1
+
                 typer.echo(f"  - {info}: {status}")
 
     typer.secho("\n" + "-" * 20, fg=typer.colors.WHITE)
