@@ -152,35 +152,49 @@ MODEL_PROVIDERS = {
 def init():
     setup_logging()
     logger.info("Initializing new RAGnetic project...")
-    folders_to_create = [
-        _AGENTS_DIR, _DATA_DIR, _VECTORSTORE_DIR, _MEMORY_DIR,
-        _LOGS_DIR, _RAGNETIC_DIR, _TEMP_CLONES_DIR
-    ]
-    for folder_path in folders_to_create:
-        if not os.path.exists(folder_path):
-            os.makedirs(folder_path, mode=0o750, exist_ok=True)
-            logger.info(f"  - Created directory: {folder_path}")
 
-    if not os.path.exists(_CONFIG_FILE):
+    # Use get_path_settings to calculate all the necessary paths
+    paths = get_path_settings()
+
+    # Create all directories
+    for key, path in paths.items():
+        if key.endswith("_DIR"):
+            if not os.path.exists(path):
+                os.makedirs(path, mode=0o750, exist_ok=True)
+                logger.info(f"  - Created directory: {path}")
+
+    # Check if the config file needs to be created
+    if not os.path.exists(paths["CONFIG_FILE_PATH"]):
         config = configparser.ConfigParser()
+
+        config['PATH_SETTINGS'] = {
+            '# You can override default paths here if needed. Paths are relative to your project root.': '',
+            '# Example: To change the data directory to a folder named "my_data", uncomment the next line:': '',
+            '# data_dir': 'my_data',
+        }
+
         config['API_KEYS'] = {
-            '# For local development, you can set keys here.': '',
-            '# For production, it is strongly recommended to use environment variables.': '',
+            '# For production, it is STRONGLY recommended to use environment variables:': '',
+            '# export OPENAI_API_KEY="sk-..."': '',
+            '#': '',
+            '# For local development, you can set keys here or use `ragnetic set-api-key`.': '',
             'OPENAI_API_KEY': '...',
         }
         config['AUTH'] = {
-            '# A comma-separated list of secret keys to protect the RAGnetic server API.': '',
-            '# Use the `ragnetic set-server-key` command to generate a secure key.': '',
+            '# Use the `ragnetic set-server-key` command to generate a secure key for the API.': '',
             'server_api_keys': ''
         }
         config['SERVER'] = {
+            '# Use `ragnetic configure` to change these settings interactively.': '',
             'host': '127.0.0.1',
             'port': '8000',
             'json_logs': 'false'
         }
-        with open(_CONFIG_FILE, 'w') as configfile:
+
+        with open(paths["CONFIG_FILE_PATH"], 'w') as configfile:
             config.write(configfile)
-        logger.info(f"  - Created config file at: {_CONFIG_FILE}")
+
+        logger.info(f"  - Created config file at: {paths['CONFIG_FILE_PATH']}")
         typer.secho("\nProject initialized successfully!", fg=typer.colors.GREEN)
         typer.secho("Next steps:", bold=True)
         typer.echo("  1. Set your API keys for services like OpenAI:")
@@ -191,7 +205,6 @@ def init():
         typer.secho("     ragnetic set-server-key", bold=True)
     else:
         logger.info("Project already initialized.")
-
 
 @app.command(name="set-server-key", help="Generate and set a new secret key to protect the server API.")
 def set_server_key():
