@@ -13,6 +13,8 @@ authors          = [
   { name = "Mirza Ishraq", email = "contact@ragnetic.ai" },
 ]
 dependencies     = [
+  "alembic",
+  "asyncpg",
   "arxiv",
   "beautifulsoup4",
   "faiss-cpu",
@@ -58,7 +60,8 @@ dependencies     = [
   "pytest-mock",
   "sqlalchemy",
   "tiktoken",
-  'pyarrow'
+  'pyarrow',
+  'langgraph-checkpoint-postgres'
 ]
 scripts = { "ragnetic" = "cli:app" }
 
