@@ -219,7 +219,9 @@ def reset_db(
         conn_str = get_db_connection(conn_name)
         typer.echo(f"Connecting to database via connection '{conn_name}'...")
 
-        engine = create_engine(conn_str)
+        # Use a synchronous-compatible dialect for the check
+        conn_str_sync = conn_str.replace('+aiosqlite', '').replace('+asyncpg', '')
+        engine = create_engine(conn_str_sync)
 
         with engine.connect() as connection:
             typer.echo("Dropping all application tables defined in the metadata...")

@@ -31,6 +31,7 @@ chat_sessions_table = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("agent_name", String(255), nullable=False),
     Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("topic_name", String(255), nullable=True),
     Column("thread_id", String(255), nullable=False, unique=True, index=True),
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
     Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
