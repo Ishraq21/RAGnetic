@@ -29,7 +29,7 @@ from app.schemas.agent import AgentConfig
 from app.agents.config_manager import save_agent_config, load_agent_config, get_agent_configs
 from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow, AgentState
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
@@ -388,6 +388,19 @@ async def websocket_chat(
             request_id = str(uuid4())
             logger.info(f"[{thread_id}] Processing request {request_id} for query: '{query[:50]}...'")
 
+            # Load message history
+            history: List[BaseMessage] = []
+            if is_db_session and session_id:
+                select_messages_stmt = text(
+                    f"SELECT sender, content FROM {chat_messages_table.name} WHERE session_id = :session_id ORDER BY timestamp ASC"
+                )
+                messages_result = (await db.execute(select_messages_stmt, {"session_id": session_id})).fetchall()
+                for msg in messages_result:
+                    if msg.sender == 'human':
+                        history.append(HumanMessage(content=msg.content))
+                    elif msg.sender == 'ai':
+                        history.append(AIMessage(content=msg.content))
+
             if is_db_session and session_id:
                 insert_message_stmt = text(
                     f"INSERT INTO {chat_messages_table.name} (session_id, sender, content) VALUES (:session_id, :sender, :content)")
@@ -395,7 +408,9 @@ async def websocket_chat(
                                  {"session_id": session_id, "sender": "human", "content": query})
                 await db.commit()
 
-            initial_state: AgentState = {"messages": [HumanMessage(content=query)], "request_id": request_id}
+            # Include history in the initial state
+            initial_state: AgentState = {"messages": history + [HumanMessage(content=query)],
+                                         "request_id": request_id}
 
             # Create tasks for agent generation and listening for client messages
             gen_task = asyncio.create_task(handle_query_streaming(initial_state, {
