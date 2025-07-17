@@ -1,3 +1,4 @@
+# app/main.py
 import os
 import logging
 import json
@@ -20,7 +21,12 @@ from datetime import datetime
 
 # Import database-related modules
 from app.db.models import chat_sessions_table, chat_messages_table, users_table, metadata
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
+
+# Corrected Imports: Importing the functions and variables from app.db and app.core.config
+from app.core.config import get_path_settings, get_server_api_keys, get_log_storage_config, \
+    get_memory_storage_config, get_db_connection_config, get_db_connection
+from app.db import initialize_db_connections, get_db # REMOVED AsyncSessionLocal from import
 
 from app.core.validation import validate_agent_name, sanitize_for_path
 from app.core.security import get_http_api_key, get_websocket_api_key
@@ -36,9 +42,6 @@ from app.tools.arxiv_tool import get_arxiv_tool
 from app.tools.search_engine_tool import SearchTool
 
 from app.watcher import start_watcher
-from app.core.config import get_path_settings, get_server_api_keys, get_log_storage_config, \
-    get_memory_storage_config, get_db_connection_config
-
 from sqlalchemy import create_engine as create_sync_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -71,78 +74,40 @@ templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- Database Connection Management ---
-async_engine = None
-AsyncSessionLocal: Optional[async_sessionmaker[AsyncSession]] = None
-
-
-def initialize_db_connections(db_config: dict):
-    """Initializes async DB connections based on config."""
-    global async_engine, AsyncSessionLocal
-
-    dialect = db_config.get('dialect', '')
-    if 'sqlite' in dialect:
-        db_path = Path(db_config.get('database_path', ''))
-        if not db_path.is_absolute():
-            db_path = _PROJECT_ROOT / db_path
-        # Ensure the correct URL format for absolute paths
-        conn_str = f"{dialect}:///{db_path.resolve()}"
-    else:
-        # This part handles non-sqlite connections, assuming get_db_connection constructs the URL correctly
-        raise NotImplementedError("Database connection logic for non-sqlite needs verification.")
-
-    async_engine = create_async_engine(conn_str, echo=False)
-    AsyncSessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=async_engine)
-    logger.info(f"Async database connections initialized using: {conn_str}")
-
-
-async def get_db() -> AsyncSession:
-    if AsyncSessionLocal is None:
-        raise RuntimeError("Database connections not initialized.")
-    async with AsyncSessionLocal() as session:
-        yield session
-
+# REMOVED: get_db_for_websocket function
 
 # --- Connection Manager for WebSockets ---
 class ConnectionManager:
     def __init__(self):
         self.active: List[WebSocket] = []
-
     async def connect(self, ws: WebSocket):
         await ws.accept()
         self.active.append(ws)
-
     def disconnect(self, ws: WebSocket):
         if ws in self.active:
             self.active.remove(ws)
-
     async def send(self, msg: Dict, ws: WebSocket):
         if ws.client_state == WebSocketState.CONNECTED:
             await ws.send_json(msg)
 
-
 manager = ConnectionManager()
 _watcher_process: Optional[Process] = None
-
 
 def is_db_configured() -> bool:
     mem_config = get_memory_storage_config()
     log_config = get_log_storage_config()
     return (mem_config.get("type") in ["db", "sqlite"]) or (log_config.get("type") == "db")
 
-
 @app.on_event("startup")
 async def startup_event():
     global _watcher_process
     logger.info("Application startup: Initializing RAGnetic components.")
-
     if is_db_configured():
         db_config = get_db_connection_config()
         if not db_config:
             raise RuntimeError("Database is configured but connection details could not be loaded.")
-
         try:
             logger.info("Verifying database schema version...")
-
             # --- Build a purely synchronous URL for the migration check ---
             sync_dialect = db_config.get('dialect', '').replace('+aiosqlite', '').replace('+asyncpg', '')
             if 'sqlite' in sync_dialect:
@@ -151,8 +116,10 @@ async def startup_event():
                     db_path = _PROJECT_ROOT / db_path
                 sync_conn_str = f"sqlite:///{db_path.resolve()}"
             else:
-                raise NotImplementedError("Sync connection string logic for non-sqlite needs verification.")
-
+                conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get("connection_name")
+                if not conn_name:
+                    raise RuntimeError("Database connection name not found for migration check.")
+                sync_conn_str = get_db_connection(conn_name).replace("+aiomysql", "").replace("+asyncpg", "")
             engine = create_sync_engine(sync_conn_str)
             with engine.connect() as connection:
                 alembic_cfg = alembic.config.Config(str(_PROJECT_ROOT / "alembic.ini"))
@@ -160,30 +127,27 @@ async def startup_event():
                 context = MigrationContext.configure(connection)
                 current_rev = context.get_current_revision()
                 head_rev = script.get_current_head()
-
                 if head_rev is not None and current_rev != head_rev:
                     logger.critical(f"CRITICAL: DB schema mismatch (Current: {current_rev}, Latest: {head_rev}).")
                     raise RuntimeError("Please run 'ragnetic migrate' to update the database.")
                 else:
                     logger.info("Database schema is up-to-date.")
             engine.dispose()
-
-            # Initialize the async engine for the rest of the app
-            initialize_db_connections(db_config)
-
+            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get("connection_name")
+            if not conn_name:
+                raise RuntimeError("Database connection name not found for async initialization.")
+            initialize_db_connections(conn_name)
         except Exception as e:
             logger.critical(f"CRITICAL: Failed during database startup. Error: {e}", exc_info=True)
             raise
     else:
         logger.warning("No database configured. DB-dependent features will be disabled.")
-
     if not os.path.exists(_DATA_DIR):
         logger.error(f"'{_DATA_DIR}' not found. Please run 'ragnetic init'.")
         return
     _watcher_process = Process(target=start_watcher, args=(_DATA_DIR,), daemon=True)
     _watcher_process.start()
     logger.info("Automated file watcher started.")
-
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -192,7 +156,6 @@ async def shutdown_event():
         _watcher_process.terminate()
         _watcher_process.join(timeout=5)
         logger.info("File watcher process stopped.")
-
 
 # --- Endpoints ---
 @app.get("/", tags=["Application"])
@@ -210,17 +173,13 @@ async def home(request: Request):
         "request": request, "agents": agents_list, "agent": default_agent, "api_key": frontend_api_key
     })
 
-
-
 @app.get("/health", tags=["System"])
 async def health_check():
     if not is_db_configured():
         return JSONResponse({"status": "ok", "db_check": "skipped (no database configured)"})
-
     db_config = get_db_connection_config()
     if not db_config:
         raise HTTPException(status_code=500, detail="DB configured but connection details not found.")
-
     try:
         sync_dialect = db_config.get('dialect', '').replace('+aiosqlite', '')
         if 'sqlite' in sync_dialect:
@@ -229,8 +188,10 @@ async def health_check():
                 db_path = _PROJECT_ROOT / db_path
             sync_conn_str = f"sqlite:///{db_path.resolve()}"
         else:
-            raise NotImplementedError("Health check for non-sqlite DBs needs implementation.")
-
+            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get("connection_name")
+            if not conn_name:
+                raise RuntimeError("Database connection name not found for health check.")
+            sync_conn_str = get_db_connection(conn_name).replace("+aiomysql", "").replace("+asyncpg", "")
         engine = create_sync_engine(sync_conn_str)
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -239,7 +200,6 @@ async def health_check():
     except Exception as e:
         logger.error(f"Health check failed to connect to database: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Database connection failed: {e}")
-
 
 @app.get("/history/{thread_id}", tags=["Memory"])
 async def get_history(
@@ -251,39 +211,31 @@ async def get_history(
 ):
     if not is_db_configured():
         raise HTTPException(status_code=501, detail="Chat history not supported without a database.")
-
     safe_agent_name = sanitize_for_path(agent_name)
     safe_user_id = sanitize_for_path(user_id)
     safe_thread_id = sanitize_for_path(thread_id)
-
     try:
         select_user_stmt = text(f"SELECT id FROM {users_table.name} WHERE user_id = :user_id")
         user_db_id = (await db.execute(select_user_stmt, {"user_id": safe_user_id})).scalar_one_or_none()
-
         if not user_db_id:
             return JSONResponse(content=[])
-
         select_session_stmt = text(
             f"SELECT id FROM {chat_sessions_table.name} WHERE thread_id = :thread_id AND agent_name = :agent_name AND user_id = :user_id"
         )
         session_id_result = (await db.execute(select_session_stmt, {
             "thread_id": safe_thread_id, "agent_name": safe_agent_name, "user_id": user_db_id
         })).scalar_one_or_none()
-
         if not session_id_result:
             return JSONResponse(content=[])
-
         select_messages_stmt = text(
             f"SELECT sender, content FROM {chat_messages_table.name} WHERE session_id = :session_id ORDER BY timestamp ASC"
         )
         messages_result = (await db.execute(select_messages_stmt, {"session_id": session_id_result})).fetchall()
-
         history = [{"type": row.sender, "content": row.content} for row in messages_result]
         return JSONResponse(content=history)
     except Exception as e:
         logger.error(f"Error loading chat history for thread {safe_thread_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not load chat history.")
-
 
 @app.post("/create-agent", tags=["Agents"])
 async def create_agent(config: AgentConfig, bg: BackgroundTasks, api_key: str = Depends(get_http_api_key)):
@@ -294,7 +246,6 @@ async def create_agent(config: AgentConfig, bg: BackgroundTasks, api_key: str = 
     except Exception as e:
         logger.error(f"Error creating agent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
 
 async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph_agent: Any, ws: WebSocket,
                                  thread_id: str) -> Tuple[Optional[Dict], str]:
@@ -319,21 +270,20 @@ async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph
         await manager.send({"token": f"\n\n{error_message}"}, ws)
         return {"error": True, "errorMessage": error_message}, ""
 
-
 @app.websocket("/ws")
 async def websocket_chat(
         ws: WebSocket,
-        api_key: str = Depends(get_websocket_api_key)
+        api_key: str = Depends(get_websocket_api_key),
+        db_session: AsyncSession = Depends(get_db) # FIXED: Use get_db directly as a dependency
 ):
     await manager.connect(ws)
     thread_id = "uninitialized"
-    db_session: Optional[AsyncSession] = None
     is_db_enabled = is_db_configured()
-
     try:
-        if is_db_enabled:
-            # This creates a session that we will manually close in the `finally` block.
-            db_session = AsyncSessionLocal()
+        # Removed the manual session creation and context manager
+        # if is_db_enabled:
+        #     async with get_db_for_websocket() as session:
+        #         db_session = session
         try:
             message_data = await ws.receive_json()
         except ValueError:
@@ -343,21 +293,16 @@ async def websocket_chat(
         if not (isinstance(message_data, dict) and message_data.get("type") == "query" and "payload" in message_data):
             await ws.close(code=1003, reason="Protocol violation: First message must be a valid query.")
             return
-
         payload = message_data.get("payload", {})
         agent_name = payload.get("agent", "unknown_agent")
         user_id = sanitize_for_path(payload.get("user_id")) or f"user-{uuid4().hex[:8]}"
         thread_id = sanitize_for_path(payload.get("thread_id")) or f"thread-{uuid4().hex[:8]}"
-
         session_id = None
-        if is_db_enabled and db_session:
+        if is_db_enabled and db_session: # db_session is now provided by Depends(get_db)
             select_user_stmt = text(f"SELECT id FROM {users_table.name} WHERE user_id = :user_id")
             user_result = await db_session.execute(select_user_stmt, {"user_id": user_id})
             user_db_id = user_result.scalar_one_or_none()
-
             if not user_db_id:
-                # We now explicitly provide the created_at and updated_at values
-                # to prevent the database from using its faulty 'now()' default.
                 insert_user_stmt = text(
                     f"INSERT INTO {users_table.name} (user_id, created_at, updated_at) VALUES (:user_id, :created_at, :updated_at) RETURNING id"
                 )
@@ -368,7 +313,6 @@ async def websocket_chat(
                 )
                 user_db_id = user_result.scalar_one()
                 await db_session.commit()
-
             select_session_stmt = text(
                 f"SELECT id FROM {chat_sessions_table.name} WHERE thread_id = :thread_id AND agent_name = :agent_name AND user_id = :user_id"
             )
@@ -376,7 +320,6 @@ async def websocket_chat(
                 "thread_id": thread_id, "agent_name": agent_name, "user_id": user_db_id
             })
             session_id = session_result.scalar_one_or_none()
-
             if not session_id:
                 insert_session_stmt = text(
                     f"INSERT INTO {chat_sessions_table.name} (thread_id, agent_name, user_id, created_at, updated_at) VALUES (:thread_id, :agent_name, :user_id, :created_at, :updated_at) RETURNING id"
@@ -394,7 +337,6 @@ async def websocket_chat(
                 )
                 session_id = session_result.scalar_one()
                 await db_session.commit()
-
         agent_config = load_agent_config(agent_name)
         all_tools = []
         if "retriever" in agent_config.tools: all_tools.append(get_retriever_tool(agent_config))
@@ -404,15 +346,12 @@ async def websocket_chat(
             db_source = next((s for s in agent_config.sources if s.type == 'db'), None)
             if db_source and db_source.db_connection:
                 all_tools.extend(create_sql_toolkit(db_connection_string=db_source.db_connection, llm_model_name=agent_config.llm_model))
-
         langgraph_agent = get_agent_workflow(all_tools).compile()
         is_first_message = True
-
         while True:
             query = message_data.get("payload", {}).get("query")
             request_id = str(uuid4())
             logger.info(f"[{thread_id}] Processing request {request_id} for query: '{query[:50]}...'")
-
             history: List[BaseMessage] = []
             if is_db_enabled and db_session and session_id:
                 messages_result = await db_session.execute(
@@ -421,15 +360,12 @@ async def websocket_chat(
                 )
                 for msg in messages_result:
                     history.append(HumanMessage(content=msg.content) if msg.sender == 'human' else AIMessage(content=msg.content))
-
                 await db_session.execute(
                     text(f"INSERT INTO {chat_messages_table.name} (session_id, sender, content, timestamp) VALUES (:session_id, 'human', :content, :timestamp)"),
                     {"session_id": session_id, "content": query, "timestamp": datetime.utcnow()}
                 )
                 await db_session.commit()
-
             initial_state: AgentState = {"messages": history + [HumanMessage(content=query)], "request_id": request_id}
-
             gen_task = asyncio.create_task(
                 handle_query_streaming(
                     initial_state,
@@ -439,7 +375,6 @@ async def websocket_chat(
                     thread_id
                 )
             )
-
             try:
                 final_state, ai_response_content = await gen_task
             except asyncio.CancelledError:
@@ -448,7 +383,6 @@ async def websocket_chat(
             except Exception as e:
                 logger.error(f"[{thread_id}] Generation error: {e}", exc_info=True)
                 final_state, ai_response_content = {"error": True, "errorMessage": str(e)}, ""
-
             await manager.send(
                 {
                     "done": True,
@@ -462,9 +396,7 @@ async def websocket_chat(
                 ws
             )
             is_first_message = False
-
             if ai_response_content and not (final_state and final_state.get("error")) and is_db_enabled and db_session and session_id:
-
                 await db_session.execute(
                     text(
                         "INSERT INTO chat_messages (session_id, sender, content, timestamp) VALUES (:session_id, 'ai', :content, :timestamp)"
@@ -472,19 +404,14 @@ async def websocket_chat(
                     {"session_id": session_id, "content": ai_response_content, "timestamp": datetime.utcnow()}
                 )
                 await db_session.commit()
-
             try:
                 message_data = await ws.receive_json()
             except WebSocketDisconnect:
                 logger.info(f"[{thread_id}] Client disconnected.")
                 break
-
     except WebSocketDisconnect:
         logger.info(f"[{thread_id}] Client disconnected.")
     except Exception as e:
         logger.error(f"[{thread_id}] Unhandled WebSocket Error: {e}", exc_info=True)
     finally:
-        if db_session:
-            await db_session.close()
-            logger.info(f"[{thread_id}] Database session closed.")
-        manager.disconnect(ws)
+        pass

@@ -1,10 +1,9 @@
-# app/db/__init__.py
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import create_engine
-from app.core.config import get_db_connection
+from app.core.config import get_db_connection, get_db_connection_config, get_path_settings
 from app.db.models import metadata
 from urllib.parse import urlparse, urlunparse
-
+from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -25,18 +24,30 @@ def initialize_db_connections(conn_name: str):
     parsed_url = urlparse(conn_str)
 
     async_scheme = ""
-    if parsed_url.scheme.startswith("postgresql"):
+    # Corrected logic for handling SQLite URLs with proper path formatting
+    if parsed_url.scheme.startswith("sqlite"):
+        async_scheme = "sqlite+aiosqlite"
+        db_config = get_db_connection_config()
+        if not db_config:
+            raise ValueError("SQLite database configuration not found.")
+        db_path = Path(db_config.get('database_path', ''))
+        project_root = get_path_settings()["PROJECT_ROOT"]
+        if not db_path.is_absolute():
+            db_path = project_root / db_path
+        # Ensure the correct URL format for absolute paths
+        async_db_url = f"{async_scheme}:///{db_path.resolve()}"
+    elif parsed_url.scheme.startswith("postgresql"):
         async_scheme = "postgresql+asyncpg"
+        async_db_url = urlunparse(parsed_url._replace(scheme=async_scheme))
     elif parsed_url.scheme.startswith("mysql"):
         async_scheme = "mysql+aiomysql"
+        async_db_url = urlunparse(parsed_url._replace(scheme=async_scheme))
     else:
-        # For SQLite or other sync DBs, no conversion is needed
+        # For other sync DBs
         async_scheme = parsed_url.scheme
+        async_db_url = urlunparse(parsed_url._replace(scheme=async_scheme))
         logger.warning(
             f"Using synchronous DB URL for async operations. Consider an async driver for full async benefits.")
-
-    # Rebuild URL with the correct async scheme and original netloc, path, etc.
-    async_db_url = urlunparse(parsed_url._replace(scheme=async_scheme))
 
     if not async_db_url:
         raise ValueError("Could not determine asynchronous database URL from configuration.")
@@ -50,10 +61,8 @@ async def get_db() -> AsyncSession:
     """Dependency to provide an asynchronous database session."""
     if AsyncSessionLocal is None:
         raise RuntimeError("Database connections not initialized. Call initialize_db_connections first.")
-
     async with AsyncSessionLocal() as session:
         try:
             yield session
         finally:
             await session.close()
-
