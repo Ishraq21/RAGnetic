@@ -20,6 +20,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import alembic.config
 import alembic.command
+from alembic.runtime.migration import MigrationContext
 import subprocess
 
 # IMPORTS for inspect_agent dynamic vector store loading
@@ -35,6 +36,8 @@ from app.agents.config_manager import load_agent_config, load_agent_from_yaml_fi
 
 # IMPORTS for connection checks
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine.url import make_url
+
 from sqlalchemy.exc import SQLAlchemyError
 import requests
 from urllib.parse import urlparse
@@ -181,7 +184,7 @@ def _is_db_configured() -> bool:
     """Checks if a database is configured for either memory or logging."""
     mem_config = get_memory_storage_config()
     log_config = get_log_storage_config()
-    return (mem_config.get("type") == "db" and mem_config.get("connection_name")) or \
+    return (mem_config.get("type") in ["db", "sqlite"] and mem_config.get("connection_name")) or \
         (log_config.get("type") == "db" and log_config.get("connection_name"))
 
 
@@ -205,7 +208,8 @@ def reset_db(
     try:
         mem_cfg = get_memory_storage_config()
         log_cfg = get_log_storage_config()
-        conn_name = mem_cfg.get("connection_name") if mem_cfg.get("type") == "db" else log_cfg.get("connection_name")
+        conn_name = mem_cfg.get("connection_name") if mem_cfg.get("type") in ["db", "sqlite"] else log_cfg.get(
+            "connection_name")
 
         if not conn_name:
             typer.secho("Error: No database connection is configured in config.ini.", fg=typer.colors.RED)
@@ -364,7 +368,7 @@ def configure():
             section_name = f"DATABASE_{conn_name}"
 
             if db_type == "sqlite":
-                db_path = typer.prompt("Enter the path for the SQLite file (e.g., data/system.db)")
+                db_path = typer.prompt("Enter the path for the SQLite file (e.g., memory/ragnetic.db)")
                 config[section_name] = {'dialect': dialect, 'database_path': db_path}
             else:
                 username = typer.prompt("Username")
@@ -396,7 +400,8 @@ def configure():
         mem_type = typer.prompt("Enter memory storage type (sqlite, db)",
                                 default=config.get('MEMORY_STORAGE', 'type', fallback='sqlite'))
         config.set('MEMORY_STORAGE', 'type', mem_type)
-        if mem_type == 'db':
+        if mem_type == 'db' or (
+                mem_type == 'sqlite' and typer.confirm("Use a named connection for SQLite?", default=False)):
             conn_name = typer.prompt("Enter the database connection name to use",
                                      default=config.get('MEMORY_STORAGE', 'connection_name', fallback=""))
             config.set('MEMORY_STORAGE', 'connection_name', conn_name)
@@ -439,8 +444,6 @@ def show_config():
     typer.echo("")
 
 
-# In cli.py
-
 @app.command(name="check-system-db", help="Verifies and inspects connections to configured system databases.")
 def check_system_db():
     """
@@ -455,7 +458,7 @@ def check_system_db():
     if log_config.get("type") == "db" and log_config.get("connection_name"):
         conn_name = log_config["connection_name"]
         connections_to_check[conn_name] = connections_to_check.get(conn_name, []) + ["Logging"]
-    if memory_config.get("type") == "db" and memory_config.get("connection_name"):
+    if memory_config.get("type") in ["db", "sqlite"] and memory_config.get("connection_name"):
         conn_name = memory_config["connection_name"]
         connections_to_check[conn_name] = connections_to_check.get(conn_name, []) + ["Memory"]
 
@@ -471,26 +474,34 @@ def check_system_db():
         typer.secho(f"\nInspecting '{conn_name}' (used for: {', '.join(purposes)})", fg=typer.colors.CYAN, bold=True)
         try:
             conn_str = get_db_connection(conn_name)
-            engine = create_engine(conn_str, echo=False, connect_args={'connect_timeout': 5})
+
+            # Use a synchronous-compatible driver for the check
+            engine_args = {'echo': False}
+            if 'sqlite' in conn_str:
+                conn_str = conn_str.replace("+aiosqlite", "")
+            else:
+                engine_args['connect_args'] = {'connect_timeout': 5}
+
+            engine = create_engine(conn_str, **engine_args)
 
             with engine.connect() as connection:
-                # 1. Basic Connection Check
                 connection.execute(text("SELECT 1"))
                 typer.secho("  - Connectivity: [PASS]", fg=typer.colors.GREEN)
 
-                # 2. Get Database Info
-                db_version = connection.dialect.get_server_version_info(connection)
-                typer.echo(f"  - DB Type: {connection.dialect.name}")
-                typer.echo(f"  - DB Version: {'.'.join(map(str, db_version))}")
+                if connection.dialect.name != 'sqlite':
+                    db_version = connection.dialect.get_server_version_info(connection)
+                    typer.echo(f"  - DB Type: {connection.dialect.name}")
+                    typer.echo(f"  - DB Version: {'.'.join(map(str, db_version))}")
+                    parsed_url = urlparse(conn_str)
+                    if parsed_url.hostname:
+                        typer.echo(f"  - Host: {parsed_url.hostname}")
+                        typer.echo(f"  - Port: {parsed_url.port}")
+                        typer.echo(f"  - Database: {parsed_url.path.lstrip('/')}")
+                else:
+                    typer.echo(f"  - DB Type: {connection.dialect.name}")
+                    typer.echo(f"  - Path: {urlparse(conn_str).path}")
 
-                parsed_url = urlparse(conn_str)
-                if parsed_url.hostname:
-                    typer.echo(f"  - Host: {parsed_url.hostname}")
-                    typer.echo(f"  - Port: {parsed_url.port}")
-                    typer.echo(f"  - Database: {parsed_url.path.lstrip('/')}")
-
-                # 3. Check Alembic Migration Status
-                migration_context = alembic.runtime.migration.MigrationContext.from_engine(connection)
+                migration_context = MigrationContext.configure(connection)
                 current_rev = migration_context.get_current_revision()
                 head_rev = script.get_current_head()
 
@@ -521,18 +532,32 @@ def check_system_db():
 def init():
     setup_logging()
     typer.secho("Initializing new RAGnetic project...", bold=True)
+    paths_to_create = {
+        "DATA_DIR", "AGENTS_DIR", "VECTORSTORE_DIR", "MEMORY_DIR",
+        "LOGS_DIR", "TEMP_CLONES_DIR", "RAGNETIC_DIR"
+    }
     for key, path in _APP_PATHS.items():
-        if key.endswith("_DIR") and not os.path.exists(path):
+        if key in paths_to_create and not os.path.exists(path):
             os.makedirs(path, mode=0o750, exist_ok=True)
             typer.echo(f"  - Created directory: {path}")
 
     if not os.path.exists(_CONFIG_FILE):
         config = configparser.ConfigParser()
         config['SERVER'] = {'host': '127.0.0.1', 'port': '8000', 'json_logs': 'false'}
-        config['API_KEYS'] = {
-            '# Secrets are managed in the .env file. Use `ragnetic set-api-key`.': '',
-            'OPENAI_API_KEY': '...',
+        # --- Bootstrap Default SQLite Database Configuration ---
+        default_db_path = _MEMORY_DIR / "ragnetic.db"
+
+        config['DATABASE_CONNECTIONS'] = {'names': 'default_sqlite'}
+        config['DATABASE_default_sqlite'] = {
+            'dialect': 'sqlite+aiosqlite',
+            'database_path': str(default_db_path.relative_to(_PROJECT_ROOT))
         }
+        config['MEMORY_STORAGE'] = {
+            'type': 'sqlite',
+            'connection_name': 'default_sqlite'
+        }
+        # ----------------------------------------------------
+
         with open(_CONFIG_FILE, 'w') as configfile:
             config.write(configfile)
         typer.echo(f"  - Created config file: {_CONFIG_FILE}")
@@ -540,7 +565,7 @@ def init():
     typer.secho("\nProject initialized successfully!", fg=typer.colors.GREEN)
     typer.secho("Next steps:", bold=True)
     typer.echo("  1. Set your API keys: " + typer.style("ragnetic set-api-key", bold=True))
-    typer.echo("  2. Configure your database (optional): " + typer.style("ragnetic configure", bold=True))
+    typer.echo("  2. Configure a different database (optional): " + typer.style("ragnetic configure", bold=True))
     typer.echo("  3. Secure your server: " + typer.style("ragnetic set-server-key", bold=True))
 
 
@@ -847,13 +872,9 @@ def inspect_agent(
                         if conn_str.startswith("postgresql"):
                             connect_args['connect_timeout'] = 5
                         elif conn_str.startswith("mysql"):
-                            # The mysql-connector-python driver uses 'connect_timeout'
-                            # Other MySQL drivers might use 'connection_timeout'
                             connect_args['connect_timeout'] = 5
                         elif not conn_str.startswith("sqlite"):
-                            # Generic fallback for other network-based DBs
                             connect_args['timeout'] = 5
-                        # SQLite does not need a network timeout
 
                         eng = create_engine(conn_str, connect_args=connect_args)
                         with eng.connect() as conn:
