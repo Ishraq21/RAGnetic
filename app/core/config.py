@@ -148,6 +148,30 @@ def get_db_connection(name: str) -> str:
     return f"{dialect}://{username}:{password}@{host}:{port}/{database}"
 
 
+def get_db_connection_config() -> Optional[Dict[str, str]]:
+    """
+    Retrieves the raw configuration dictionary for the currently active
+    system database connection (memory or logs).
+    """
+    config = _get_config_parser()
+    mem_config = get_memory_storage_config()
+    log_config = get_log_storage_config()
+
+    conn_name = None
+    if mem_config.get("type") in ["db", "sqlite"]:
+        conn_name = mem_config.get("connection_name")
+    elif log_config.get("type") == "db":
+        conn_name = log_config.get("connection_name")
+
+    if not conn_name:
+        return None
+
+    section_name = f"DATABASE_{conn_name}"
+    if config.has_section(section_name):
+        return dict(config.items(section_name))
+
+    return None
+
 def get_memory_storage_config() -> Dict[str, str]:
     """Reads the [MEMORY_STORAGE] section from the config file."""
     config = _get_config_parser()
