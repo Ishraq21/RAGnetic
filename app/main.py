@@ -59,6 +59,8 @@ _DATA_DIR = _APP_PATHS["DATA_DIR"]
 _AGENTS_DIR = _APP_PATHS["AGENTS_DIR"]
 _MEMORY_DIR = _APP_PATHS["MEMORY_DIR"]
 _CONFIG_FILE = _APP_PATHS["CONFIG_FILE_PATH"]
+_BENCHMARK_DIR = _APP_PATHS["BENCHMARK_DIR"]
+
 allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
 
 app = FastAPI(title="RAGnetic API", version="0.1.0",

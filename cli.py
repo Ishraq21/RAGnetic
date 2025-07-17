@@ -69,6 +69,7 @@ _MEMORY_DIR = _APP_PATHS["MEMORY_DIR"]
 _CONFIG_FILE = _APP_PATHS["CONFIG_FILE_PATH"]
 _RAGNETIC_DIR = _APP_PATHS["RAGNETIC_DIR"]
 _TEMP_CLONES_DIR = _APP_PATHS["TEMP_CLONES_DIR"]
+_BENCHMARK_DIR = _APP_PATHS["BENCHMARK_DIR"]
 
 # --- Load Environment Variables ---
 # Load .env file from the project root for all CLI commands
@@ -534,7 +535,7 @@ def init():
     typer.secho("Initializing new RAGnetic project...", bold=True)
     paths_to_create = {
         "DATA_DIR", "AGENTS_DIR", "VECTORSTORE_DIR", "MEMORY_DIR",
-        "LOGS_DIR", "TEMP_CLONES_DIR", "RAGNETIC_DIR"
+        "LOGS_DIR", "TEMP_CLONES_DIR", "RAGNETIC_DIR", "BENCHMARK_DIR"
     }
     for key, path in _APP_PATHS.items():
         if key in paths_to_create and not os.path.exists(path):
@@ -1016,7 +1017,7 @@ def benchmark_command(
         results_df = run_benchmark(agent_config, test_set)
 
         if not results_df.empty:
-            results_filename = _LOGS_DIR / f"benchmark_{agent_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            results_filename = _BENCHMARK_DIR / f"benchmark_{agent_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             results_df.to_csv(results_filename, index=False)
             logger.info(f"Full benchmark results saved to: {results_filename}")
 
