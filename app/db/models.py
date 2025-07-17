@@ -1,7 +1,7 @@
 # app/db/models.py
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, MetaData, Table, UniqueConstraint, Float, Boolean, Enum, Index
 from sqlalchemy.types import DECIMAL
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 import logging
 
@@ -20,7 +20,6 @@ users_table = Table(
     Column("email", String(255), nullable=True, unique=True), # Optional: for OIDC/OAuth
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column("updated_at", DateTime(timezone=True), onupdate=func.now(), server_default=func.now(), nullable=False),
-    extend_existing=True,
 )
 
 chat_sessions_table = Table(
@@ -31,7 +30,6 @@ chat_sessions_table = Table(
     Column("thread_id", String(255), nullable=False, unique=True, index=True), # Unique identifier for a chat conversation thread
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column("updated_at", DateTime(timezone=True), onupdate=func.now(), server_default=func.now(), nullable=False),
-    extend_existing=True,
 )
 
 chat_messages_table = Table(
@@ -41,7 +39,6 @@ chat_messages_table = Table(
     Column("sender", sender_enum, nullable=False),
     Column("content", Text, nullable=False),
     Column("timestamp", DateTime(timezone=True), server_default=func.now(), nullable=False),
-    extend_existing=True,
 )
 
 memory_entries_table = Table(
@@ -52,7 +49,6 @@ memory_entries_table = Table(
     Column("value", JSONB, nullable=False), # Store memory data as JSON
     Column("timestamp", DateTime(timezone=True), server_default=func.now(), nullable=False),
     UniqueConstraint("session_id", "key", name="uq_memory_session_key"), # Ensures unique memory keys per session
-    extend_existing=True,
 )
 
 ragnetic_logs_table = Table(
@@ -66,7 +62,6 @@ ragnetic_logs_table = Table(
     Column('line', Integer),
     Column('exc_info', Text, nullable=True),
     Column("updated_at", DateTime(timezone=True), onupdate=func.now(), server_default=func.now(), nullable=False),
-    extend_existing=True
 )
 
 
@@ -79,7 +74,6 @@ agents_table = Table(
     Column("model_name", String(255), nullable=False),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column("updated_at", DateTime(timezone=True), onupdate=func.now(), server_default=func.now(), nullable=False),
-    extend_existing=True,
 )
 
 agent_tools_table = Table(
@@ -89,7 +83,6 @@ agent_tools_table = Table(
     Column("tool_name", String(100), nullable=False),
     Column("tool_config", JSONB, nullable=True),
     UniqueConstraint("agent_id", "tool_name", name="uq_agent_tool"),
-    extend_existing=True,
 )
 
 conversation_metrics_table = Table(
@@ -105,7 +98,6 @@ conversation_metrics_table = Table(
     Column("estimated_cost_usd", DECIMAL(10, 6), nullable=True),
     Column("timestamp", DateTime(timezone=True), server_default=func.now(), nullable=False),
     UniqueConstraint("session_id", "request_id", name="uq_session_request"),
-    extend_existing=True,
 )
 
 user_api_keys_table = Table(
@@ -116,7 +108,6 @@ user_api_keys_table = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column("updated_at", DateTime(timezone=True), onupdate=func.now(), server_default=func.now(), nullable=False),
     Column("revoked", Boolean, nullable=False, default=False),
-    extend_existing=True,
 )
 
 
