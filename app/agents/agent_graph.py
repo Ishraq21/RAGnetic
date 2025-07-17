@@ -7,7 +7,7 @@ import uuid
 
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate
@@ -34,7 +34,6 @@ class AgentState(TypedDict):
     """
     messages: Annotated[List[BaseMessage], add]
     tool_calls: List[dict]
-
     # Metrics to be logged for each request
     request_id: str
     agent_name: str
@@ -65,7 +64,11 @@ def call_model(state: AgentState, config: RunnableConfig):
             return {"messages": [AIMessage(
                 content="I'm sorry, but there was an error processing your request as the message history is empty.")]}
 
+        # The last message is the current user query
         query = messages[-1].content
+        # All messages except the last one are history
+        history = messages[:-1]
+
         model_name = agent_config.llm_model
         logger.info(f"Processing query for agent '{agent_config.name}' using model '{model_name}'.")
 
@@ -79,7 +82,6 @@ def call_model(state: AgentState, config: RunnableConfig):
                 logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
                 retriever_tool = get_retriever_tool(agent_config)
                 retrieved_docs = retriever_tool.invoke({"input": query})
-
                 if isinstance(retrieved_docs, str):
                     retrieved_docs_str = retrieved_docs
                     logger.error(f"Retriever tool returned an error string: {retrieved_docs}")
@@ -96,20 +98,20 @@ def call_model(state: AgentState, config: RunnableConfig):
                 retrieved_docs_str = f"An error occurred while trying to retrieve relevant documents: {e}"
         retrieval_time = time.perf_counter() - t0
 
-
         if agent_config.execution_prompt:
             logger.info("Using custom 'execution_prompt' from agent configuration.")
             prompt = ChatPromptTemplate.from_template(agent_config.execution_prompt)
-            system_prompt_message = prompt.format(
+            system_prompt_content = prompt.format(
                 user_query=query,
                 retrieved_context=retrieved_docs_str,
                 persona=agent_config.persona_prompt
             )
-            prompt_with_history = [HumanMessage(content=system_prompt_message)] + messages
+            prompt_with_history = [SystemMessage(content=system_prompt_content)] + history + [messages[-1]]
+
         else:
             logger.info("Using default system prompt.")
             context_section = f"<context>\n<retrieved_documents>\n{retrieved_docs_str}\n</retrieved_documents>\n</context>"
-            system_prompt = f"""You are RAGnetic, a professional AI assistant. Your behavior and personality are defined by the user's custom instructions below.
+            system_prompt_content = f"""You are RAGnetic, a professional AI assistant. Your behavior and personality are defined by the user's custom instructions below.
                                    ---
                                    **USER'S CUSTOM INSTRUCTIONS (Your Persona):**
                                    {agent_config.persona_prompt}
@@ -124,32 +126,32 @@ def call_model(state: AgentState, config: RunnableConfig):
                                    - Use headings (`##`, `###`) to structure main topics.
                                    - Use bold text (`**text**`) to highlight key terms, figures, or important information.
                                    - Use bullet points (`- `) or numbered lists (`1. `) for detailed points or steps.
-                                   
+
                                    IMPORTANT: When explaining any mathematical expressions, YOU MUST USE LaTeX SYNTAX.
-                                   IMPORTANT: Wrap inline equations in `$...$`, and display equations in `$$...$$`. 
+                                   IMPORTANT: Wrap inline equations in `$...$`, and display equations in `$$...$$`.
                                    IMPORTANT: DO NOT use <pre><code> or similar tags for mathematical explanations or calculations.
-                                   
+
                                    - Surround only the actual code snippets with <pre><code> tags. Do not wrap non-code content.
                                    - Do NOT use <pre><code> tags for math or calculations.
                                    - Do NOT use <pre><code> tags for Physics and Chemistry calculations. Use LaTex instead.
-                                   
+
                                    I REPEAT! When explaining or showing any mathematical expressions or equations, YOU MUST USE LaTeX SYNTAX.
-    
+
                                    - Use LaTeX syntax for all mathematical expressions.
                                    - Inline math must be wrapped in `\\( ... \\)`.
                                    - Block math must be wrapped in `$$ ... $$`.
-                                        
+
                                    **SOURCES:**
                                    ---
                                    {context_section}
                                    ---
                                    Based on the sources and your persona, please answer the user's query.
                                 """
-            prompt_with_history = [HumanMessage(content=system_prompt)] + messages
+            # The system prompt should not be part of the history, but should be a separate message
+            prompt_with_history = [SystemMessage(content=system_prompt_content)] + messages
 
         # Model Initialization and Invocation
         model_kwargs = agent_config.model_params.model_dump(exclude_unset=True) if agent_config.model_params else {}
-
         if model_name.startswith("ollama/"):
             ollama_model_name = model_name.split("/", 1)[1]
             logger.info(f"Initializing local Ollama model: '{ollama_model_name}' with params: {model_kwargs}")
@@ -171,7 +173,6 @@ def call_model(state: AgentState, config: RunnableConfig):
                                         **model_kwargs)
 
         model_with_tools = model.bind_tools(tools)
-
         logger.info("Invoking the language model...")
         t1 = time.perf_counter()
         try:
@@ -204,9 +205,7 @@ def call_model(state: AgentState, config: RunnableConfig):
             "estimated_cost_usd": cost,
             "retrieved_chunk_ids": retrieved_chunk_ids
         })
-
         return state
-
     except Exception as e:
         logger.critical(f"A critical error occurred in the 'call_model' node: {e}", exc_info=True)
         error_message = AIMessage(content=f"I'm sorry, but I encountered an unexpected error. Error: {e}")
@@ -221,6 +220,7 @@ def should_continue(state: AgentState) -> str:
         return "end"
 
     last_message = state['messages'][-1]
+
     if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
         logger.info(f"Model requested tool call: {last_message.tool_calls[0]['name']}. Routing to 'call_tool'.")
         return "call_tool"
@@ -233,9 +233,13 @@ def get_agent_workflow(tools: List[BaseTool]):
     """Builds the tool-using agent graph."""
     workflow = StateGraph(AgentState)
     tool_node = ToolNode(tools)
+
     workflow.add_node("agent", call_model)
     workflow.add_node("call_tool", tool_node)
+
     workflow.set_entry_point("agent")
+
     workflow.add_conditional_edges("agent", should_continue, {"call_tool": "call_tool", "end": END})
     workflow.add_edge("call_tool", "agent")
+
     return workflow
