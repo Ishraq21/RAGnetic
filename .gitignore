@@ -36,3 +36,5 @@ data/
 
 # Temporary repository clones
 .ragnetic_temp_clones/
+# ignore evaluation artifacts
+benchmark/

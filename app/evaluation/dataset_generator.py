@@ -72,35 +72,34 @@ class DatasetGenerator:
             logger.error(f"Chunk {chunk.id} QA generation failed: {e}", exc_info=True)
             return []
 
-    async def generate(self, n: int) -> List[Dict[str, Any]]:  # MODIFIED: async def
+    async def generate(self, n: int) -> List[Dict[str, Any]]:
         """
         Generates the full dataset of n questions asynchronously.
         """
-        docs = []
-        # Await the async load_documents_from_source call
-        # Note: Since load_documents_from_source returns a list, extend it directly.
-        loaded_docs_from_sources = await load_documents_from_source(self.cfg.sources[0],
-                                                                    self.cfg.reproducible_ids)  # Assuming one source for simplicity or iterate
-        docs.extend(loaded_docs_from_sources)
+        docs: List[LangChainDocument] = []
 
-        # If you have multiple sources, you'd need to adapt this:
-        # loading_tasks = [load_documents_from_source(src, self.cfg.reproducible_ids) for src in self.cfg.sources]
-        # all_loaded_docs_lists = await asyncio.gather(*loading_tasks, return_exceptions=True)
-        # for loaded_list in all_loaded_docs_lists:
-        #     if not isinstance(loaded_list, Exception):
-        #         docs.extend(loaded_list)
+        # --- correctly supply (source, agent_config, reproducible_ids) ---
+        for source in self.cfg.sources:
+            loaded_docs = await load_documents_from_source(
+                source,
+                self.cfg,
+                self.cfg.reproducible_ids
+            )
+            docs.extend(loaded_docs)
 
+        # sort, chunk, sample, and then run QA on each chunk
         docs.sort(key=lambda d: d.metadata.get("original_doc_id", ""))
-
         chunks = _get_chunks_from_documents(
-            docs, self.cfg.chunking, self.cfg.embedding_model, self.cfg.reproducible_ids
+            docs,
+            self.cfg.chunking,
+            self.cfg.embedding_model,
+            self.cfg.reproducible_ids
         )
         logger.info(f"→ {len(docs)} docs → {len(chunks)} chunks")
 
-        selected_chunks = random.sample(chunks, min(n, len(chunks)))
-
-        all_qa_pairs = []
-        for chunk in tqdm(selected_chunks, desc="QA chunks"):
+        selected = random.sample(chunks, min(n, len(chunks))) if chunks else []
+        all_qa_pairs: List[Dict[str, Any]] = []
+        for chunk in tqdm(selected, desc="QA chunks"):
             if len(all_qa_pairs) >= n:
                 break
             all_qa_pairs.extend(self._qa_for_chunk(chunk))
