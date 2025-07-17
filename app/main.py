@@ -208,7 +208,7 @@ async def health_check():
 
     if mem_config.get("type") == "sqlite":
         _APP_PATHS = get_path_settings()
-        db_url = f"sqlite:///{_APP_PATHS['DATA_DIR'] / 'ragnetic.db'}"
+        db_url = f"sqlite:///{_APP_PATHS['MEMORY_DIR'] / 'ragnetic.db'}"
     elif db_conn_name:
         db_url = get_db_connection(db_conn_name)
     else:

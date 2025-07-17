@@ -50,7 +50,7 @@ if conn_name:
     logger.debug("Using DB connection from config: %s", conn_name)
 else:
     # fallback to SQLite file
-    sqlite_path = paths["DATA_DIR"] / "ragnetic.db"
+    sqlite_path = paths["MEMORY_DIR"] / "ragnetic.db"
     db_url       = f"sqlite:///{sqlite_path}"
     logger.debug("No DB config found; falling back to SQLite: %s", sqlite_path)
 
