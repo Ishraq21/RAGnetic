@@ -18,6 +18,9 @@ from typing import Optional, List, Dict, Any
 import secrets
 from pathlib import Path
 from dotenv import load_dotenv
+import alembic.config
+import alembic.command
+import subprocess
 
 # IMPORTS for inspect_agent dynamic vector store loading
 from langchain_community.vectorstores import FAISS, Chroma
@@ -50,6 +53,7 @@ from app.pipelines.embed import embed_agent_data
 from app.watcher import start_watcher
 import pytest
 from app.core.validation import is_valid_agent_name_cli
+from app.db.models import metadata
 
 # --- Centralized Path Configuration ---
 _APP_PATHS = get_path_settings()
@@ -173,6 +177,152 @@ MODEL_PROVIDERS = {
 }
 
 
+def _is_db_configured() -> bool:
+    """Checks if a database is configured for either memory or logging."""
+    mem_config = get_memory_storage_config()
+    log_config = get_log_storage_config()
+    return (mem_config.get("type") == "db" and mem_config.get("connection_name")) or \
+        (log_config.get("type") == "db" and log_config.get("connection_name"))
+
+
+@app.command(name="reset-db", help="DANGEROUS: Drops all tables from the database.")
+def reset_db(
+        force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
+):
+    """
+    Connects to the database and drops all known application tables
+    and the Alembic versioning table to ensure a clean slate.
+    """
+    setup_logging()
+    typer.secho("--- DANGEROUS: Database Reset ---", fg=typer.colors.RED, bold=True)
+
+    if not force:
+        typer.secho("This will permanently delete all data from the configured database.", fg=typer.colors.YELLOW)
+        if not typer.confirm("Are you absolutely sure you want to proceed?", default=False):
+            typer.echo("Operation cancelled.")
+            raise typer.Exit()
+
+    try:
+        mem_cfg = get_memory_storage_config()
+        log_cfg = get_log_storage_config()
+        conn_name = mem_cfg.get("connection_name") if mem_cfg.get("type") == "db" else log_cfg.get("connection_name")
+
+        if not conn_name:
+            typer.secho("Error: No database connection is configured in config.ini.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+        conn_str = get_db_connection(conn_name)
+        typer.echo(f"Connecting to database via connection '{conn_name}'...")
+
+        engine = create_engine(conn_str)
+
+        with engine.connect() as connection:
+            typer.echo("Dropping all application tables defined in the metadata...")
+            metadata.drop_all(engine, checkfirst=True)
+            typer.secho("Application tables dropped successfully.", fg=typer.colors.GREEN)
+
+            typer.echo("Attempting to drop the 'alembic_version' table...")
+            try:
+                with connection.begin():
+                    connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+                typer.secho("'alembic_version' table dropped successfully.", fg=typer.colors.GREEN)
+            except Exception as e:
+                typer.secho(f"Could not drop 'alembic_version' table (this is likely okay): {e}",
+                            fg=typer.colors.YELLOW)
+
+            typer.secho("\nDatabase reset complete.", fg=typer.colors.GREEN, bold=True)
+
+    except Exception as e:
+        typer.secho(f"An error occurred during database reset: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="makemigrations", help="Autogenerate a new database migration script.")
+def makemigrations(
+        message: str = typer.Option(..., "-m", "--message", help="A descriptive message for the new migration."),
+):
+    """
+    Wraps Alembic's 'revision --autogenerate' command by calling it in a separate subprocess
+    to ensure a clean execution environment.
+    """
+    setup_logging(json_format=False)
+    if not _is_db_configured():
+        typer.secho("No explicit database configured. Using default SQLite for migrations.", fg=typer.colors.YELLOW)
+
+    typer.echo(f"Generating new migration script with message: '{message}'...")
+
+    alembic_ini_path = str(_PROJECT_ROOT / "alembic.ini")
+    command = [
+        "alembic",
+        "-c", alembic_ini_path,
+        "revision",
+        "--autogenerate",
+        "-m", message
+    ]
+
+    typer.secho(f"Running command: {' '.join(command)}", fg=typer.colors.YELLOW)
+
+    # We run this from the project root to ensure all paths are resolved correctly.
+    result = subprocess.run(command, capture_output=True, text=True, cwd=_PROJECT_ROOT)
+
+    if result.returncode == 0:
+        # Alembic's output goes to stdout on success
+        typer.echo(result.stdout)
+        typer.secho("Migration script generated successfully.", fg=typer.colors.GREEN)
+    else:
+        # On failure, errors are often in stderr
+        typer.secho("Error generating migration:", fg=typer.colors.RED)
+        typer.echo("--- STDOUT ---")
+        typer.echo(result.stdout)
+        typer.echo("--- STDERR ---")
+        typer.echo(result.stderr)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="migrate", help="Applies database migrations.")
+def migrate(
+        revision: str = typer.Argument("head", help="The revision to migrate to (e.g., 'head' for latest).")
+):
+    """
+    Wraps Alembic's 'upgrade' command.
+    """
+    setup_logging(json_format=False)
+    if not _is_db_configured():
+        typer.secho("No explicit database configured. Using default SQLite for migrations.", fg=typer.colors.YELLOW)
+
+    typer.echo(f"Applying database migrations to revision: {revision}...")
+    alembic_cfg = alembic.config.Config(str(_PROJECT_ROOT / "alembic.ini"))
+    alembic_cfg.set_main_option("loglevel", "DEBUG")
+    alembic.command.upgrade(alembic_cfg, revision)
+    typer.secho("Database migration complete.", fg=typer.colors.GREEN)
+
+
+@app.command(name="sync", help="Manually stamps the database with a specific migration revision.")
+def sync_db_revision(
+        revision: str = typer.Argument("head",
+                                       help="The revision to stamp the database with (e.g., 'head' for latest).")
+):
+    """
+    Wraps Alembic's 'stamp' command. Use with extreme caution!
+    """
+    setup_logging(json_format=False)
+    if not _is_db_configured():
+        typer.secho("No explicit database configured. Using default SQLite for sync.", fg=typer.colors.YELLOW)
+
+    typer.secho("\n--- WARNING: Using 'ragnetic sync' (alembic stamp) ---", fg=typer.colors.RED, bold=True)
+    typer.secho("This command updates the database's migration history WITHOUT running any SQL.", fg=typer.colors.RED)
+    if not typer.confirm(f"Are you absolutely sure you want to stamp the database to revision '{revision}'?",
+                         default=False):
+        typer.secho("Synchronization cancelled.", fg=typer.colors.YELLOW)
+        raise typer.Exit()
+
+    typer.echo(f"Stamping database to revision: {revision}...")
+    alembic_cfg = alembic.config.Config(str(_PROJECT_ROOT / "alembic.ini"))
+    alembic_cfg.set_main_option("loglevel", "DEBUG")
+    alembic.command.stamp(alembic_cfg, revision)
+    typer.secho(f"Database successfully stamped to revision '{revision}'.", fg=typer.colors.GREEN)
+
+
 @app.command(help="Configure system settings, databases, and secrets.")
 def configure():
     setup_logging()
@@ -289,9 +439,14 @@ def show_config():
     typer.echo("")
 
 
-@app.command(name="check-system-db", help="Verifies connections to configured system databases.")
+# In cli.py
+
+@app.command(name="check-system-db", help="Verifies and inspects connections to configured system databases.")
 def check_system_db():
-    setup_logging()
+    """
+    Checks database connectivity, displays server info, and verifies Alembic migration status.
+    """
+    setup_logging(json_format=False)
     typer.secho("--- Checking System Database Connections ---", bold=True)
     log_config = get_log_storage_config()
     memory_config = get_memory_storage_config()
@@ -309,17 +464,52 @@ def check_system_db():
         raise typer.Exit()
 
     has_failure = False
+    alembic_cfg = alembic.config.Config(str(_PROJECT_ROOT / "alembic.ini"))
+    script = alembic.script.ScriptDirectory.from_config(alembic_cfg)
+
     for conn_name, purposes in connections_to_check.items():
-        typer.echo(f"\nVerifying '{conn_name}' used for: {' and '.join(purposes)}")
+        typer.secho(f"\nInspecting '{conn_name}' (used for: {', '.join(purposes)})", fg=typer.colors.CYAN, bold=True)
         try:
             conn_str = get_db_connection(conn_name)
             engine = create_engine(conn_str, echo=False, connect_args={'connect_timeout': 5})
+
             with engine.connect() as connection:
+                # 1. Basic Connection Check
                 connection.execute(text("SELECT 1"))
+                typer.secho("  - Connectivity: [PASS]", fg=typer.colors.GREEN)
+
+                # 2. Get Database Info
+                db_version = connection.dialect.get_server_version_info(connection)
+                typer.echo(f"  - DB Type: {connection.dialect.name}")
+                typer.echo(f"  - DB Version: {'.'.join(map(str, db_version))}")
+
+                parsed_url = urlparse(conn_str)
+                if parsed_url.hostname:
+                    typer.echo(f"  - Host: {parsed_url.hostname}")
+                    typer.echo(f"  - Port: {parsed_url.port}")
+                    typer.echo(f"  - Database: {parsed_url.path.lstrip('/')}")
+
+                # 3. Check Alembic Migration Status
+                migration_context = alembic.runtime.migration.MigrationContext.from_engine(connection)
+                current_rev = migration_context.get_current_revision()
+                head_rev = script.get_current_head()
+
+                typer.echo(f"  - Current DB Revision: {current_rev}")
+                typer.echo(f"  - Latest Code Revision: {head_rev}")
+
+                if current_rev == head_rev:
+                    typer.secho("  - Migration Status: [UP-TO-DATE]", fg=typer.colors.GREEN)
+                elif not current_rev:
+                    typer.secho("  - Migration Status: [NEEDS MIGRATION] - Database is empty.", fg=typer.colors.YELLOW)
+                else:
+                    typer.secho("  - Migration Status: [NEEDS MIGRATION] - Run 'ragnetic migrate'.",
+                                fg=typer.colors.YELLOW)
+
             engine.dispose()
-            typer.secho(f"  - [PASS] Connection successful.", fg=typer.colors.GREEN)
+
         except Exception as e:
-            typer.secho(f"  - [FAIL] Connection failed. Error: {e}", fg=typer.colors.RED)
+            typer.secho(f"  - Connectivity: [FAIL]", fg=typer.colors.RED)
+            typer.secho(f"    Error: {e}", fg=typer.colors.RED)
             has_failure = True
 
     typer.secho("\n--- Check Complete ---", bold=True)

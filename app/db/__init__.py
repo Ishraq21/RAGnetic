@@ -57,18 +57,3 @@ async def get_db() -> AsyncSession:
         finally:
             await session.close()
 
-
-# For initial schema creation in startup_event before Alembic is fully set up
-# (this will be removed once Alembic is properly managing the schema)
-def create_all_tables_sync(conn_name: str):
-    """Creates all tables defined in metadata synchronously.
-    Intended for initial setup, to be replaced by Alembic.
-    """
-    sync_engine = create_engine(get_db_connection(conn_name))
-    try:
-        metadata.create_all(sync_engine)
-        logger.info("Synchronous creation of all tables complete (for initial setup).")
-    except Exception as e:
-        logger.error(f"Error during synchronous table creation: {e}")
-    finally:
-        sync_engine.dispose()
