@@ -209,9 +209,8 @@ async def home(request: Request):
     })
 
 
-# Other endpoints like /healthz, /history, /create-agent remain the same
-# ... (rest of the file is unchanged) ...
-@app.get("/healthz", tags=["System"])
+
+@app.get("/health", tags=["System"])
 async def health_check():
     if not is_db_configured():
         return JSONResponse({"status": "ok", "db_check": "skipped (no database configured)"})
@@ -454,9 +453,13 @@ async def websocket_chat(
                     "error": final_state.get("error", False) if final_state else True,
                     "errorMessage": final_state.get("errorMessage") if final_state else "Agent returned no output.",
                     "request_id": request_id,
+                    "user_id": user_id,
+                    "thread_id": thread_id,
+                    "is_first_message": is_first_message,
                 },
                 ws
             )
+            is_first_message = False
 
             if ai_response_content and not (final_state and final_state.get("error")) and is_db_enabled and db_session and session_id:
 
