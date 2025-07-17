@@ -62,7 +62,7 @@ def get_path_settings() -> Dict[str, Path | List[Path]]:
     paths = {
         "PROJECT_ROOT": project_root,
         "RAGNETIC_DIR": project_root / ".ragnetic",
-        "LOGS_DIR": project_root / ".ragnetic" / "logs",
+        "LOGS_DIR": project_root / "logs",
         "CONFIG_FILE_PATH": project_root / ".ragnetic" / "config.ini",
         "DATA_DIR": project_root / "data",
         "AGENTS_DIR": project_root / "agents_data",
