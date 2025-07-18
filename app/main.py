@@ -1,4 +1,5 @@
-# app/main.py
+import redis.asyncio as redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 import os
 import logging
 import logging.config
@@ -20,10 +21,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 from datetime import datetime
 from pydantic import BaseModel
-import redis
-import redis.asyncio as aioredis
-import redis.asyncio as redis
-from redis.exceptions import ConnectionError as RedisConnectionError
 
 # Import database-related modules
 from app.db.models import chat_sessions_table, chat_messages_table, users_table
@@ -144,13 +141,20 @@ class MemoryConnectionManager:
 class RedisConnectionManager:
     def __init__(self, url: str):
         self.redis_url = url
-        self.connection = None
+        self.connection: Optional[redis.Redis] = None
         self.pubsub = None
 
-    async def connect(self, websocket: WebSocket, channel: str):
-        pass
+    # match MemoryConnectionManager.connect signature
+    async def connect(self, websocket=None, channel=None):
+        # only initialize the Redis client once
+        if self.connection is None:
+            self.connection = redis.from_url(self.redis_url, decode_responses=True)
+            await self.connection.ping()
+            self.pubsub = self.connection.pubsub()
 
-    def disconnect(self, websocket: WebSocket, channel: str):
+    # match MemoryConnectionManager.disconnect signature
+    def disconnect(self, websocket=None, channel=None):
+        # no‐op per‐socket; actual close happens in shutdown handler
         pass
 
     async def broadcast(self, channel: str, message: str):
@@ -164,13 +168,16 @@ class RedisConnectionManager:
             try:
                 await self.connection.publish(channel, message)
                 return
-            except redis.exceptions.ConnectionError as e:
-                logger.warning(f"Redis connection error (attempt {attempt + 1}/{max_retries}): {e}")
+            except RedisConnectionError as e:
+                logger.warning(f"Redis publish failed (attempt {attempt+1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
-                    delay = backoff_factor * (2 ** attempt)
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error("Failed to publish to Redis after multiple retries. Message may be lost.")
+                    await asyncio.sleep(backoff_factor * (2 ** attempt))
+
+        logger.error("Giving up on Redis publish after retries; message may be lost.")
+
+
+
+
 
 
 # --- Instantiate the correct manager based on config ---
@@ -182,19 +189,6 @@ else:
     manager = MemoryConnectionManager()
 
 
-class RenameRequest(BaseModel):
-    new_name: str
-
-
-_watcher_process: Optional[Process] = None
-
-
-def is_db_configured() -> bool:
-    mem_config = get_memory_storage_config()
-    log_config = get_log_storage_config()
-    return (mem_config.get("type") in ["db", "sqlite"]) or (log_config.get("type") == "db")
-
-
 # --- Application Lifecycle Events ---
 @app.on_event("startup")
 async def startup_event():
@@ -202,11 +196,9 @@ async def startup_event():
     logger.info("Application startup: Initializing components.")
     if isinstance(manager, RedisConnectionManager):
         try:
-            manager.connection = redis.from_url(REDIS_URL, decode_responses=True)
-            await manager.connection.ping()
-            manager.pubsub = manager.connection.pubsub()
+            await manager.connect()
             logger.info(f"Successfully connected to Redis at {REDIS_URL}")
-        except redis.exceptions.ConnectionError as e:
+        except RedisConnectionError as e:
             logger.critical(
                 f"CRITICAL: Could not connect to Redis at {REDIS_URL}. Please ensure it is running. Error: {e}")
             raise RuntimeError("Failed to connect to Redis") from e
@@ -263,19 +255,34 @@ async def startup_event():
     logger.info("Automated file watcher started.")
 
 
+class RenameRequest(BaseModel):
+    new_name: str
+
+
+_watcher_process: Optional[Process] = None
+
+
+def is_db_configured() -> bool:
+    mem_config = get_memory_storage_config()
+    log_config = get_log_storage_config()
+    return (mem_config.get("type") in ["db", "sqlite"]) or (log_config.get("type") == "db")
+
+
+
+
+
 @app.on_event("shutdown")
 async def shutdown_event():
     global _watcher_process
-    if isinstance(manager, RedisConnectionManager) and manager.connection:
-        if manager.pubsub:
-            await manager.pubsub.close()
-        await manager.connection.close()
+    if isinstance(manager, RedisConnectionManager):
+        await manager.disconnect()
         logger.info("Redis connection closed.")
 
     if _watcher_process and _watcher_process.is_alive():
         _watcher_process.terminate()
         _watcher_process.join(timeout=5)
         logger.info("File watcher process stopped.")
+
 
 
 # --- WebSocket Helper Functions ---
@@ -411,19 +418,29 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
 async def redis_listen(ws: WebSocket, channel: str):
     if not isinstance(manager, RedisConnectionManager) or not manager.pubsub:
         return
+
     await manager.pubsub.subscribe(channel)
     try:
         while True:
-            message = await manager.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            try:
+                message = await manager.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            except RedisConnectionError as e:
+                logger.warning(f"Redis pubsub lost for {channel}; retrying in 1s: {e}")
+                await asyncio.sleep(1.0)
+                continue
+
             if message and ws.client_state == WebSocketState.CONNECTED:
                 await ws.send_text(message['data'])
+
     except asyncio.CancelledError:
         logger.info(f"Redis listener for channel {channel} cancelled.")
-    except Exception as e:
-        logger.error(f"Error in Redis listener for {channel}: {e}", exc_info=True)
+
     finally:
-        if manager.pubsub:
+        # unsubscribing even if Redis is down
+        try:
             await manager.pubsub.unsubscribe(channel)
+        except RedisConnectionError:
+            pass
 
 
 async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph_agent: Any, thread_id: str) -> Tuple[
