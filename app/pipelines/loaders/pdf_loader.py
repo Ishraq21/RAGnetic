@@ -8,9 +8,7 @@ from langchain_core.documents import Document
 import asyncio
 from datetime import datetime
 
-# NEW: Import get_path_settings from centralized config
 from app.core.config import get_path_settings
-# NEW: Import AgentConfig and DataPolicy for policy application
 from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 
 logger = logging.getLogger(__name__)
@@ -147,9 +145,9 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None, sourc
                         "source_path": str(safe_file_path.resolve()),
                         "file_name": safe_file_path.name,
                         "file_type": safe_file_path.suffix.lower(),
-                        "load_timestamp": datetime.now().isoformat(), # NEW: Add load timestamp
+                        "load_timestamp": datetime.now().isoformat(),
                         "page_number": page_num + 1,
-                        "num_pages": pdf_document.page_count # NEW: Add total page count
+                        "num_pages": pdf_document.page_count
                     }
                     # Add granular DataSource info if available
                     if source: # NEW: Add info from DataSource object

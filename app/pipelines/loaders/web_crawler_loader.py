@@ -6,10 +6,10 @@ from langchain_core.documents import Document
 from langchain_community.document_loaders.recursive_url_loader import RecursiveUrlLoader
 from bs4 import BeautifulSoup as Soup # Imported for RecursiveUrlLoader if it's used with it
 from urllib.parse import urlparse # Added import for URL scheme validation
-from datetime import datetime # NEW: Import datetime for load_timestamp
+from datetime import datetime
 
-# NEW: Import DataSource for lineage
-from app.schemas.agent import AgentConfig, DataPolicy, DataSource # MODIFIED: Import DataSource
+
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 
 logger = logging.getLogger(__name__) # Added logger initialization
 

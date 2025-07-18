@@ -8,9 +8,7 @@ from langchain_core.documents import Document
 import asyncio
 from datetime import datetime
 
-# NEW: Import get_path_settings from centralized config
 from app.core.config import get_path_settings
-# NEW: Import AgentConfig, DataPolicy, DataSource for policy application and lineage
 from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 
 logger = logging.getLogger(__name__)
