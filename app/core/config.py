@@ -253,3 +253,18 @@ def get_llm_model(
                 raise
 
     raise ValueError(f"Unsupported or unknown LLM model prefix for: {model_name}")
+
+
+def get_cors_settings() -> List[str]:
+    """Retrieves CORS origins, prioritizing environment variables."""
+    origins_str = os.environ.get("CORS_ALLOWED_ORIGINS")
+    if origins_str:
+        return [origin.strip() for origin in origins_str.split(',') if origin.strip()]
+
+    config = _get_config_parser()
+    if config.has_option('SERVER', 'cors_allowed_origins'):
+        origins_str = config.get('SERVER', 'cors_allowed_origins')
+        if origins_str:
+            return [origin.strip() for origin in origins_str.split(',') if origin.strip()]
+
+    return ["*"]  # Default to all origins if not set

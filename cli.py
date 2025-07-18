@@ -1,3 +1,4 @@
+# app/cli.py
 import typer
 import uvicorn
 import os
@@ -48,7 +49,7 @@ from google.oauth2 import service_account
 logger = logging.getLogger(__name__)
 
 from app.core.config import get_path_settings, get_api_key, get_server_api_keys, get_log_storage_config, \
-    get_memory_storage_config, get_db_connection
+    get_memory_storage_config, get_db_connection, get_cors_settings
 from app.core.structured_logging import JSONFormatter
 from app.evaluation.dataset_generator import generate_test_set
 from app.evaluation.benchmark import run_benchmark
@@ -339,12 +340,28 @@ def configure():
     config.read(_CONFIG_FILE)
 
     # --- Configure Server Settings ---
-    if typer.confirm("\nDo you want to configure SERVER settings (host, port)?", default=True):
+    if typer.confirm("\nDo you want to configure SERVER settings (host, port, CORS)?", default=True):
         if 'SERVER' not in config: config.add_section('SERVER')
         host = typer.prompt("Enter server host", default=config.get('SERVER', 'host', fallback='127.0.0.1'))
         port = typer.prompt("Enter server port", default=config.get('SERVER', 'port', fallback='8000'))
         json_logs = typer.confirm("Use JSON format for console logs?",
                                   default=config.getboolean('SERVER', 'json_logs', fallback=False))
+
+        if typer.confirm("Configure CORS allowed origins?", default=True):
+            current_origins = os.environ.get("CORS_ALLOWED_ORIGINS",
+                                             config.get('SERVER', 'cors_allowed_origins', fallback='*'))
+            origins_str = typer.prompt(
+                "Enter comma-separated origins (e.g., http://localhost:3000,https://my-app.com)",
+                default=current_origins
+            )
+            if typer.confirm("Save CORS settings to the local .env file (recommended)?", default=True):
+                _update_env_file({"CORS_ALLOWED_ORIGINS": origins_str})
+                if config.has_option('SERVER', 'cors_allowed_origins'):
+                    config.remove_option('SERVER', 'cors_allowed_origins')  # Prefer .env
+                typer.secho("CORS settings saved to .env file.", fg=typer.colors.GREEN)
+            else:
+                config.set('SERVER', 'cors_allowed_origins', origins_str)
+
         config.set('SERVER', 'host', host)
         config.set('SERVER', 'port', str(port))
         config.set('SERVER', 'json_logs', str(json_logs).lower())
@@ -546,7 +563,7 @@ def init():
 
     if not os.path.exists(_CONFIG_FILE):
         config = configparser.ConfigParser()
-        config['SERVER'] = {'host': '127.0.0.1', 'port': '8000', 'json_logs': 'false'}
+        config['SERVER'] = {'host': '127.0.0.1', 'port': '8000', 'json_logs': 'false', 'cors_allowed_origins': '*'}
         # --- Bootstrap Default SQLite Database Configuration ---
         default_db_path = _MEMORY_DIR / "ragnetic.db"
 
@@ -566,7 +583,20 @@ def init():
         typer.echo(f"  - Created config file: {_CONFIG_FILE}")
 
     typer.secho("\nProject initialized successfully!", fg=typer.colors.GREEN)
-    typer.secho("Next steps:", bold=True)
+
+    # --- CORS WARNING ---
+    typer.secho("\n--- SECURITY NOTICE: CORS ---", fg=typer.colors.YELLOW, bold=True)
+    typer.secho(
+        "By default, RAGnetic allows requests from all origins ('*') for ease of development.",
+        fg=typer.colors.YELLOW
+    )
+    typer.secho(
+        "For production, you should restrict this to your frontend's domain.",
+        fg=typer.colors.YELLOW
+    )
+    typer.echo("You can change this using: " + typer.style("ragnetic configure", bold=True))
+
+    typer.secho("\nNext steps:", bold=True)
     typer.echo("  1. Set your API keys: " + typer.style("ragnetic set-api-key", bold=True))
     typer.echo("  2. Configure a different database (optional): " + typer.style("ragnetic configure", bold=True))
     typer.echo("  3. Secure your server: " + typer.style("ragnetic set-server-key", bold=True))
@@ -663,6 +693,13 @@ def start_server(
     if not get_server_api_keys():
         typer.secho("SECURITY WARNING: Server starting without an API key.", fg=typer.colors.YELLOW, bold=True)
         typer.secho("Run 'ragnetic set-server-key' to secure the API.", fg=typer.colors.YELLOW)
+
+    # CORS Warning on server start
+    if get_cors_settings() == ["*"]:
+        typer.secho("SECURITY WARNING: Server is allowing requests from all origins ('*').", fg=typer.colors.YELLOW,
+                    bold=True)
+        typer.secho("This is not recommended for production. Use 'ragnetic configure' to set allowed origins.",
+                    fg=typer.colors.YELLOW)
 
     if reload:
         logger.warning("Running in --reload mode.")
