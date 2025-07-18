@@ -27,7 +27,7 @@ from sqlalchemy import select, desc
 
 # Corrected Imports: Importing the functions and variables from app.db and app.core.config
 from app.core.config import get_path_settings, get_server_api_keys, get_log_storage_config, \
-    get_memory_storage_config, get_db_connection_config, get_db_connection
+    get_memory_storage_config, get_db_connection_config, get_db_connection, get_cors_settings
 from app.db import initialize_db_connections, get_db
 
 from app.core.validation import validate_agent_name, sanitize_for_path
@@ -66,7 +66,7 @@ _MEMORY_DIR = _APP_PATHS["MEMORY_DIR"]
 _CONFIG_FILE = _APP_PATHS["CONFIG_FILE_PATH"]
 _BENCHMARK_DIR = _APP_PATHS["BENCHMARK_DIR"]
 
-allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
+allowed_origins = get_cors_settings()
 
 app = FastAPI(title="RAGnetic API", version="0.1.0",
               description="API for managing and interacting with RAGnetic agents.")
