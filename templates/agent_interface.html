@@ -25,28 +25,33 @@
 <body>
     <div id="toast-notification"></div>
     <div id="confirmation-modal">
-        <div class="modal-content"><p id="modal-text">Are you sure? Your current chat history will be cleared.</p><div class="modal-buttons"><button id="modal-cancel-btn" class="modal-btn cancel">Cancel</button><button id="modal-confirm-btn" class="modal-btn confirm">Start New</button></div></div>
+        <div class="modal-content"><p id="modal-text">Are you sure?</p><div class="modal-buttons"><button id="modal-cancel-btn" class="modal-btn cancel">Cancel</button><button id="modal-confirm-btn" class="modal-btn confirm">Start New</button></div></div>
     </div>
 
     <aside id="chat-history-sidebar">
-        <h3>Chat History</h3>
-        <ul id="history-list"></ul>
-    </aside>
-
-    <div id="chat-container">
-        <header>
+        <div class="sidebar-top">
+            <button id="new-chat-btn">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                <span>New Chat</span>
+            </button>
             <select id="agent-select" name="agent">
                 {% for a in agents %}
                 <option value="{{ a.name }}" {% if a.name == agent %}selected{% endif %}>{{ a.display_name }}</option>
                 {% endfor %}
             </select>
-            <button id="new-chat-btn" title="New Chat">New Chat</button>
-        </header>
+        </div>
+        <h3 class="history-heading">Recent</h3>
+        <ul id="history-list"></ul>
+    </aside>
 
+    <div id="chat-container">
         <div id="messages"></div>
 
         <div id="input-form-container">
-            <div id="typing-indicator" style="opacity: 0; display:none;"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+            <div id="typing-indicator" style="opacity: 0; display:none;">
+                <div class="pulsing-dot"></div>
+                <span>RAGnetic is thinking...</span>
+            </div>
             <form id="input-form" onsubmit="handleFormSubmit(event)">
                 <textarea name="query" id="query-input" placeholder="Ask RAGnetic…" rows="1"></textarea>
                 <button type="submit" id="send-stop-btn">
@@ -54,11 +59,12 @@
                     <span id="stop-icon" style="display: none;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M6 6h12v12H6V6z"></path></svg></span>
                 </button>
             </form>
+            <p class="disclaimer-text">RAGnetic can make mistakes. Double check your source.</p>
         </div>
     </div>
 
     <script>
-        // NEW: Get the API key passed from the backend
+
         const GLOBAL_API_KEY = "{{ api_key }}"; // This will be rendered by Jinja2
 
         const agentSelect = document.getElementById('agent-select');
