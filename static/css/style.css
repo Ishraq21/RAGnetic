@@ -8,12 +8,15 @@
 }
 * { box-sizing: border-box; }
 body {
-    margin: 0; padding: 0; background: var(--background-color); color: var(--text-color);
+    margin: 0; padding: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(81, 65, 212, 0.15), transparent 70%), var(--background-color);
+    color: var(--text-color);
     font-family: 'Inter', sans-serif;
     display: grid;
     grid-template-columns: 280px 1fr;
 }
 
+/* === SIDEBAR === */
 #chat-history-sidebar {
     position: sticky; top: 0; height: 100vh;
     background: var(--card-background);
@@ -91,7 +94,6 @@ body {
     display: flex; flex-direction: column; max-width: 800px;
     width: 100%; margin: 0 auto;
     min-height: 100vh;
-    /* UPDATED: Increased top padding to bring chat start down */
     padding: 4rem 1rem 1rem;
 }
 #messages {
@@ -186,7 +188,6 @@ body {
 /* === ANIMATIONS === */
 @keyframes fadeInMessage { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes modal-fade-in { from { opacity: 0; transform: translateY(-20px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
-/* UPDATED: New pulse animation */
 @keyframes pulse {
     0%   { transform: scale(0.8); opacity: 0.5; }
     50%  { transform: scale(1.2); opacity: 1; }
