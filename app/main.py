@@ -8,6 +8,7 @@ from uuid import uuid4
 from typing import Optional, List, Dict, Any, Tuple
 from multiprocessing import Process
 from pathlib import Path
+import time
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, status, \
     WebSocketException
@@ -19,7 +20,10 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 from datetime import datetime
 from pydantic import BaseModel
+import redis
+import redis.asyncio as aioredis
 import redis.asyncio as redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 # Import database-related modules
 from app.db.models import chat_sessions_table, chat_messages_table, users_table
@@ -30,7 +34,7 @@ from sqlalchemy import select, desc, insert, update, text, delete
 from app.core.config import get_path_settings, get_server_api_keys, get_log_storage_config, \
     get_memory_storage_config, get_db_connection_config, get_db_connection, get_cors_settings, _get_config_parser
 from app.db import initialize_db_connections, get_db
-
+from app.core.structured_logging import DatabaseLogHandler, JSONFormatter
 from app.core.validation import validate_agent_name, sanitize_for_path
 from app.core.security import get_http_api_key, get_websocket_api_key
 from app.schemas.agent import AgentConfig
@@ -90,7 +94,7 @@ elif log_storage_config.get("type") == "db":
     table_name = log_storage_config.get("log_table_name", "ragnetic_logs")
     if conn_name:
         LOGGING_CONFIG["handlers"]["database"] = {
-            "class": "app.core.structured_logging.DatabaseLogHandler",
+            "()": "app.core.structured_logging.DatabaseLogHandler",
             "connection_name": conn_name,
             "table_name": table_name,
         }
@@ -101,11 +105,9 @@ logger = logging.getLogger("ragnetic")
 load_dotenv()
 
 # --- Global Settings & App Initialization ---
-_APP_PATHS = get_path_settings()
 _PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
 _DATA_DIR = _APP_PATHS["DATA_DIR"]
 
-# --- WebSocket and App Configuration ---
 config = _get_config_parser()
 WEBSOCKET_MODE = config.get('SERVER', 'websocket_mode', fallback='memory')
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost")
@@ -146,16 +148,29 @@ class RedisConnectionManager:
         self.pubsub = None
 
     async def connect(self, websocket: WebSocket, channel: str):
-        # Connection is handled by the listener task
         pass
 
     def disconnect(self, websocket: WebSocket, channel: str):
-        # Disconnection is handled by the listener task
         pass
 
     async def broadcast(self, channel: str, message: str):
-        if self.connection:
-            await self.connection.publish(channel, message)
+        if not self.connection:
+            logger.error("Cannot broadcast: Redis connection is not available.")
+            return
+
+        max_retries = 5
+        backoff_factor = 0.5
+        for attempt in range(max_retries):
+            try:
+                await self.connection.publish(channel, message)
+                return
+            except redis.exceptions.ConnectionError as e:
+                logger.warning(f"Redis connection error (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    delay = backoff_factor * (2 ** attempt)
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error("Failed to publish to Redis after multiple retries. Message may be lost.")
 
 
 # --- Instantiate the correct manager based on config ---
