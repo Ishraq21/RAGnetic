@@ -425,6 +425,18 @@ async def websocket_chat(
                     {"session_id": session_id, "content": query, "timestamp": datetime.utcnow()}
                 )
                 await db_session.commit()
+                if is_first_message:
+                    title = query.strip()
+                    if len(title) > 100:
+                        title = title[:97] + "..."
+                    await db_session.execute(
+                        text(
+                            f"UPDATE {chat_sessions_table.name} "
+                            "SET topic_name = :topic WHERE id = :sid"
+                        ),
+                        {"topic": title, "sid": session_id}
+                    )
+                    await db_session.commit()
             initial_state: AgentState = {"messages": history + [HumanMessage(content=query)], "request_id": request_id}
             gen_task = asyncio.create_task(
                 handle_query_streaming(
