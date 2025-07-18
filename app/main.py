@@ -28,7 +28,7 @@ from sqlalchemy import select, desc
 # Corrected Imports: Importing the functions and variables from app.db and app.core.config
 from app.core.config import get_path_settings, get_server_api_keys, get_log_storage_config, \
     get_memory_storage_config, get_db_connection_config, get_db_connection
-from app.db import initialize_db_connections, get_db  # REMOVED AsyncSessionLocal from import
+from app.db import initialize_db_connections, get_db
 
 from app.core.validation import validate_agent_name, sanitize_for_path
 from app.core.security import get_http_api_key, get_websocket_api_key
@@ -75,8 +75,10 @@ app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credenti
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
 class RenameRequest(BaseModel):
     new_name: str
+
 
 # --- Connection Manager for WebSockets ---
 class ConnectionManager:
@@ -255,10 +257,10 @@ async def get_history(
 
 @app.get("/sessions", tags=["Memory"])
 async def list_sessions(
-    agent_name: str,
-    user_id:    str,
-    api_key:    str = Depends(get_http_api_key),
-    db:         AsyncSession = Depends(get_db),
+        agent_name: str,
+        user_id: str,
+        api_key: str = Depends(get_http_api_key),
+        db: AsyncSession = Depends(get_db),
 ):
     if not is_db_configured():
         raise HTTPException(status_code=501, detail="Chat history not supported without a database.")
@@ -336,10 +338,6 @@ async def websocket_chat(
     thread_id = "uninitialized"
     is_db_enabled = is_db_configured()
     try:
-        # Removed the manual session creation and context manager
-        # if is_db_enabled:
-        #     async with get_db_for_websocket() as session:
-        #         db_session = session
         try:
             message_data = await ws.receive_json()
         except ValueError:
@@ -354,7 +352,9 @@ async def websocket_chat(
         user_id = sanitize_for_path(payload.get("user_id")) or f"user-{uuid4().hex[:8]}"
         thread_id = sanitize_for_path(payload.get("thread_id")) or f"thread-{uuid4().hex[:8]}"
         session_id = None
-        if is_db_enabled and db_session:  # db_session is now provided by Depends(get_db)
+        session_topic = None
+
+        if is_db_enabled and db_session:
             select_user_stmt = text(f"SELECT id FROM {users_table.name} WHERE user_id = :user_id")
             user_result = await db_session.execute(select_user_stmt, {"user_id": user_id})
             user_db_id = user_result.scalar_one_or_none()
@@ -369,13 +369,18 @@ async def websocket_chat(
                 )
                 user_db_id = user_result.scalar_one()
                 await db_session.commit()
+
             select_session_stmt = text(
-                f"SELECT id FROM {chat_sessions_table.name} WHERE thread_id = :thread_id AND agent_name = :agent_name AND user_id = :user_id"
+                f"SELECT id, topic_name FROM {chat_sessions_table.name} WHERE thread_id = :thread_id AND agent_name = :agent_name AND user_id = :user_id"
             )
             session_result = await db_session.execute(select_session_stmt, {
                 "thread_id": thread_id, "agent_name": agent_name, "user_id": user_db_id
             })
-            session_id = session_result.scalar_one_or_none()
+            session_record = session_result.fetchone()
+            if session_record:
+                session_id = session_record.id
+                session_topic = session_record.topic_name
+
             if not session_id:
                 insert_session_stmt = text(
                     f"INSERT INTO {chat_sessions_table.name} (thread_id, agent_name, user_id, created_at, updated_at) VALUES (:thread_id, :agent_name, :user_id, :created_at, :updated_at) RETURNING id"
@@ -393,6 +398,7 @@ async def websocket_chat(
                 )
                 session_id = session_result.scalar_one()
                 await db_session.commit()
+
         agent_config = load_agent_config(agent_name)
         all_tools = []
         if "retriever" in agent_config.tools: all_tools.append(get_retriever_tool(agent_config))
@@ -404,7 +410,8 @@ async def websocket_chat(
                 all_tools.extend(create_sql_toolkit(db_connection_string=db_source.db_connection,
                                                     llm_model_name=agent_config.llm_model))
         langgraph_agent = get_agent_workflow(all_tools).compile()
-        is_first_message = True
+        is_first_message_in_session = (session_topic is None)
+
         while True:
             query = message_data.get("payload", {}).get("query")
             request_id = str(uuid4())
@@ -419,13 +426,20 @@ async def websocket_chat(
                 for msg in messages_result:
                     history.append(
                         HumanMessage(content=msg.content) if msg.sender == 'human' else AIMessage(content=msg.content))
+
+                now = datetime.utcnow()
                 await db_session.execute(
                     text(
                         f"INSERT INTO {chat_messages_table.name} (session_id, sender, content, timestamp) VALUES (:session_id, 'human', :content, :timestamp)"),
-                    {"session_id": session_id, "content": query, "timestamp": datetime.utcnow()}
+                    {"session_id": session_id, "content": query, "timestamp": now}
+                )
+                await db_session.execute(
+                    text(f"UPDATE {chat_sessions_table.name} SET updated_at = :now WHERE id = :session_id"),
+                    {"now": now, "session_id": session_id}
                 )
                 await db_session.commit()
-                if is_first_message:
+
+                if is_first_message_in_session:
                     title = query.strip()
                     if len(title) > 100:
                         title = title[:97] + "..."
@@ -437,6 +451,8 @@ async def websocket_chat(
                         {"topic": title, "sid": session_id}
                     )
                     await db_session.commit()
+                    is_first_message_in_session = False
+
             initial_state: AgentState = {"messages": history + [HumanMessage(content=query)], "request_id": request_id}
             gen_task = asyncio.create_task(
                 handle_query_streaming(
@@ -463,18 +479,23 @@ async def websocket_chat(
                     "request_id": request_id,
                     "user_id": user_id,
                     "thread_id": thread_id,
-                    "is_first_message": is_first_message,
+                    "is_first_message": is_first_message_in_session,
                 },
                 ws
             )
-            is_first_message = False
+
             if ai_response_content and not (
                     final_state and final_state.get("error")) and is_db_enabled and db_session and session_id:
+                now = datetime.utcnow()
                 await db_session.execute(
                     text(
                         "INSERT INTO chat_messages (session_id, sender, content, timestamp) VALUES (:session_id, 'ai', :content, :timestamp)"
                     ),
-                    {"session_id": session_id, "content": ai_response_content, "timestamp": datetime.utcnow()}
+                    {"session_id": session_id, "content": ai_response_content, "timestamp": now}
+                )
+                await db_session.execute(
+                    text(f"UPDATE {chat_sessions_table.name} SET updated_at = :now WHERE id = :session_id"),
+                    {"now": now, "session_id": session_id}
                 )
                 await db_session.commit()
             try:
@@ -492,12 +513,12 @@ async def websocket_chat(
 
 @app.put("/sessions/{thread_id}/rename", tags=["Memory"], status_code=status.HTTP_200_OK)
 async def rename_session(
-    thread_id: str,
-    request: RenameRequest,
-    agent_name: str,
-    user_id: str,
-    api_key: str = Depends(get_http_api_key),
-    db: AsyncSession = Depends(get_db),
+        thread_id: str,
+        request: RenameRequest,
+        agent_name: str,
+        user_id: str,
+        api_key: str = Depends(get_http_api_key),
+        db: AsyncSession = Depends(get_db),
 ):
     if not is_db_configured():
         raise HTTPException(status_code=501, detail="Functionality not supported without a database.")
@@ -546,11 +567,11 @@ async def rename_session(
 # --- NEW: Endpoint to delete a chat session ---
 @app.delete("/sessions/{thread_id}", tags=["Memory"], status_code=status.HTTP_200_OK)
 async def delete_session(
-    thread_id: str,
-    agent_name: str,
-    user_id: str,
-    api_key: str = Depends(get_http_api_key),
-    db: AsyncSession = Depends(get_db),
+        thread_id: str,
+        agent_name: str,
+        user_id: str,
+        api_key: str = Depends(get_http_api_key),
+        db: AsyncSession = Depends(get_db),
 ):
     if not is_db_configured():
         raise HTTPException(status_code=501, detail="Functionality not supported without a database.")
