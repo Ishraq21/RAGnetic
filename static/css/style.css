@@ -20,7 +20,7 @@ body {
 #chat-history-sidebar {
     position: sticky; top: 0; height: 100vh;
     background: var(--card-background);
-    padding: 1.5rem 0.75rem;
+    padding: 2.5rem 0.75rem 1.5rem;
     display: flex; flex-direction: column; gap: 1.25rem;
     border-right: 1px solid var(--border-color);
 }
