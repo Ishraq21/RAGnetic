@@ -70,24 +70,97 @@ body {
     scrollbar-width: thin; scrollbar-color: var(--border-color) transparent;
 }
 #history-list li {
-    position: relative; display: flex; align-items: center; gap: 0.75rem;
-    padding: 0.6rem 0.8rem 0.6rem 1.5rem;
-    margin-bottom: 0.25rem; border-radius: 8px; cursor: pointer;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.25rem;
+    border-radius: 8px;
+    cursor: pointer;
     font-size: 0.9em;
     transition: background-color 0.2s, color 0.2s;
 }
-#history-list li::before {
-    content: ''; position: absolute; left: 0.5rem; top: 50%;
+#history-list li:hover { background-color: var(--sidebar-hover-bg); }
+#history-list li.active { background-color: var(--sidebar-hover-bg); }
+
+.history-item-main {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-grow: 1;
+    min-width: 0; /* Important for ellipsis to work */
+    padding-left: 1rem; /* Space for the ::before element */
+    position: relative;
+}
+.history-item-main::before {
+    content: ''; position: absolute; left: -0.3rem; top: 50%;
     transform: translateY(-50%) scaleY(0); height: 60%; width: 3px;
     background-color: var(--accent-color); border-radius: 3px;
     transition: transform 0.2s ease-in-out;
 }
-#history-list li:hover { background-color: var(--sidebar-hover-bg); }
-#history-list li.active { background-color: var(--sidebar-hover-bg); }
-#history-list li.active::before { transform: translateY(-50%) scaleY(1); }
-#history-list li.active .history-item-text { color: var(--text-color); }
-#history-list li .history-icon { flex-shrink: 0; color: var(--muted-text); transition: color 0.2s; }
-.history-item-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-text); transition: color 0.2s;}
+#history-list li.active .history-item-main::before {
+    transform: translateY(-50%) scaleY(1);
+}
+#history-list li .history-icon {
+    flex-shrink: 0;
+    color: var(--muted-text);
+    transition: color 0.2s;
+}
+.history-item-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted-text);
+    transition: color 0.2s;
+}
+#history-list li.active .history-item-text {
+    color: var(--text-color);
+}
+
+.rename-input {
+    width: 100%;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-color);
+    font-family: 'Inter', sans-serif;
+    font-size: inherit;
+    padding: 0;
+    margin: 0;
+    border-bottom: 1px solid var(--accent-color);
+}
+.history-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    opacity: 0;
+    transition: opacity 0.2s ease-in-out;
+    flex-shrink: 0;
+}
+#history-list li:hover .history-item-actions {
+    opacity: 1;
+}
+.action-btn {
+    background: transparent;
+    border: none;
+    color: var(--muted-text);
+    padding: 0.25rem;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s, color 0.2s;
+}
+.action-btn:hover {
+    background-color: #3f3f3f;
+    color: var(--text-color);
+}
+.action-btn.delete-btn:hover {
+    color: var(--error-color);
+}
+
 
 /* === MAIN CHAT CONTAINER === */
 #chat-container {
@@ -175,15 +248,52 @@ body {
 }
 
 /* === MODALS & NOTIFICATIONS === */
-#toast-notification, #confirmation-modal, .modal-content, .modal-buttons, .modal-btn { /* Styles unchanged */ }
-#toast-notification { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: var(--card-background); padding: 1rem 1.5rem; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 1000; display: none; border-left: 4px solid var(--error-color); }
-#confirmation-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 2000; }
-.modal-content { background: var(--card-background); padding: 2rem; border-radius: 12px; border: 1px solid var(--border-color); text-align: center; max-width: 400px; box-shadow: 0 5px 15px rgba(0,0,0,0.5); animation: modal-fade-in 0.3s ease-out; }
+#toast-notification {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--card-background);
+    padding: 1rem 1.5rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    z-index: 1000;
+    display: none;
+    transition: opacity 0.3s;
+}
+#toast-notification.success {
+    border-left: 4px solid var(--success-color);
+}
+#toast-notification.error {
+    border-left: 4px solid var(--error-color);
+}
+#confirmation-modal {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0,0,0,0.6);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+.modal-content {
+    background: var(--card-background);
+    padding: 2rem;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    text-align: center;
+    max-width: 400px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+    animation: modal-fade-in 0.3s ease-out;
+}
 .modal-content p { margin: 0 0 1.5rem 0; font-size: 1.1em; line-height: 1.6; }
 .modal-buttons { display: flex; gap: 1rem; justify-content: center; }
 .modal-btn { padding: 0.75rem 1.5rem; border-radius: 8px; border: none; font-size: 1em; font-weight: 500; cursor: pointer; }
-.modal-btn.confirm { background-color: var(--error-color); color: white; }
 .modal-btn.cancel { background-color: var(--border-color); color: var(--text-color); }
+.modal-btn.confirm { background-color: var(--accent-color); color: white; }
+.modal-btn.confirm.error {
+    background-color: var(--error-color);
+}
+.modal-btn.confirm.error:hover {
+    background-color: #c82333;
+}
 
 /* === ANIMATIONS === */
 @keyframes fadeInMessage { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }

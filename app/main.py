@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 from datetime import datetime
+from pydantic import BaseModel
 
 # Import database-related modules
 from app.db.models import chat_sessions_table, chat_messages_table, users_table, metadata
@@ -74,9 +75,8 @@ app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credenti
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-
-# --- Database Connection Management ---
-# REMOVED: get_db_for_websocket function
+class RenameRequest(BaseModel):
+    new_name: str
 
 # --- Connection Manager for WebSockets ---
 class ConnectionManager:
@@ -488,3 +488,110 @@ async def websocket_chat(
         logger.error(f"[{thread_id}] Unhandled WebSocket Error: {e}", exc_info=True)
     finally:
         pass
+
+
+@app.put("/sessions/{thread_id}/rename", tags=["Memory"], status_code=status.HTTP_200_OK)
+async def rename_session(
+    thread_id: str,
+    request: RenameRequest,
+    agent_name: str,
+    user_id: str,
+    api_key: str = Depends(get_http_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    if not is_db_configured():
+        raise HTTPException(status_code=501, detail="Functionality not supported without a database.")
+
+    safe_thread_id = sanitize_for_path(thread_id)
+    safe_agent_name = sanitize_for_path(agent_name)
+    safe_user_id = sanitize_for_path(user_id)
+    new_name = request.new_name.strip()
+
+    if not new_name:
+        raise HTTPException(status_code=400, detail="New name cannot be empty.")
+
+    try:
+        # First, get the internal user ID
+        user_db_id = (await db.execute(
+            select(users_table.c.id).where(users_table.c.user_id == safe_user_id)
+        )).scalar_one_or_none()
+
+        if not user_db_id:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        # Find the session and verify ownership
+        update_stmt = (
+            chat_sessions_table.update()
+            .where(
+                (chat_sessions_table.c.thread_id == safe_thread_id) &
+                (chat_sessions_table.c.agent_name == safe_agent_name) &
+                (chat_sessions_table.c.user_id == user_db_id)
+            )
+            .values(topic_name=new_name, updated_at=datetime.utcnow())
+        )
+        result = await db.execute(update_stmt)
+        await db.commit()
+
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Chat session not found or permission denied.")
+
+        return JSONResponse({"status": "ok", "message": "Chat session renamed successfully."})
+
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Database error renaming session {safe_thread_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database error while renaming session.")
+
+
+# --- NEW: Endpoint to delete a chat session ---
+@app.delete("/sessions/{thread_id}", tags=["Memory"], status_code=status.HTTP_200_OK)
+async def delete_session(
+    thread_id: str,
+    agent_name: str,
+    user_id: str,
+    api_key: str = Depends(get_http_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    if not is_db_configured():
+        raise HTTPException(status_code=501, detail="Functionality not supported without a database.")
+
+    safe_thread_id = sanitize_for_path(thread_id)
+    safe_agent_name = sanitize_for_path(agent_name)
+    safe_user_id = sanitize_for_path(user_id)
+
+    try:
+        # Get internal user and session IDs to ensure ownership before deleting
+        user_db_id = (await db.execute(
+            select(users_table.c.id).where(users_table.c.user_id == safe_user_id)
+        )).scalar_one_or_none()
+
+        if not user_db_id:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        session_id = (await db.execute(
+            select(chat_sessions_table.c.id).where(
+                (chat_sessions_table.c.thread_id == safe_thread_id) &
+                (chat_sessions_table.c.agent_name == safe_agent_name) &
+                (chat_sessions_table.c.user_id == user_db_id)
+            )
+        )).scalar_one_or_none()
+
+        if not session_id:
+            raise HTTPException(status_code=404, detail="Chat session not found or permission denied.")
+
+        # Delete associated messages first
+        await db.execute(
+            chat_messages_table.delete().where(chat_messages_table.c.session_id == session_id)
+        )
+        # Then delete the session
+        await db.execute(
+            chat_sessions_table.delete().where(chat_sessions_table.c.id == session_id)
+        )
+        await db.commit()
+
+        return JSONResponse({"status": "ok", "message": "Chat session deleted successfully."})
+
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Database error deleting session {safe_thread_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database error while deleting session.")
