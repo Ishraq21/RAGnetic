@@ -22,11 +22,12 @@ from datetime import datetime
 # Import database-related modules
 from app.db.models import chat_sessions_table, chat_messages_table, users_table, metadata
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
 
 # Corrected Imports: Importing the functions and variables from app.db and app.core.config
 from app.core.config import get_path_settings, get_server_api_keys, get_log_storage_config, \
     get_memory_storage_config, get_db_connection_config, get_db_connection
-from app.db import initialize_db_connections, get_db # REMOVED AsyncSessionLocal from import
+from app.db import initialize_db_connections, get_db  # REMOVED AsyncSessionLocal from import
 
 from app.core.validation import validate_agent_name, sanitize_for_path
 from app.core.security import get_http_api_key, get_websocket_api_key
@@ -73,6 +74,7 @@ app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credenti
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
 # --- Database Connection Management ---
 # REMOVED: get_db_for_websocket function
 
@@ -80,23 +82,29 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 class ConnectionManager:
     def __init__(self):
         self.active: List[WebSocket] = []
+
     async def connect(self, ws: WebSocket):
         await ws.accept()
         self.active.append(ws)
+
     def disconnect(self, ws: WebSocket):
         if ws in self.active:
             self.active.remove(ws)
+
     async def send(self, msg: Dict, ws: WebSocket):
         if ws.client_state == WebSocketState.CONNECTED:
             await ws.send_json(msg)
 
+
 manager = ConnectionManager()
 _watcher_process: Optional[Process] = None
+
 
 def is_db_configured() -> bool:
     mem_config = get_memory_storage_config()
     log_config = get_log_storage_config()
     return (mem_config.get("type") in ["db", "sqlite"]) or (log_config.get("type") == "db")
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -116,7 +124,8 @@ async def startup_event():
                     db_path = _PROJECT_ROOT / db_path
                 sync_conn_str = f"sqlite:///{db_path.resolve()}"
             else:
-                conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get("connection_name")
+                conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
+                    "connection_name")
                 if not conn_name:
                     raise RuntimeError("Database connection name not found for migration check.")
                 sync_conn_str = get_db_connection(conn_name).replace("+aiomysql", "").replace("+asyncpg", "")
@@ -133,7 +142,8 @@ async def startup_event():
                 else:
                     logger.info("Database schema is up-to-date.")
             engine.dispose()
-            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get("connection_name")
+            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
+                "connection_name")
             if not conn_name:
                 raise RuntimeError("Database connection name not found for async initialization.")
             initialize_db_connections(conn_name)
@@ -149,6 +159,7 @@ async def startup_event():
     _watcher_process.start()
     logger.info("Automated file watcher started.")
 
+
 @app.on_event("shutdown")
 async def shutdown_event():
     global _watcher_process
@@ -156,6 +167,7 @@ async def shutdown_event():
         _watcher_process.terminate()
         _watcher_process.join(timeout=5)
         logger.info("File watcher process stopped.")
+
 
 # --- Endpoints ---
 @app.get("/", tags=["Application"])
@@ -173,6 +185,7 @@ async def home(request: Request):
         "request": request, "agents": agents_list, "agent": default_agent, "api_key": frontend_api_key
     })
 
+
 @app.get("/health", tags=["System"])
 async def health_check():
     if not is_db_configured():
@@ -188,7 +201,8 @@ async def health_check():
                 db_path = _PROJECT_ROOT / db_path
             sync_conn_str = f"sqlite:///{db_path.resolve()}"
         else:
-            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get("connection_name")
+            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
+                "connection_name")
             if not conn_name:
                 raise RuntimeError("Database connection name not found for health check.")
             sync_conn_str = get_db_connection(conn_name).replace("+aiomysql", "").replace("+asyncpg", "")
@@ -200,6 +214,7 @@ async def health_check():
     except Exception as e:
         logger.error(f"Health check failed to connect to database: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Database connection failed: {e}")
+
 
 @app.get("/history/{thread_id}", tags=["Memory"])
 async def get_history(
@@ -237,6 +252,45 @@ async def get_history(
         logger.error(f"Error loading chat history for thread {safe_thread_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not load chat history.")
 
+
+@app.get("/sessions", tags=["Memory"])
+async def list_sessions(
+    agent_name: str,
+    user_id:    str,
+    api_key:    str = Depends(get_http_api_key),
+    db:         AsyncSession = Depends(get_db),
+):
+    if not is_db_configured():
+        raise HTTPException(status_code=501, detail="Chat history not supported without a database.")
+
+    safe_agent_name = sanitize_for_path(agent_name)
+    safe_user_id = sanitize_for_path(user_id)
+
+    try:
+        select_user_stmt = select(users_table.c.id).where(users_table.c.user_id == safe_user_id)
+        user_db_id = (await db.execute(select_user_stmt)).scalar_one_or_none()
+
+        if not user_db_id:
+            return JSONResponse(content=[])
+
+        select_sessions_stmt = (
+            select(chat_sessions_table.c.thread_id, chat_sessions_table.c.topic_name, chat_sessions_table.c.updated_at)
+            .where(
+                (chat_sessions_table.c.agent_name == safe_agent_name) &
+                (chat_sessions_table.c.user_id == user_db_id)
+            )
+            .order_by(desc(chat_sessions_table.c.updated_at))
+        )
+
+        sessions_result = (await db.execute(select_sessions_stmt)).fetchall()
+        sessions = [{"thread_id": row.thread_id, "topic_name": row.topic_name or "New Chat"} for row in sessions_result]
+        return JSONResponse(content=sessions)
+
+    except Exception as e:
+        logger.error(f"Error loading chat sessions for agent {safe_agent_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not load chat sessions.")
+
+
 @app.post("/create-agent", tags=["Agents"])
 async def create_agent(config: AgentConfig, bg: BackgroundTasks, api_key: str = Depends(get_http_api_key)):
     try:
@@ -246,6 +300,7 @@ async def create_agent(config: AgentConfig, bg: BackgroundTasks, api_key: str = 
     except Exception as e:
         logger.error(f"Error creating agent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph_agent: Any, ws: WebSocket,
                                  thread_id: str) -> Tuple[Optional[Dict], str]:
@@ -270,11 +325,12 @@ async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph
         await manager.send({"token": f"\n\n{error_message}"}, ws)
         return {"error": True, "errorMessage": error_message}, ""
 
+
 @app.websocket("/ws")
 async def websocket_chat(
         ws: WebSocket,
         api_key: str = Depends(get_websocket_api_key),
-        db_session: AsyncSession = Depends(get_db) # FIXED: Use get_db directly as a dependency
+        db_session: AsyncSession = Depends(get_db)
 ):
     await manager.connect(ws)
     thread_id = "uninitialized"
@@ -298,7 +354,7 @@ async def websocket_chat(
         user_id = sanitize_for_path(payload.get("user_id")) or f"user-{uuid4().hex[:8]}"
         thread_id = sanitize_for_path(payload.get("thread_id")) or f"thread-{uuid4().hex[:8]}"
         session_id = None
-        if is_db_enabled and db_session: # db_session is now provided by Depends(get_db)
+        if is_db_enabled and db_session:  # db_session is now provided by Depends(get_db)
             select_user_stmt = text(f"SELECT id FROM {users_table.name} WHERE user_id = :user_id")
             user_result = await db_session.execute(select_user_stmt, {"user_id": user_id})
             user_db_id = user_result.scalar_one_or_none()
@@ -345,7 +401,8 @@ async def websocket_chat(
         if "sql_toolkit" in agent_config.tools:
             db_source = next((s for s in agent_config.sources if s.type == 'db'), None)
             if db_source and db_source.db_connection:
-                all_tools.extend(create_sql_toolkit(db_connection_string=db_source.db_connection, llm_model_name=agent_config.llm_model))
+                all_tools.extend(create_sql_toolkit(db_connection_string=db_source.db_connection,
+                                                    llm_model_name=agent_config.llm_model))
         langgraph_agent = get_agent_workflow(all_tools).compile()
         is_first_message = True
         while True:
@@ -355,13 +412,16 @@ async def websocket_chat(
             history: List[BaseMessage] = []
             if is_db_enabled and db_session and session_id:
                 messages_result = await db_session.execute(
-                    text(f"SELECT sender, content FROM {chat_messages_table.name} WHERE session_id = :session_id ORDER BY timestamp ASC"),
+                    text(
+                        f"SELECT sender, content FROM {chat_messages_table.name} WHERE session_id = :session_id ORDER BY timestamp ASC"),
                     {"session_id": session_id}
                 )
                 for msg in messages_result:
-                    history.append(HumanMessage(content=msg.content) if msg.sender == 'human' else AIMessage(content=msg.content))
+                    history.append(
+                        HumanMessage(content=msg.content) if msg.sender == 'human' else AIMessage(content=msg.content))
                 await db_session.execute(
-                    text(f"INSERT INTO {chat_messages_table.name} (session_id, sender, content, timestamp) VALUES (:session_id, 'human', :content, :timestamp)"),
+                    text(
+                        f"INSERT INTO {chat_messages_table.name} (session_id, sender, content, timestamp) VALUES (:session_id, 'human', :content, :timestamp)"),
                     {"session_id": session_id, "content": query, "timestamp": datetime.utcnow()}
                 )
                 await db_session.commit()
@@ -396,7 +456,8 @@ async def websocket_chat(
                 ws
             )
             is_first_message = False
-            if ai_response_content and not (final_state and final_state.get("error")) and is_db_enabled and db_session and session_id:
+            if ai_response_content and not (
+                    final_state and final_state.get("error")) and is_db_enabled and db_session and session_id:
                 await db_session.execute(
                     text(
                         "INSERT INTO chat_messages (session_id, sender, content, timestamp) VALUES (:session_id, 'ai', :content, :timestamp)"

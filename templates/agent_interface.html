@@ -28,6 +28,11 @@
         <div class="modal-content"><p id="modal-text">Are you sure? Your current chat history will be cleared.</p><div class="modal-buttons"><button id="modal-cancel-btn" class="modal-btn cancel">Cancel</button><button id="modal-confirm-btn" class="modal-btn confirm">Start New</button></div></div>
     </div>
 
+    <aside id="chat-history-sidebar">
+        <h3>Chat History</h3>
+        <ul id="history-list"></ul>
+    </aside>
+
     <div id="chat-container">
         <header>
             <select id="agent-select" name="agent">
@@ -68,6 +73,8 @@
         const confirmationModal = document.getElementById('confirmation-modal');
         const modalConfirmBtn = document.getElementById('modal-confirm-btn');
         const modalCancelBtn = document.getElementById('modal-cancel-btn');
+        const historySidebar = document.getElementById('chat-history-sidebar');
+        const historyList = document.getElementById('history-list');
 
         let agent, user_id, thread_id, socket;
         let isFirstMessage = true;
@@ -168,6 +175,8 @@
                         localStorage.setItem('ragnetic_thread_id', thread_id);
                         localStorage.setItem('ragnetic_agent', agent);
                         isFirstMessage = false;
+                        // On the first message, a new session is created. Refresh the history list.
+                        fetchChatSessions(agent);
                     }
                     const lastMessage = messagesDiv.lastElementChild;
                     if (lastMessage && lastMessage.classList.contains('agent')) {
@@ -320,6 +329,35 @@
             }
         }
 
+        async function fetchChatSessions(agentName) {
+            if (!user_id || !GLOBAL_API_KEY) {
+                historyList.innerHTML = '';
+                return;
+            }
+            try {
+                const response = await fetch(`/sessions?agent_name=${agentName}&user_id=${user_id}&api_key=${GLOBAL_API_KEY}`);
+                if (!response.ok) {
+                    throw new Error('Failed to fetch chat sessions.');
+                }
+                const sessions = await response.json();
+                historyList.innerHTML = '';
+                sessions.forEach(session => {
+                    const li = document.createElement('li');
+                    li.textContent = session.topic_name;
+                    li.dataset.threadId = session.thread_id;
+                    li.onclick = () => {
+                        thread_id = session.thread_id;
+                        localStorage.setItem('ragnetic_thread_id', thread_id);
+                        loadHistory(agent, thread_id, user_id);
+                    };
+                    historyList.appendChild(li);
+                });
+            } catch (error) {
+                console.error("Failed to fetch chat sessions:", error);
+                historyList.innerHTML = `<li><p>No chat history available.</p></li>`;
+            }
+        }
+
         function showConfirmationModal(onConfirm) {
             if (messagesDiv.children.length === 0 || document.getElementById('empty-state')) {
                 onConfirm();
@@ -330,13 +368,11 @@
         }
 
         function startNewSession(openConnection = true) {
-            localStorage.removeItem('ragnetic_user_id');
             localStorage.removeItem('ragnetic_thread_id');
-            localStorage.removeItem('ragnetic_agent');
-            user_id = "";
             thread_id = "";
             renderEmptyState();
             if (openConnection) openWebSocket();
+            fetchChatSessions(agent); // Ensure the history list is updated
         }
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -346,13 +382,18 @@
 
           if (savedAgent) agentSelect.value = savedAgent;
           agent = agentSelect.value;
+          user_id = savedUserId || `user-${Date.now()}`;
+          localStorage.setItem('ragnetic_user_id', user_id);
 
-          // Only attempt to load history if an API key is present
-          if (GLOBAL_API_KEY && savedAgent && savedThreadId && savedUserId) {
-            // re-hydrate globals
-            user_id   = savedUserId;
-            thread_id = savedThreadId;
-            loadHistory(agent, thread_id, user_id);
+          // Only attempt to load history if an API key is present and a user exists
+          if (GLOBAL_API_KEY && user_id) {
+            fetchChatSessions(agent);
+            if (savedThreadId) {
+                thread_id = savedThreadId;
+                loadHistory(agent, thread_id, user_id);
+            } else {
+                renderEmptyState();
+            }
           } else {
             renderEmptyState();
           }
@@ -363,6 +404,7 @@
         newChatButton.addEventListener('click', () => showConfirmationModal(startNewSession));
         agentSelect.addEventListener('change', () => showConfirmationModal(() => {
             agent = agentSelect.value;
+            localStorage.setItem('ragnetic_agent', agent);
             startNewSession();
         }));
         modalCancelBtn.addEventListener('click', () => {
