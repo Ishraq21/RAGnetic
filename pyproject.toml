@@ -53,6 +53,7 @@ dependencies     = [
   "qdrant-client",
   "pinecone",
   "pymongo",
+  "redis",
   "langchain-mongodb",
   "langchain-pinecone",
   "langchain-qdrant",

@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 
-print(">>> ALEMBIC ENV.PY LOADING <<<")
+print(">>> RAGnetic Migration Powered by Alembic <<<")
 
 # --- PATH CORRECTION (MUST BE FIRST) ---
 project_root = Path(__file__).resolve().parent.parent

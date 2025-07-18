@@ -42,7 +42,6 @@ def get_embedding_model(model_identifier: str):
             provider = "ollama"
             model_name = model_identifier.split("ollama/", 1)[1]
             logger.info(f"Using Ollama model '{model_name}'. Ensure Ollama server is running and model is pulled.")
-            # MODIFIED: Use OllamaEmbeddings directly
             embeddings = OllamaEmbeddings(model=model_name)
 
 

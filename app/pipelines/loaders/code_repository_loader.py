@@ -7,10 +7,10 @@ from typing import List, Optional
 from pathlib import Path
 from urllib.parse import urlparse
 import asyncio
-from datetime import datetime  # NEW: Import datetime for load_timestamp
+from datetime import datetime
 
 from app.core.config import get_path_settings
-from app.schemas.agent import AgentConfig, DataPolicy, DataSource  # MODIFIED: Import DataSource
+from app.schemas.agent import AgentConfig, DataPolicy, DataSource
 
 from git import Repo, InvalidGitRepositoryError, NoSuchPathError, GitCommandError
 from langchain_community.document_loaders import GitLoader
@@ -26,7 +26,6 @@ _ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"]
 logger.info(
     f"Loaded allowed data directories for code repository loader from central config: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
 
-# NEW: Define _CLONE_TEMP_DIR relative to the centralized PROJECT_ROOT
 _CLONE_TEMP_DIR = _PROJECT_ROOT_FROM_CONFIG / ".ragnetic_temp_clones"
 
 
