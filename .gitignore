@@ -11,11 +11,11 @@ venv/
 # They contain user-specific data, vector stores, and agent configurations
 # that should not be part of the core application's repository.
 /data/
-/agents_data/
 /vectorstore/
 /memory/
 /logs/
 /benchmark/
+/agents/
 
 # RAGnetic Internal & System Files
 # The .ragnetic directory contains configuration and temporary files

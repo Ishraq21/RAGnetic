@@ -13,7 +13,7 @@ from app.core.config import get_api_key
 
 # Define paths relative to the project root for testing purposes
 TEST_AGENT_NAME = "test-reproducible-agent-temp"
-TEST_AGENTS_DIR = "agents_data"  # Relative to where cli.py is run
+TEST_AGENTS_DIR = "agents"  # Relative to where cli.py is run
 TEST_DATA_DIR = "data"  # Relative to where cli.py is run
 TEST_VECTORSTORE_DIR = "vectorstore"  # Relative to where cli.py is run
 

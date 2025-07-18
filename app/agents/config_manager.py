@@ -3,7 +3,7 @@ import os
 from typing import List
 from app.schemas.agent import AgentConfig
 
-AGENTS_DIR = "agents_data"
+AGENTS_DIR = "agents"
 
 
 def save_agent_config(config: AgentConfig):

@@ -17,7 +17,7 @@ services:
       - ./.ragnetic:/app/.ragnetic
 
       # Users create and edit agent configs in this local folder.
-      - ./agents_data:/app/agents_data
+      - ./agents:/app/agents
 
       # The application saves vector stores here, and they persist on the host.
       - ./vectorstore:/app/vectorstore
