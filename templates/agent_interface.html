@@ -94,7 +94,9 @@
         const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
         const svgs = {
             copy: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M7.5 3a.75.75 0 00-.75.75v13.5a.75.75 0 00.75.75h9a.75.75 0 00.75-.75V3.75A.75.75 0 0016.5 3h-9zM8.25 4.5h7.5v12h-7.5V4.5z" /><path d="M6 1.5a.75.75 0 00-.75.75V16.5a.75.75 0 00.75.75h.008a.75.75 0 00.75-.75V2.25A.75.75 0 006.008 1.5H6z" /></svg>`,
-            copied: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clip-rule="evenodd" /></svg>`
+            copied: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clip-rule="evenodd" /></svg>`,
+            copyCode: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/></svg>`,
+            copiedCode: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425a.247.247 0 0 1 .02-.022z"/></svg>`
         };
 
         function renderMath(element) { if (window.MathJax) { window.MathJax.typesetPromise(element ? [element] : []).catch((err) => console.error('MathJax typesetting error:', err)); } }
@@ -109,7 +111,32 @@
         function sendMessage() { const query = inputField.value.trim(); if (!query) return; const payload = { agent, user_id, thread_id, query }; const message = { type: 'query', payload: payload }; const doSend = () => { socket.send(JSON.stringify(message)); const emptyState = document.getElementById('empty-state'); if (emptyState) emptyState.remove(); appendUserMessage(query); setGeneratingState(true); typingIndicator.style.opacity = '1'; typingIndicator.style.display = 'flex'; scrollToBottom(); inputField.value = ''; inputField.style.height = 'auto'; }; if (!socket || socket.readyState !== WebSocket.OPEN) { showToast("Connecting... Please try again shortly."); openWebSocket(doSend); } else { doSend(); } }
         function appendUserMessage(text) { const msg = document.createElement('div'); msg.className = 'message user'; msg.textContent = text; messagesDiv.appendChild(msg); scrollToBottom(); }
         function createAgentMessageBubble() { const bubble = document.createElement('div'); bubble.className = 'message agent'; const contentDiv = document.createElement('div'); contentDiv.className = 'content'; bubble.appendChild(contentDiv); const copyBtn = document.createElement('button'); copyBtn.className = 'copy-btn'; copyBtn.innerHTML = svgs.copy; copyBtn.onclick = (e) => { const rawMarkdown = e.currentTarget.closest('.message.agent').dataset.rawMarkdown; if (rawMarkdown) { navigator.clipboard.writeText(rawMarkdown).then(() => { e.currentTarget.innerHTML = svgs.copied; setTimeout(() => { e.currentTarget.innerHTML = svgs.copy; }, 2000); }); } }; bubble.appendChild(copyBtn); bubble.dataset.rawMarkdown = ''; messagesDiv.appendChild(bubble); return bubble; }
-        function renderCodeblocks(scopeElement) { scopeElement.querySelectorAll('pre > code').forEach((codeBlock) => { const pre = codeBlock.parentElement; if (pre.querySelector('.code-header')) return; const lang = codeBlock.className.split('-')[1] || 'text'; const header = document.createElement('div'); header.className = 'code-header'; const langSpan = document.createElement('span'); langSpan.textContent = lang; const copyBtn = document.createElement('button'); copyBtn.className = 'code-copy-btn'; copyBtn.textContent = 'Copy'; copyBtn.onclick = () => { navigator.clipboard.writeText(codeBlock.textContent).then(() => { copyBtn.textContent = 'Copied!'; setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000); }); }; header.appendChild(langSpan); header.appendChild(copyBtn); pre.insertBefore(header, codeBlock); }); }
+
+        function renderCodeblocks(scopeElement) {
+            scopeElement.querySelectorAll('pre > code').forEach((codeBlock) => {
+                const pre = codeBlock.parentElement;
+                if (pre.querySelector('.code-header')) return;
+                const lang = codeBlock.className.split('-')[1] || 'text';
+                const header = document.createElement('div');
+                header.className = 'code-header';
+                const langSpan = document.createElement('span');
+                langSpan.textContent = lang;
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'code-copy-btn';
+                copyBtn.innerHTML = svgs.copyCode; // Use SVG icon
+                copyBtn.onclick = () => {
+                    navigator.clipboard.writeText(codeBlock.textContent).then(() => {
+                        copyBtn.innerHTML = svgs.copiedCode; // Use SVG icon
+                        setTimeout(() => {
+                            copyBtn.innerHTML = svgs.copyCode; // Reset to original icon
+                        }, 2000);
+                    });
+                };
+                header.appendChild(langSpan);
+                header.appendChild(copyBtn);
+                pre.insertBefore(header, codeBlock);
+            });
+        }
         function appendAgentToken(token) { let lastMessage = messagesDiv.lastElementChild; if (!lastMessage || !lastMessage.classList.contains('agent') || lastMessage.dataset.streaming === 'false') { typingIndicator.style.display = 'none'; lastMessage = createAgentMessageBubble(); lastMessage.dataset.streaming = 'true'; } lastMessage.dataset.rawMarkdown += token; const contentDiv = lastMessage.querySelector('.content'); if (contentDiv) { contentDiv.innerHTML = marked.parse(lastMessage.dataset.rawMarkdown); renderCodeblocks(contentDiv); } scrollToBottom(); }
         async function loadHistory(agentName, threadId, userId) { try { const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${userId}&api_key=${GLOBAL_API_KEY}`); if (!response.ok) { showToast(`Could not load session (status: ${response.status}).`, true); startNewSession(false); return; } const history = await response.json(); messagesDiv.innerHTML = ''; history.forEach(msg => { if (msg.type === 'human') appendUserMessage(msg.content); else if (msg.type === 'ai') { const agentMsgBubble = createAgentMessageBubble(); agentMsgBubble.dataset.rawMarkdown = msg.content; const contentDiv = agentMsgBubble.querySelector('.content'); contentDiv.innerHTML = marked.parse(msg.content); agentMsgBubble.dataset.streaming = 'false'; renderCodeblocks(contentDiv); renderMath(contentDiv); } }); setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 100); } catch (error) { console.error("Failed to fetch history:", error); showToast("Could not connect to server to load session.", true); } }
 

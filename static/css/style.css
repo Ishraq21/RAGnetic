@@ -186,6 +186,43 @@ body {
     border-radius: 8px; padding: 1rem; overflow-x: auto;
     font-family: 'JetBrains Mono', monospace; font-size: 0.9em; position: relative;
 }
+
+.message.agent .code-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: #2a2a2a;
+    padding: 0.5rem 1rem;
+    margin: -1rem -1rem 1rem -1rem;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}
+.message.agent .code-header span {
+    font-size: 0.85em;
+    color: var(--muted-text);
+    font-family: 'Inter', sans-serif;
+    text-transform: lowercase;
+}
+.message.agent .code-copy-btn {
+    background: transparent;
+    border: none;
+    color: var(--muted-text);
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    transition: background-color 0.2s, color 0.2s;
+}
+.message.agent .code-copy-btn:hover {
+    background-color: var(--border-color);
+    color: var(--text-color);
+}
+.message.agent .code-copy-btn svg {
+    width: 16px;
+    height: 16px;
+}
+/* This old .copy-btn was for the entire message bubble, we can keep it */
 .copy-btn {
     position: absolute; top: 8px; right: 8px; background: #333; border: 1px solid var(--border-color); color: var(--muted-text);
     border-radius: 8px; width: 32px; height: 32px; cursor: pointer; opacity: 0; transition: opacity 0.2s, background-color 0.2s;
