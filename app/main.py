@@ -64,6 +64,7 @@ from app.api.agents import router as agents_api_router
 from app.api.audit import router as audit_api_router
 from app.api.query import router as query_api_router
 from app.api.evaluation import router as evaluation_api_router
+from app.api.metrics import router as metrics_api_router
 
 # --- Base Logging Configuration ---
 _APP_PATHS = get_path_settings()
@@ -149,6 +150,7 @@ app.include_router(agents_api_router)
 app.include_router(audit_api_router)
 app.include_router(query_api_router)
 app.include_router(evaluation_api_router)
+app.include_router(metrics_api_router)
 
 
 # --- WebSocket Connection Managers (Dual Mode) ---
