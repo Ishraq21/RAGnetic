@@ -4,6 +4,7 @@ from typing import List, TypedDict, Annotated, Optional
 from operator import add
 import time
 import uuid
+import json
 
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
@@ -12,6 +13,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
+from app.schemas.agent import AgentConfig
 
 # LangChain's generic chat model initializer
 from langchain.chat_models import init_chat_model
@@ -25,6 +27,8 @@ from app.core.config import get_api_key, get_llm_model
 from app.core.cost_calculator import calculate_cost
 
 logger = logging.getLogger(__name__)
+logger = logging.getLogger("ragnetic")
+metrics_logger = logging.getLogger("ragnetic.metrics")
 
 
 class AgentState(TypedDict):
@@ -37,6 +41,7 @@ class AgentState(TypedDict):
     # Metrics to be logged for each request
     request_id: str
     agent_name: str
+    agent_config: AgentConfig
     retrieval_time_s: float
     generation_time_s: float
     total_duration_s: float
@@ -55,7 +60,7 @@ def call_model(state: AgentState, config: RunnableConfig):
     try:
         # Start total timer and get initial state
         start_time = time.perf_counter()
-        agent_config = config['configurable']['agent_config']
+        agent_config = state['agent_config']
         tools = config['configurable'].get('tools', [])
         messages = state['messages']
 
@@ -205,6 +210,25 @@ def call_model(state: AgentState, config: RunnableConfig):
             "estimated_cost_usd": cost,
             "retrieved_chunk_ids": retrieved_chunk_ids
         })
+
+        metrics_data = {
+            "request_id": state["request_id"],
+            "agent_name": agent_config.name,
+            "llm_model": agent_config.llm_model,
+            "retrieval_s": retrieval_time,
+            "generation_s": state["generation_time_s"],
+            "total_duration_s": state["total_duration_s"],
+            "prompt_tokens": state["prompt_tokens"],
+            "completion_tokens": state["completion_tokens"],
+            "total_tokens": state["total_tokens"],
+            "estimated_cost_usd": state["estimated_cost_usd"],
+            "retrieved_chunks": state["retrieved_chunk_ids"],
+        }
+        metrics_logger.info(
+            "Agent request metrics",
+            extra={'extra_data': metrics_data}
+        )
+
         return state
     except Exception as e:
         logger.critical(f"A critical error occurred in the 'call_model' node: {e}", exc_info=True)

@@ -57,16 +57,35 @@ from alembic.script import ScriptDirectory
 # --- Base Logging Configuration ---
 _APP_PATHS = get_path_settings()
 LOGGING_CONFIG = {
-    "version": 1, "disable_existing_loggers": False,
+    "version": 1,
+    "disable_existing_loggers": False,
     "formatters": {
         "default": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"},
         "json": {"()": "app.core.structured_logging.JSONFormatter"},
+        "metrics_json": { # New formatter specifically for metrics
+            "()": "app.core.structured_logging.JSONFormatter",
+            "format": "%(message)s"
+        }
     },
     "handlers": {
         "console": {"class": "logging.StreamHandler", "formatter": "default"},
+        # New handler for the JSON metrics file
+        "metrics_file_json": {
+            "class": "logging.handlers.TimedRotatingFileHandler",
+            "formatter": "metrics_json",
+            "filename": _APP_PATHS["LOGS_DIR"] / "ragnetic_metrics.json",
+            "when": "midnight",
+            "backupCount": 7,
+            "encoding": "utf-8"
+        },
     },
     "loggers": {
         "ragnetic": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "ragnetic.metrics": {
+            "handlers": [], # Handlers will be added dynamically below
+            "level": "INFO",
+            "propagate": False
+        },
         "uvicorn.error": {"handlers": ["console"], "level": "INFO"},
         "uvicorn.access": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "sqlalchemy.engine": {"handlers": ["console"], "level": "WARNING"},
@@ -79,13 +98,20 @@ log_storage_config = get_log_storage_config()
 if log_storage_config.get("type") == "file":
     log_dir = _APP_PATHS["LOGS_DIR"]
     log_dir.mkdir(exist_ok=True)
-    LOGGING_CONFIG["handlers"]["file"] = {
+
+    # Configure the main application log file
+    LOGGING_CONFIG["handlers"]["app_file"] = {
         "class": "logging.handlers.TimedRotatingFileHandler",
         "formatter": "default",
         "filename": log_dir / "ragnetic_app.log",
         "when": "midnight", "backupCount": 7, "encoding": "utf-8"
     }
-    LOGGING_CONFIG["root"]["handlers"].append("file")
+    # Add the handler to the main 'ragnetic' logger
+    LOGGING_CONFIG["loggers"]["ragnetic"]["handlers"].append("app_file")
+
+    # Add the JSON metrics handler to the 'ragnetic.metrics' logger
+    LOGGING_CONFIG["loggers"]["ragnetic.metrics"]["handlers"].append("metrics_file_json")
+
 elif log_storage_config.get("type") == "db":
     conn_name = log_storage_config.get("connection_name")
     table_name = log_storage_config.get("log_table_name", "ragnetic_logs")
@@ -95,8 +121,11 @@ elif log_storage_config.get("type") == "db":
             "connection_name": conn_name,
             "table_name": table_name,
         }
-        LOGGING_CONFIG["root"]["handlers"].append("database")
+        # If using a database, log both standard messages and metrics to it
+        LOGGING_CONFIG["loggers"]["ragnetic"]["handlers"].append("database")
+        LOGGING_CONFIG["loggers"]["ragnetic.metrics"]["handlers"].append("database")
 
+# Now, apply the fully constructed configuration
 logging.config.dictConfig(LOGGING_CONFIG)
 logger = logging.getLogger("ragnetic")
 load_dotenv()
@@ -388,10 +417,10 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
             history = [HumanMessage(content=msg.content) if msg.sender == 'human' else AIMessage(content=msg.content)
                        for msg in history_result]
 
-            initial_state: AgentState = {"messages": history, "request_id": request_id}
+            initial_state: AgentState = {"messages": history, "request_id": request_id, "agent_config": agent_config}
 
             final_state, ai_response_content = await handle_query_streaming(initial_state, {
-                "configurable": {"agent_config": agent_config}}, langgraph_agent, thread_id)
+                "configurable": {"thread_id": thread_id}}, langgraph_agent, thread_id)
 
             done_message = {
                 "done": True, "error": final_state.get("error", False) if final_state else True,

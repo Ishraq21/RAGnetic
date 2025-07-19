@@ -66,6 +66,7 @@ ragnetic_logs_table = Table(
     Column('function', String(255)),
     Column('line', Integer),
     Column('exc_info', Text, nullable=True),
+    Column('details', JSON, nullable=True)
 )
 
 agents_table = Table(
