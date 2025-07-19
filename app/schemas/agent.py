@@ -1,10 +1,8 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field, field_validator # Added field_validator
-from typing import List, Optional, Dict, Any, Literal
-from urllib.parse import urlparse # Added for URL validation
-import os # Added for path validation
-from pathlib import Path # Added for path validation
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional, Union
+from pydantic import BaseModel, Field, field_validator, model_validator
+from urllib.parse import urlparse
 
 class ChunkingConfig(BaseModel):
     """Configuration for the document chunking strategy."""
@@ -263,3 +261,35 @@ class AgentConfig(BaseModel):
         default_factory=ScalingConfig,
         description="Configuration for parallel data ingestion and processing within a single source."
     )
+
+# --- Agent Inspection Response Models ---
+
+class DocumentMetadata(BaseModel):
+    page_content: str
+    metadata: Dict[str, Any]
+    score: Optional[float] = None
+
+
+class ConnectionCheck(BaseModel):
+    status: str
+    message: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class ValidationReport(BaseModel):
+    is_valid: bool
+    errors: List[str]
+    warnings: Optional[List[str]] = Field(default_factory=list)
+
+
+class AgentInspectionResponse(BaseModel):
+    name: str
+    is_deployed: bool
+    is_ingesting: bool
+    is_online: bool
+    vector_store_status: ConnectionCheck
+    sources_status: Dict[str, ConnectionCheck]
+    document_metadata: Optional[List[DocumentMetadata]] = None
+    validation_report: ValidationReport
+
+
