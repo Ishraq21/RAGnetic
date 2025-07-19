@@ -1,4 +1,3 @@
-# app/cli.py
 import typer
 import uvicorn
 import os
@@ -34,7 +33,7 @@ from langchain_core.documents import Document as LangChainDocument
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file
 
 # IMPORTS for connection checks
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, select
 from sqlalchemy.engine.url import make_url
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -52,7 +51,10 @@ from app.pipelines.embed import embed_agent_data
 from app.watcher import start_watcher
 import pytest
 from app.core.validation import is_valid_agent_name_cli
-from app.db.models import metadata
+from app.db.models import metadata, agent_runs, chat_sessions_table, users_table
+from app.db.models import metadata, agent_runs, chat_sessions_table, users_table, agent_run_steps
+
+
 
 # --- Centralized Path Configuration ---
 _APP_PATHS = get_path_settings()
@@ -112,6 +114,20 @@ def _validate_agent_name_cli(agent_name: str):
 def setup_cli_logging():
     """Configures a simple logger for CLI command feedback."""
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+
+def _get_sync_db_engine():
+    """Helper to get a synchronous SQLAlchemy engine."""
+    mem_cfg = get_memory_storage_config()
+    log_cfg = get_log_storage_config()
+    conn_name = mem_cfg.get("connection_name") if mem_cfg.get("type") in ["db", "sqlite"] else log_cfg.get(
+        "connection_name")
+    if not conn_name:
+        typer.secho("Error: No database connection is configured in config.ini.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    conn_str = get_db_connection(conn_name)
+    sync_conn_str = conn_str.replace('+aiosqlite', '').replace('+asyncpg', '')
+    return create_engine(sync_conn_str)
 
 
 # --- CLI App Definition ---
@@ -949,6 +965,264 @@ def benchmark_command(
 
     except Exception as e:
         logger.error(f"An unexpected error occurred during benchmark: {e}", exc_info=True)
+        raise typer.Exit(code=1)
+
+
+audit_app = typer.Typer(name="audit", help="Commands for inspecting agent audit trails.")
+app.add_typer(audit_app)
+
+
+@audit_app.command("runs", help="Lists recent agent runs.")
+def list_runs(
+        limit: int = typer.Option(20, "--limit", "-n", help="Number of recent runs to display."),
+):
+    """Connects to the database and lists the most recent agent runs."""
+    setup_cli_logging()
+    if not _is_db_configured():
+        typer.secho("Audit trails require a database. Please configure one using 'ragnetic configure'.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    engine = _get_sync_db_engine()
+
+
+    stmt = (
+        select(
+            agent_runs.c.run_id,
+            agent_runs.c.status,
+            agent_runs.c.start_time,
+            chat_sessions_table.c.agent_name,
+            chat_sessions_table.c.topic_name,
+        )
+        .join(chat_sessions_table, agent_runs.c.session_id == chat_sessions_table.c.id)
+        .order_by(agent_runs.c.start_time.desc())
+        .limit(limit)
+    )
+
+    try:
+        with engine.connect() as connection:
+            results = connection.execute(stmt).fetchall()
+
+        if not results:
+            typer.secho("No agent runs found in the database.", fg=typer.colors.YELLOW)
+            return
+
+        typer.secho(f"--- Showing Last {len(results)} Agent Runs ---", bold=True)
+        # Prepare data for a table-like display
+        header = ["Run ID", "Status", "Agent", "Topic", "Start Time (UTC)"]
+        rows = []
+        for run in results:
+            status_color = typer.colors.GREEN if run.status == 'completed' else (
+                typer.colors.YELLOW if run.status == 'running' else typer.colors.RED)
+            rows.append([
+                typer.style(run.run_id, fg=typer.colors.CYAN),
+                typer.style(run.status, fg=status_color),
+                run.agent_name,
+                run.topic_name or "New Chat",
+                run.start_time.strftime("%Y-%m-%d %H:%M:%S")
+            ])
+
+        # Simple print for alignment
+        raw_rows_for_width_calc = []
+        for run in results:
+            raw_rows_for_width_calc.append([
+                run.run_id,
+                run.status,
+                run.agent_name,
+                run.topic_name or "New Chat",
+                run.start_time.strftime("%Y-%m-%d %H:%M:%S")
+            ])
+
+        col_widths = [max(len(str(item)) for item in col) for col in zip(*([header] + raw_rows_for_width_calc))]
+
+        # Print header
+        typer.echo(" | ".join(f"{h:<{w}}" for h, w in zip(header, col_widths)))
+        typer.echo("-|-".join("-" * w for w in col_widths))
+
+        # Print rows (the ones with color)
+        for row in rows:
+            # We need to manually adjust for the invisible color codes in the first two columns
+            # A simple way is to pad them based on the calculated width, not their visible length
+            styled_row = [
+                f"{row[0]:<{col_widths[0] + len(row[0]) - len(results[rows.index(row)].run_id)}}",
+                f"{row[1]:<{col_widths[1] + len(row[1]) - len(results[rows.index(row)].status)}}",
+                f"{row[2]:<{col_widths[2]}}",
+                f"{row[3]:<{col_widths[3]}}",
+                f"{row[4]:<{col_widths[4]}}",
+            ]
+            typer.echo(" | ".join(styled_row))
+
+    except Exception as e:
+        typer.secho(f"An error occurred while fetching agent runs: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+
+@audit_app.command("inspect", help="Inspect a specific agent run and its steps.")
+def inspect_run(
+        run_id: str = typer.Argument(..., help="The unique ID of the run to inspect."),
+        details: bool = typer.Option(False, "--details", "-d",
+                                     help="Show detailed JSON inputs and outputs for each step."),
+):
+    """Fetches and displays the details for a single agent run and all of its steps."""
+    setup_cli_logging()
+    if not _is_db_configured():
+        typer.secho("Audit trails require a database. Please configure one using 'ragnetic configure'.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    engine = _get_sync_db_engine()
+
+    try:
+        with engine.connect() as connection:
+            # 1. Fetch the main run details
+            run_stmt = (
+                select(agent_runs, chat_sessions_table.c.agent_name, users_table.c.user_id.label("user_identifier"))
+                .join(chat_sessions_table, agent_runs.c.session_id == chat_sessions_table.c.id)
+                .join(users_table, chat_sessions_table.c.user_id == users_table.c.id)
+                .where(agent_runs.c.run_id == run_id)
+            )
+            run = connection.execute(run_stmt).first()
+
+            if not run:
+                typer.secho(f"Error: Run with ID '{run_id}' not found.", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
+
+            # 2. Fetch the steps for that run
+            steps_stmt = (
+                select(agent_run_steps)
+                .where(agent_run_steps.c.agent_run_id == run.id)
+                .order_by(agent_run_steps.c.start_time.asc())
+            )
+            steps = connection.execute(steps_stmt).fetchall()
+
+        # --- Display the results ---
+        typer.secho(f"\n--- Audit Trail for Run: {run.run_id} ---", bold=True)
+
+        # Display Run Summary
+        status_color = typer.colors.GREEN if run.status == 'completed' else (
+            typer.colors.YELLOW if run.status == 'running' else typer.colors.RED)
+        duration = (run.end_time - run.start_time).total_seconds() if run.end_time else "N/A"
+
+        typer.echo(f"  {'Status:':<12} {typer.style(run.status, fg=status_color)}")
+        typer.echo(f"  {'Agent:':<12} {run.agent_name}")
+        typer.echo(f"  {'User ID:':<12} {run.user_identifier}")
+        typer.echo(f"  {'Start Time:':<12} {run.start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        typer.echo(f"  {'End Time:':<12} {run.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') if run.end_time else 'N/A'}")
+        typer.echo(f"  {'Duration:':<12} {duration:.2f}s")
+
+        # Display Steps
+        typer.secho("\n--- Steps ---", bold=True)
+        if not steps:
+            typer.secho("  No steps found for this run.", fg=typer.colors.YELLOW)
+        else:
+            for i, step in enumerate(steps, 1):
+                step_duration = (step.end_time - step.start_time).total_seconds() if step.end_time else "N/A"
+                step_status_color = typer.colors.GREEN if step.status == 'completed' else typer.colors.RED
+                typer.secho(
+                    f"  {i}. Node: {typer.style(step.node_name, bold=True)} ({step_duration:.2f}s) - {typer.style(step.status, fg=step_status_color)}")
+                if details:
+                    if step.inputs:
+                        typer.echo(typer.style("    Inputs:", fg=typer.colors.BLUE))
+                        typer.echo(f"      {json.dumps(step.inputs, indent=6)}")
+                    if step.outputs:
+                        typer.echo(typer.style("    Outputs:", fg=typer.colors.MAGENTA))
+                        typer.echo(f"      {json.dumps(step.outputs, indent=6)}")
+
+    except Exception as e:
+        typer.secho(f"An error occurred while inspecting the run: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+
+@audit_app.command("runs", help="Lists recent agent runs.")
+def list_runs(
+        agent_name: Optional[str] = typer.Option(None, "--agent", "-a", help="Filter runs by a specific agent name."),
+        limit: int = typer.Option(20, "--limit", "-n", help="Number of recent runs to display."),
+):
+    """Connects to the database and lists the most recent agent runs."""
+    setup_cli_logging()
+    if not _is_db_configured():
+        typer.secho("Audit trails require a database. Please configure one using 'ragnetic configure'.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    engine = _get_sync_db_engine()
+
+    stmt = (
+        select(
+            agent_runs.c.run_id,
+            agent_runs.c.status,
+            agent_runs.c.start_time,
+            chat_sessions_table.c.agent_name,
+            chat_sessions_table.c.topic_name,
+        )
+        .join(chat_sessions_table, agent_runs.c.session_id == chat_sessions_table.c.id)
+    )
+
+    # If an agent name is provided, add a filter to the query
+    if agent_name:
+        stmt = stmt.where(chat_sessions_table.c.agent_name == agent_name)
+
+    # Add ordering and limit to the final statement
+    stmt = stmt.order_by(agent_runs.c.start_time.desc()).limit(limit)
+
+    try:
+        with engine.connect() as connection:
+            results = connection.execute(stmt).fetchall()
+
+        if not results:
+            message = "No agent runs found in the database."
+            if agent_name:
+                message = f"No runs found for agent: '{agent_name}'."
+            typer.secho(message, fg=typer.colors.YELLOW)
+            return
+
+        title = f"--- Showing Last {len(results)} Agent Runs ---"
+        if agent_name:
+            title = f"--- Showing Last {len(results)} Runs for Agent: '{agent_name}' ---"
+        typer.secho(title, bold=True)
+
+        header = ["Run ID", "Status", "Agent", "Topic", "Start Time (UTC)"]
+        rows = []
+        for run in results:
+            status_color = typer.colors.GREEN if run.status == 'completed' else (
+                typer.colors.YELLOW if run.status == 'running' else typer.colors.RED)
+            rows.append([
+                typer.style(run.run_id, fg=typer.colors.CYAN),
+                typer.style(run.status, fg=status_color),
+                run.agent_name,
+                run.topic_name or "New Chat",
+                run.start_time.strftime("%Y-%m-%d %H:%M:%S")
+            ])
+
+        raw_rows_for_width_calc = []
+        for run in results:
+            raw_rows_for_width_calc.append([
+                run.run_id,
+                run.status,
+                run.agent_name,
+                run.topic_name or "New Chat",
+                run.start_time.strftime("%Y-%m-%d %H:%M:%S")
+            ])
+
+        col_widths = [max(len(str(item)) for item in col) for col in zip(*([header] + raw_rows_for_width_calc))]
+
+        typer.echo(" | ".join(f"{h:<{w}}" for h, w in zip(header, col_widths)))
+        typer.echo("-|-".join("-" * w for w in col_widths))
+
+        for row in rows:
+            # This complex formatting handles the invisible color codes from typer.style
+            # to ensure columns align correctly.
+            styled_row = [
+                f"{row[0]:<{col_widths[0] + len(row[0]) - len(results[rows.index(row)].run_id)}}",
+                f"{row[1]:<{col_widths[1] + len(row[1]) - len(results[rows.index(row)].status)}}",
+                f"{row[2]:<{col_widths[2]}}",
+                f"{row[3]:<{col_widths[3]}}",
+                f"{row[4]:<{col_widths[4]}}",
+            ]
+            typer.echo(" | ".join(styled_row))
+
+    except Exception as e:
+        typer.secho(f"An error occurred while fetching agent runs: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
 
