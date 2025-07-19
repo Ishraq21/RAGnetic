@@ -20,6 +20,7 @@ from app.tools.arxiv_tool import get_arxiv_tool
 from app.tools.search_engine_tool import SearchTool
 from langchain_core.messages import HumanMessage, AIMessage
 from app.core.serialization import _serialize_for_db
+from app.db.dao import save_conversation_metrics  # <-- ADD THIS LINE
 
 logger = logging.getLogger("ragnetic")
 
@@ -40,10 +41,10 @@ class QueryResponse(BaseModel):
 
 @router.post("/{agent_name}/query", response_model=QueryResponse)
 async def query_agent(
-    agent_name: str,
-    request: QueryRequest = Body(...),
-    api_key: str = Depends(get_http_api_key),
-    db: AsyncSession = Depends(get_db),
+        agent_name: str,
+        request: QueryRequest = Body(...),
+        api_key: str = Depends(get_http_api_key),
+        db: AsyncSession = Depends(get_db),
 ):
     # Load agent configuration
     try:
@@ -168,6 +169,21 @@ async def query_agent(
                 timestamp=datetime.utcnow(),
             )
         )
+
+    # Save metrics to the database
+    if final_state.get("total_tokens") is not None:
+        metrics_data = {
+            "session_id": session_id,
+            "request_id": request_id,
+            "prompt_tokens": final_state.get("prompt_tokens", 0),
+            "completion_tokens": final_state.get("completion_tokens", 0),
+            "total_tokens": final_state.get("total_tokens", 0),
+            "retrieval_time_s": final_state.get("retrieval_time_s"),
+            "generation_time_s": final_state.get("generation_time_s"),
+            "estimated_cost_usd": final_state.get("estimated_cost_usd"),
+            "timestamp": datetime.utcnow()
+        }
+        await save_conversation_metrics(db, metrics_data)
 
     # Finalize audit run with serialized final_state
     serialized = _serialize_for_db(final_state)

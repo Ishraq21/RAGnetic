@@ -89,11 +89,16 @@ LOGGING_CONFIG = {
             "backupCount": 7,
             "encoding": "utf-8"
         },
+        "database_handler": {
+            "()": "app.core.structured_logging.DatabaseLogHandler",
+            "connection_name": "ragnetic_logs",
+            "table_name": "ragnetic_logs"
+        }
     },
     "loggers": {
-        "ragnetic": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "ragnetic": {"handlers": ["console", "database_handler"], "level": "INFO", "propagate": False},
         "ragnetic.metrics": {
-            "handlers": [],
+            "handlers": ["database_handler"], # <-- CHANGE THIS LINE
             "level": "INFO",
             "propagate": False
         },
