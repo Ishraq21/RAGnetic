@@ -1,3 +1,4 @@
+# app/main.py
 import redis.asyncio as redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 import os
@@ -9,55 +10,59 @@ from uuid import uuid4
 from typing import Optional, List, Dict, Any, Tuple
 from multiprocessing import Process
 from pathlib import Path
-import time
-from app.db.models import agent_run_steps, agent_runs
-from sqlalchemy.ext.asyncio import AsyncSession
-from langchain_core.messages import BaseMessage
-from langchain_core.documents import Document
+from datetime import datetime
 from pydantic import BaseModel
 
-
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, status, \
-    WebSocketException
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, status
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
-from datetime import datetime
 
-# Import database-related modules
-from app.db.models import chat_sessions_table, chat_messages_table, users_table
+# --- RAGnetic Imports ---
+
+# Database & Models
+from app.db.models import chat_sessions_table, chat_messages_table, users_table, agent_runs, agent_run_steps
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, insert, update, text, delete
+from sqlalchemy.exc import SQLAlchemyError
 
-# Corrected Imports
+# Core Components
 from app.core.config import get_path_settings, get_server_api_keys, get_log_storage_config, \
     get_memory_storage_config, get_db_connection_config, get_db_connection, get_cors_settings, _get_config_parser
 from app.db import initialize_db_connections, get_db
-from app.core.structured_logging import DatabaseLogHandler, JSONFormatter
-from app.core.validation import validate_agent_name, sanitize_for_path
+from app.core.structured_logging import JSONFormatter
+from app.core.validation import sanitize_for_path
 from app.core.security import get_http_api_key, get_websocket_api_key
 from app.schemas.agent import AgentConfig
-from app.agents.config_manager import save_agent_config, load_agent_config, get_agent_configs
+from app.core.serialization import _serialize_for_db
+
+# Agents & Pipelines
+from app.agents.config_manager import get_agent_configs, load_agent_config
 from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow, AgentState
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+from langchain_core.documents import Document  # <-- CORRECTED IMPORT
 
+# Tools
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.retriever_tool import get_retriever_tool
 from app.tools.arxiv_tool import get_arxiv_tool
 from app.tools.search_engine_tool import SearchTool
 
+# System
 from app.watcher import start_watcher
 from sqlalchemy import create_engine as create_sync_engine
-from sqlalchemy.exc import SQLAlchemyError
-
-# Imports for Alembic integration
 import alembic.config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
+
+# --- API Routers ---
+from app.api.agents import router as agents_api_router
+from app.api.audit import router as audit_api_router
+from app.api.query import router as query_api_router
 
 # --- Base Logging Configuration ---
 _APP_PATHS = get_path_settings()
@@ -67,14 +72,13 @@ LOGGING_CONFIG = {
     "formatters": {
         "default": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"},
         "json": {"()": "app.core.structured_logging.JSONFormatter"},
-        "metrics_json": { # New formatter specifically for metrics
+        "metrics_json": {
             "()": "app.core.structured_logging.JSONFormatter",
             "format": "%(message)s"
         }
     },
     "handlers": {
         "console": {"class": "logging.StreamHandler", "formatter": "default"},
-        # New handler for the JSON metrics file
         "metrics_file_json": {
             "class": "logging.handlers.TimedRotatingFileHandler",
             "formatter": "metrics_json",
@@ -87,7 +91,7 @@ LOGGING_CONFIG = {
     "loggers": {
         "ragnetic": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "ragnetic.metrics": {
-            "handlers": [], # Handlers will be added dynamically below
+            "handlers": [],
             "level": "INFO",
             "propagate": False
         },
@@ -97,26 +101,18 @@ LOGGING_CONFIG = {
     },
     "root": {"handlers": ["console"], "level": "INFO"},
 }
-
-# --- Dynamic Log Handler Configuration ---
 log_storage_config = get_log_storage_config()
 if log_storage_config.get("type") == "file":
     log_dir = _APP_PATHS["LOGS_DIR"]
     log_dir.mkdir(exist_ok=True)
-
-    # Configure the main application log file
     LOGGING_CONFIG["handlers"]["app_file"] = {
         "class": "logging.handlers.TimedRotatingFileHandler",
         "formatter": "default",
         "filename": log_dir / "ragnetic_app.log",
         "when": "midnight", "backupCount": 7, "encoding": "utf-8"
     }
-    # Add the handler to the main 'ragnetic' logger
     LOGGING_CONFIG["loggers"]["ragnetic"]["handlers"].append("app_file")
-
-    # Add the JSON metrics handler to the 'ragnetic.metrics' logger
     LOGGING_CONFIG["loggers"]["ragnetic.metrics"]["handlers"].append("metrics_file_json")
-
 elif log_storage_config.get("type") == "db":
     conn_name = log_storage_config.get("connection_name")
     table_name = log_storage_config.get("log_table_name", "ragnetic_logs")
@@ -126,11 +122,8 @@ elif log_storage_config.get("type") == "db":
             "connection_name": conn_name,
             "table_name": table_name,
         }
-        # If using a database, log both standard messages and metrics to it
         LOGGING_CONFIG["loggers"]["ragnetic"]["handlers"].append("database")
         LOGGING_CONFIG["loggers"]["ragnetic.metrics"]["handlers"].append("database")
-
-# Now, apply the fully constructed configuration
 logging.config.dictConfig(LOGGING_CONFIG)
 logger = logging.getLogger("ragnetic")
 load_dotenv()
@@ -150,6 +143,11 @@ app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credenti
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# --- INCLUDE THE API ROUTERS ---
+app.include_router(agents_api_router)
+app.include_router(audit_api_router)
+app.include_router(query_api_router)
+
 
 # --- WebSocket Connection Managers (Dual Mode) ---
 class MemoryConnectionManager:
@@ -157,8 +155,7 @@ class MemoryConnectionManager:
         self.active_connections: Dict[str, List[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket, channel: str):
-        if channel not in self.active_connections:
-            self.active_connections[channel] = []
+        if channel not in self.active_connections: self.active_connections[channel] = []
         self.active_connections[channel].append(websocket)
 
     def disconnect(self, websocket: WebSocket, channel: str):
@@ -178,24 +175,19 @@ class RedisConnectionManager:
         self.connection: Optional[redis.Redis] = None
         self.pubsub = None
 
-    # match MemoryConnectionManager.connect signature
     async def connect(self, websocket=None, channel=None):
-        # only initialize the Redis client once
         if self.connection is None:
             self.connection = redis.from_url(self.redis_url, decode_responses=True)
             await self.connection.ping()
             self.pubsub = self.connection.pubsub()
 
-    # match MemoryConnectionManager.disconnect signature
     def disconnect(self, websocket=None, channel=None):
-        # no‐op per‐socket; actual close happens in shutdown handler
         pass
 
     async def broadcast(self, channel: str, message: str):
         if not self.connection:
             logger.error("Cannot broadcast: Redis connection is not available.")
             return
-
         max_retries = 5
         backoff_factor = 0.5
         for attempt in range(max_retries):
@@ -203,15 +195,12 @@ class RedisConnectionManager:
                 await self.connection.publish(channel, message)
                 return
             except RedisConnectionError as e:
-                logger.warning(f"Redis publish failed (attempt {attempt+1}/{max_retries}): {e}")
+                logger.warning(f"Redis publish failed (attempt {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(backoff_factor * (2 ** attempt))
-
         logger.error("Giving up on Redis publish after retries; message may be lost.")
 
 
-
-# --- Instantiate the correct manager based on config ---
 if WEBSOCKET_MODE == 'redis':
     logger.info("Using Redis for WebSocket connections (scalable mode).")
     manager = RedisConnectionManager(REDIS_URL)
@@ -219,8 +208,9 @@ else:
     logger.info("Using in-memory WebSocket manager (single-process mode).")
     manager = MemoryConnectionManager()
 
+_watcher_process: Optional[Process] = None
 
-# --- Application Lifecycle Events ---
+
 @app.on_event("startup")
 async def startup_event():
     global _watcher_process
@@ -286,27 +276,11 @@ async def startup_event():
     logger.info("Automated file watcher started.")
 
 
-class RenameRequest(BaseModel):
-    new_name: str
-
-
-_watcher_process: Optional[Process] = None
-
-
-def is_db_configured() -> bool:
-    mem_config = get_memory_storage_config()
-    log_config = get_log_storage_config()
-    return (mem_config.get("type") in ["db", "sqlite"]) or (log_config.get("type") == "db")
-
-
-
-
-
 @app.on_event("shutdown")
 async def shutdown_event():
     global _watcher_process
-    if isinstance(manager, RedisConnectionManager):
-        await manager.disconnect()
+    if isinstance(manager, RedisConnectionManager) and manager.connection:
+        await manager.connection.close()
         logger.info("Redis connection closed.")
 
     if _watcher_process and _watcher_process.is_alive():
@@ -315,8 +289,16 @@ async def shutdown_event():
         logger.info("File watcher process stopped.")
 
 
+class RenameRequest(BaseModel):
+    new_name: str
 
-# --- WebSocket Helper Functions ---
+
+def is_db_configured() -> bool:
+    mem_config = get_memory_storage_config()
+    log_config = get_log_storage_config()
+    return (mem_config.get("type") in ["db", "sqlite"]) or (log_config.get("type") == "db")
+
+
 async def _get_or_create_user(db: AsyncSession, user_id: str) -> int:
     stmt = select(users_table.c.id).where(users_table.c.user_id == user_id)
     user_db_id = (await db.execute(stmt)).scalar_one_or_none()
@@ -355,7 +337,7 @@ async def _save_message_and_update_session(db: AsyncSession, session_id: int, se
     await db.execute(session_stmt)
     await db.commit()
 
-# --- Main WebSocket Handler ---
+
 @app.websocket("/ws")
 async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api_key),
                          db: AsyncSession = Depends(get_db)):
@@ -365,7 +347,6 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
     channel = ""
 
     try:
-        # 1. --- Initial Connection and Setup ---
         message_data = await ws.receive_json()
         if not (message_data.get("type") == "query" and "payload" in message_data):
             await ws.close(code=1003, reason="Protocol violation")
@@ -382,12 +363,10 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
         if isinstance(manager, RedisConnectionManager):
             pubsub_task = asyncio.create_task(redis_listen(ws, channel))
 
-        # 2. --- Get User and Session Info ---
         user_db_id = await _get_or_create_user(db, user_id)
         session_id, session_topic = await _get_or_create_session(db, thread_id, agent_name, user_db_id)
         is_first_message_in_session = session_topic is None
 
-        # Load agent config and tools once
         agent_config = load_agent_config(agent_name)
         all_tools = []
         if "retriever" in agent_config.tools: all_tools.append(get_retriever_tool(agent_config))
@@ -401,11 +380,9 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
 
         langgraph_agent = get_agent_workflow(all_tools).compile()
 
-        # 3. --- Start the Processing Loop ---
         while True:
-            # 4. --- Prepare for the current request ---
             query = message_data.get("payload", {}).get("query")
-            request_id = str(uuid4())  # A new ID for each message
+            request_id = str(uuid4())
             logger.info(f"[{thread_id}] Processing request {request_id} for query: '{query[:50]}...'")
 
             await _save_message_and_update_session(db, session_id, 'human', query)
@@ -417,7 +394,6 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
                 await db.commit()
                 is_first_message_in_session = False
 
-            # 5. --- Fetch history and create audit run record ---
             history_stmt = select(chat_messages_table.c.sender, chat_messages_table.c.content).where(
                 chat_messages_table.c.session_id == session_id).order_by(chat_messages_table.c.timestamp.asc())
             history_result = (await db.execute(history_stmt)).fetchall()
@@ -435,7 +411,6 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
             run_db_id = (await db.execute(insert_run_stmt)).scalar_one()
             await db.commit()
 
-            # 6. --- Execute the agent ---
             initial_state: AgentState = {"messages": history, "request_id": request_id, "agent_config": agent_config}
 
             final_state, ai_response_content = await handle_query_streaming(
@@ -447,7 +422,6 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
                 db
             )
 
-            # 7. --- Finalize and send response ---
             done_message = {
                 "done": True, "error": final_state.get("error", False) if final_state else True,
                 "errorMessage": final_state.get("errorMessage") if final_state else "Agent returned no output.",
@@ -458,17 +432,15 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
             if ai_response_content and not (final_state and final_state.get("error")):
                 await _save_message_and_update_session(db, session_id, 'ai', ai_response_content)
 
-            # 8. --- Update the audit record ---
             run_end_time = datetime.utcnow()
             update_run_stmt = update(agent_runs).where(agent_runs.c.id == run_db_id).values(
                 end_time=run_end_time,
                 status='completed' if not (final_state and final_state.get("error")) else 'failed',
-                final_state=final_state
+                final_state=_serialize_for_db(final_state)
             )
             await db.execute(update_run_stmt)
             await db.commit()
 
-            # 9. --- Wait for the next message ---
             message_data = await ws.receive_json()
 
     except WebSocketDisconnect:
@@ -482,87 +454,59 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
 
 
 async def redis_listen(ws: WebSocket, channel: str):
-    if not isinstance(manager, RedisConnectionManager) or not manager.pubsub:
+    if not isinstance(manager, RedisConnectionManager):
         return
 
-    await manager.pubsub.subscribe(channel)
+    while True:
+        # ensure we have a live pubsub
+        try:
+            if manager.pubsub is None:
+                await manager.connect()
+            await manager.pubsub.subscribe(channel)
+            break
+        except RedisConnectionError as e:
+            logger.warning(f"Could not subscribe to {channel}, retrying in 1s: {e}")
+            await asyncio.sleep(1)
     try:
         while True:
             try:
                 message = await manager.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             except RedisConnectionError as e:
-                logger.warning(f"Redis pubsub lost for {channel}; retrying in 1s: {e}")
-                await asyncio.sleep(1.0)
-                continue
-
+                logger.warning(f"Redis pubsub lost for {channel}; reconnecting: {e}")
+                manager.pubsub = None
+                return await redis_listen(ws, channel)   # restart subscription loop
             if message and ws.client_state == WebSocketState.CONNECTED:
-                await ws.send_text(message['data'])
-
+                await ws.send_text(message["data"])
     except asyncio.CancelledError:
         logger.info(f"Redis listener for channel {channel} cancelled.")
-
     finally:
-        # unsubscribing even if Redis is down
         try:
-            await manager.pubsub.unsubscribe(channel)
+            if manager.pubsub:
+                await manager.pubsub.unsubscribe(channel)
         except RedisConnectionError:
             pass
 
 
-def _serialize_for_db(data: Any) -> Any:
-    """
-    Recursively serializes complex data structures into a format
-    that can be stored in a JSON database column.
-    """
-    if isinstance(data, dict):
-        return {key: _serialize_for_db(value) for key, value in data.items()}
-    if isinstance(data, list):
-        return [_serialize_for_db(item) for item in data]
-    if isinstance(data, BaseModel):
-        # Handles Pydantic models like AgentConfig
-        return data.model_dump(mode='json')
-    if isinstance(data, Document):
-        # Handles LangChain Document objects
-        return {"page_content": data.page_content, "metadata": data.metadata}
-    if isinstance(data, BaseMessage):
-        # Handles LangChain message objects
-        return data.dict()
-    # For any other type, just return it as is, hoping it's JSON-serializable.
-    return data
-
-
-async def handle_query_streaming(
-        initial_state: AgentState,
-        cfg: dict,
-        langgraph_agent: Any,
-        thread_id: str,
-        run_db_id: int,
-        db: AsyncSession
-) -> Tuple[Dict, str]:
+async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph_agent: Any, thread_id: str,
+                                 run_db_id: int, db: AsyncSession) -> Tuple[Dict, str]:
     final_state = {}
     accumulated_content = ""
     channel = f"chat:{thread_id}"
-
     running_step_ids: Dict[str, int] = {}
-
     try:
-        # We are not specifying a version, allowing LangGraph to use its default stream.
         async for event in langgraph_agent.astream_events(initial_state, cfg):
             kind = event.get("event")
             name = event.get("name")
             run_id = event.get("run_id")
-
             if kind == "on_chat_model_stream":
                 token = event["data"]["chunk"].content
                 if token:
                     accumulated_content += token
                     await manager.broadcast(channel, json.dumps({"token": token}))
-
             elif kind in ("on_chain_start", "on_tool_start"):
                 if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv"]:
                     try:
                         serialized_input = _serialize_for_db(event["data"].get("input"))
-
                         step_start_time = datetime.utcnow()
                         insert_step_stmt = insert(agent_run_steps).values(
                             agent_run_id=run_db_id,
@@ -571,24 +515,19 @@ async def handle_query_streaming(
                             status='running',
                             inputs=serialized_input
                         ).returning(agent_run_steps.c.id)
-
                         step_db_id = (await db.execute(insert_step_stmt)).scalar_one()
                         await db.commit()
-
                         if run_id:
                             running_step_ids[run_id] = step_db_id
                     except Exception as node_start_error:
                         logger.error(f"Failed to process start event for node {name}: {node_start_error}",
                                      exc_info=True)
-
             elif kind in ("on_chain_end", "on_tool_end"):
                 if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv"]:
                     try:
                         step_db_id = running_step_ids.pop(run_id, None)
-
                         if step_db_id:
                             serialized_output = _serialize_for_db(event["data"].get("output"))
-
                             step_end_time = datetime.utcnow()
                             update_step_stmt = update(agent_run_steps).where(
                                 agent_run_steps.c.id == step_db_id
@@ -601,13 +540,9 @@ async def handle_query_streaming(
                             await db.commit()
                     except Exception as node_end_error:
                         logger.error(f"Failed to process end event for node {name}: {node_end_error}", exc_info=True)
-
-
             elif kind == "on_graph_end":
                 final_state = event['data']['output']
-
         return _serialize_for_db(final_state), accumulated_content
-
     except asyncio.CancelledError:
         logger.info(f"[{thread_id}] Generation task cancelled.")
         return {}, accumulated_content
@@ -618,7 +553,6 @@ async def handle_query_streaming(
         return {"error": True, "errorMessage": error_message}, ""
 
 
-# --- Standard HTTP Endpoints ---
 @app.get("/", tags=["Application"])
 async def home(request: Request):
     agents_list = []
@@ -678,7 +612,6 @@ async def get_history(thread_id: str, agent_name: str, user_id: str, api_key: st
             select(users_table.c.id).where(users_table.c.user_id == safe_user_id))).scalar_one_or_none()
         if not user_db_id:
             return JSONResponse(content=[])
-
         session_id = (await db.execute(select(chat_sessions_table.c.id).where(
             (chat_sessions_table.c.thread_id == safe_thread_id) &
             (chat_sessions_table.c.agent_name == safe_agent_name) &
@@ -686,7 +619,6 @@ async def get_history(thread_id: str, agent_name: str, user_id: str, api_key: st
         ))).scalar_one_or_none()
         if not session_id:
             return JSONResponse(content=[])
-
         messages_stmt = select(chat_messages_table.c.sender, chat_messages_table.c.content).where(
             chat_messages_table.c.session_id == session_id).order_by(chat_messages_table.c.timestamp.asc())
         messages_result = (await db.execute(messages_stmt)).fetchall()
@@ -709,7 +641,6 @@ async def list_sessions(agent_name: str, user_id: str, api_key: str = Depends(ge
             select(users_table.c.id).where(users_table.c.user_id == safe_user_id))).scalar_one_or_none()
         if not user_db_id:
             return JSONResponse(content=[])
-
         sessions_stmt = select(chat_sessions_table.c.thread_id, chat_sessions_table.c.topic_name).where(
             (chat_sessions_table.c.agent_name == safe_agent_name) &
             (chat_sessions_table.c.user_id == user_db_id)
@@ -720,17 +651,6 @@ async def list_sessions(agent_name: str, user_id: str, api_key: str = Depends(ge
     except Exception as e:
         logger.error(f"Error loading chat sessions for agent {safe_agent_name}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not load chat sessions.")
-
-
-@app.post("/create-agent", tags=["Agents"])
-async def create_agent(config: AgentConfig, bg: BackgroundTasks, api_key: str = Depends(get_http_api_key)):
-    try:
-        save_agent_config(config)
-        bg.add_task(embed_agent_data, config)
-        return JSONResponse(content={"status": "Agent config saved; embedding started.", "agent": config.name})
-    except Exception as e:
-        logger.error(f"Error creating agent: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.put("/sessions/{thread_id}/rename", tags=["Memory"], status_code=status.HTTP_200_OK)
@@ -749,7 +669,6 @@ async def rename_session(thread_id: str, request: RenameRequest, agent_name: str
             select(users_table.c.id).where(users_table.c.user_id == safe_user_id))).scalar_one_or_none()
         if not user_db_id:
             raise HTTPException(status_code=404, detail="User not found.")
-
         update_stmt = update(chat_sessions_table).where(
             (chat_sessions_table.c.thread_id == safe_thread_id) &
             (chat_sessions_table.c.agent_name == safe_agent_name) &
@@ -779,7 +698,6 @@ async def delete_session(thread_id: str, agent_name: str, user_id: str, api_key:
             select(users_table.c.id).where(users_table.c.user_id == safe_user_id))).scalar_one_or_none()
         if not user_db_id:
             raise HTTPException(status_code=404, detail="User not found.")
-
         session_id = (await db.execute(select(chat_sessions_table.c.id).where(
             (chat_sessions_table.c.thread_id == safe_thread_id) &
             (chat_sessions_table.c.agent_name == safe_agent_name) &
@@ -787,7 +705,6 @@ async def delete_session(thread_id: str, agent_name: str, user_id: str, api_key:
         ))).scalar_one_or_none()
         if not session_id:
             raise HTTPException(status_code=404, detail="Chat session not found or permission denied.")
-
         await db.execute(delete(chat_messages_table).where(chat_messages_table.c.session_id == session_id))
         await db.execute(delete(chat_sessions_table).where(chat_sessions_table.c.id == session_id))
         await db.commit()
