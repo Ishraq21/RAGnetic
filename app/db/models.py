@@ -1,4 +1,3 @@
-# app/db/models.py
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, MetaData, Table,
     UniqueConstraint, Float, Boolean, Enum, Index, JSON
@@ -112,6 +111,32 @@ user_api_keys_table = Table(
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
     Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
     Column("revoked", Boolean, nullable=False, default=False),
+)
+
+# Table to store a record of each overall agent/graph execution
+agent_runs = Table(
+    'agent_runs', metadata,
+    Column('id', Integer, primary_key=True),
+    Column('run_id', String(255), unique=True, nullable=False, index=True),
+    Column('session_id', Integer, ForeignKey('chat_sessions.id'), nullable=False, index=True),
+    Column('start_time', DateTime, nullable=False),
+    Column('end_time', DateTime, nullable=True),
+    Column('status', String(50), nullable=False, default='running'), # e.g., running, completed, failed
+    Column('initial_messages', JSON, nullable=True),
+    Column('final_state', JSON, nullable=True)
+)
+
+# Table to store the details of each individual step within a run
+agent_run_steps = Table(
+    'agent_run_steps', metadata,
+    Column('id', Integer, primary_key=True),
+    Column('agent_run_id', Integer, ForeignKey('agent_runs.id'), nullable=False, index=True),
+    Column('node_name', String(255), nullable=False), # e.g., 'agent', 'call_tool'
+    Column('start_time', DateTime, nullable=False),
+    Column('end_time', DateTime, nullable=True),
+    Column('inputs', JSON, nullable=True),
+    Column('outputs', JSON, nullable=True),
+    Column('status', String(50), nullable=False, default='running') # e.g., running, completed, failed
 )
 
 # --- Indexes for Performance ---

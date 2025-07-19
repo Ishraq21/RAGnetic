@@ -10,6 +10,12 @@ from typing import Optional, List, Dict, Any, Tuple
 from multiprocessing import Process
 from pathlib import Path
 import time
+from app.db.models import agent_run_steps, agent_runs
+from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_core.messages import BaseMessage
+from langchain_core.documents import Document
+from pydantic import BaseModel
+
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, status, \
     WebSocketException
@@ -20,7 +26,6 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 from datetime import datetime
-from pydantic import BaseModel
 
 # Import database-related modules
 from app.db.models import chat_sessions_table, chat_messages_table, users_table
@@ -206,9 +211,6 @@ class RedisConnectionManager:
 
 
 
-
-
-
 # --- Instantiate the correct manager based on config ---
 if WEBSOCKET_MODE == 'redis':
     logger.info("Using Redis for WebSocket connections (scalable mode).")
@@ -353,7 +355,6 @@ async def _save_message_and_update_session(db: AsyncSession, session_id: int, se
     await db.execute(session_stmt)
     await db.commit()
 
-
 # --- Main WebSocket Handler ---
 @app.websocket("/ws")
 async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api_key),
@@ -364,6 +365,7 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
     channel = ""
 
     try:
+        # 1. --- Initial Connection and Setup ---
         message_data = await ws.receive_json()
         if not (message_data.get("type") == "query" and "payload" in message_data):
             await ws.close(code=1003, reason="Protocol violation")
@@ -380,10 +382,12 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
         if isinstance(manager, RedisConnectionManager):
             pubsub_task = asyncio.create_task(redis_listen(ws, channel))
 
+        # 2. --- Get User and Session Info ---
         user_db_id = await _get_or_create_user(db, user_id)
         session_id, session_topic = await _get_or_create_session(db, thread_id, agent_name, user_db_id)
         is_first_message_in_session = session_topic is None
 
+        # Load agent config and tools once
         agent_config = load_agent_config(agent_name)
         all_tools = []
         if "retriever" in agent_config.tools: all_tools.append(get_retriever_tool(agent_config))
@@ -397,9 +401,11 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
 
         langgraph_agent = get_agent_workflow(all_tools).compile()
 
+        # 3. --- Start the Processing Loop ---
         while True:
+            # 4. --- Prepare for the current request ---
             query = message_data.get("payload", {}).get("query")
-            request_id = str(uuid4())
+            request_id = str(uuid4())  # A new ID for each message
             logger.info(f"[{thread_id}] Processing request {request_id} for query: '{query[:50]}...'")
 
             await _save_message_and_update_session(db, session_id, 'human', query)
@@ -411,17 +417,37 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
                 await db.commit()
                 is_first_message_in_session = False
 
+            # 5. --- Fetch history and create audit run record ---
             history_stmt = select(chat_messages_table.c.sender, chat_messages_table.c.content).where(
                 chat_messages_table.c.session_id == session_id).order_by(chat_messages_table.c.timestamp.asc())
             history_result = (await db.execute(history_stmt)).fetchall()
             history = [HumanMessage(content=msg.content) if msg.sender == 'human' else AIMessage(content=msg.content)
                        for msg in history_result]
 
+            run_start_time = datetime.utcnow()
+            insert_run_stmt = insert(agent_runs).values(
+                run_id=request_id,
+                session_id=session_id,
+                start_time=run_start_time,
+                status='running',
+                initial_messages=[msg.dict() for msg in history]
+            ).returning(agent_runs.c.id)
+            run_db_id = (await db.execute(insert_run_stmt)).scalar_one()
+            await db.commit()
+
+            # 6. --- Execute the agent ---
             initial_state: AgentState = {"messages": history, "request_id": request_id, "agent_config": agent_config}
 
-            final_state, ai_response_content = await handle_query_streaming(initial_state, {
-                "configurable": {"thread_id": thread_id}}, langgraph_agent, thread_id)
+            final_state, ai_response_content = await handle_query_streaming(
+                initial_state,
+                {"configurable": {"thread_id": thread_id}},
+                langgraph_agent,
+                thread_id,
+                run_db_id,
+                db
+            )
 
+            # 7. --- Finalize and send response ---
             done_message = {
                 "done": True, "error": final_state.get("error", False) if final_state else True,
                 "errorMessage": final_state.get("errorMessage") if final_state else "Agent returned no output.",
@@ -432,6 +458,17 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
             if ai_response_content and not (final_state and final_state.get("error")):
                 await _save_message_and_update_session(db, session_id, 'ai', ai_response_content)
 
+            # 8. --- Update the audit record ---
+            run_end_time = datetime.utcnow()
+            update_run_stmt = update(agent_runs).where(agent_runs.c.id == run_db_id).values(
+                end_time=run_end_time,
+                status='completed' if not (final_state and final_state.get("error")) else 'failed',
+                final_state=final_state
+            )
+            await db.execute(update_run_stmt)
+            await db.commit()
+
+            # 9. --- Wait for the next message ---
             message_data = await ws.receive_json()
 
     except WebSocketDisconnect:
@@ -472,21 +509,105 @@ async def redis_listen(ws: WebSocket, channel: str):
             pass
 
 
-async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph_agent: Any, thread_id: str) -> Tuple[
-    Dict, str]:
+def _serialize_for_db(data: Any) -> Any:
+    """
+    Recursively serializes complex data structures into a format
+    that can be stored in a JSON database column.
+    """
+    if isinstance(data, dict):
+        return {key: _serialize_for_db(value) for key, value in data.items()}
+    if isinstance(data, list):
+        return [_serialize_for_db(item) for item in data]
+    if isinstance(data, BaseModel):
+        # Handles Pydantic models like AgentConfig
+        return data.model_dump(mode='json')
+    if isinstance(data, Document):
+        # Handles LangChain Document objects
+        return {"page_content": data.page_content, "metadata": data.metadata}
+    if isinstance(data, BaseMessage):
+        # Handles LangChain message objects
+        return data.dict()
+    # For any other type, just return it as is, hoping it's JSON-serializable.
+    return data
+
+
+async def handle_query_streaming(
+        initial_state: AgentState,
+        cfg: dict,
+        langgraph_agent: Any,
+        thread_id: str,
+        run_db_id: int,
+        db: AsyncSession
+) -> Tuple[Dict, str]:
     final_state = {}
     accumulated_content = ""
     channel = f"chat:{thread_id}"
+
+    running_step_ids: Dict[str, int] = {}
+
     try:
-        async for event in langgraph_agent.astream_events(initial_state, cfg, version="v2"):
-            if event["event"] == "on_chat_model_stream":
+        # We are not specifying a version, allowing LangGraph to use its default stream.
+        async for event in langgraph_agent.astream_events(initial_state, cfg):
+            kind = event.get("event")
+            name = event.get("name")
+            run_id = event.get("run_id")
+
+            if kind == "on_chat_model_stream":
                 token = event["data"]["chunk"].content
                 if token:
                     accumulated_content += token
                     await manager.broadcast(channel, json.dumps({"token": token}))
-            elif event["event"] == "on_graph_end":
+
+            elif kind in ("on_chain_start", "on_tool_start"):
+                if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv"]:
+                    try:
+                        serialized_input = _serialize_for_db(event["data"].get("input"))
+
+                        step_start_time = datetime.utcnow()
+                        insert_step_stmt = insert(agent_run_steps).values(
+                            agent_run_id=run_db_id,
+                            node_name=name,
+                            start_time=step_start_time,
+                            status='running',
+                            inputs=serialized_input
+                        ).returning(agent_run_steps.c.id)
+
+                        step_db_id = (await db.execute(insert_step_stmt)).scalar_one()
+                        await db.commit()
+
+                        if run_id:
+                            running_step_ids[run_id] = step_db_id
+                    except Exception as node_start_error:
+                        logger.error(f"Failed to process start event for node {name}: {node_start_error}",
+                                     exc_info=True)
+
+            elif kind in ("on_chain_end", "on_tool_end"):
+                if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv"]:
+                    try:
+                        step_db_id = running_step_ids.pop(run_id, None)
+
+                        if step_db_id:
+                            serialized_output = _serialize_for_db(event["data"].get("output"))
+
+                            step_end_time = datetime.utcnow()
+                            update_step_stmt = update(agent_run_steps).where(
+                                agent_run_steps.c.id == step_db_id
+                            ).values(
+                                end_time=step_end_time,
+                                status='completed',
+                                outputs=serialized_output
+                            )
+                            await db.execute(update_step_stmt)
+                            await db.commit()
+                    except Exception as node_end_error:
+                        logger.error(f"Failed to process end event for node {name}: {node_end_error}", exc_info=True)
+
+
+            elif kind == "on_graph_end":
                 final_state = event['data']['output']
-        return final_state, accumulated_content
+
+        return _serialize_for_db(final_state), accumulated_content
+
     except asyncio.CancelledError:
         logger.info(f"[{thread_id}] Generation task cancelled.")
         return {}, accumulated_content
