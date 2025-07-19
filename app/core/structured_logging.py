@@ -1,12 +1,19 @@
 import logging
 import json
 from datetime import datetime
-from sqlalchemy import create_engine, insert, Table, Column, MetaData, exc
+from sqlalchemy import create_engine, insert, Table, Column, MetaData, exc, JSON
 from app.core.config import get_db_connection
 
+
 class JSONFormatter(logging.Formatter):
-    def format(self, record):
-        log_record = {
+    """
+    Formats log records into a single, flat JSON object.
+    If extra data is passed to the logger, it is merged into the root of the JSON object.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Create a base dictionary with standard log attributes
+        log_object = {
             "timestamp": datetime.fromtimestamp(record.created).isoformat(),
             "level": record.levelname,
             "message": record.getMessage(),
@@ -14,9 +21,15 @@ class JSONFormatter(logging.Formatter):
             "function": record.funcName,
             "line": record.lineno,
         }
+
+        # If the log call includes 'extra' data, merge it into the main object
+        if hasattr(record, 'extra_data'):
+            log_object.update(record.extra_data)
+
         if record.exc_info:
-            log_record['exc_info'] = self.formatException(record.exc_info)
-        return json.dumps(log_record)
+            log_object['exc_info'] = self.formatException(record.exc_info)
+
+        return json.dumps(log_object)
 
 
 class DatabaseLogHandler(logging.Handler):
@@ -51,6 +64,17 @@ class DatabaseLogHandler(logging.Handler):
             "line": record.lineno,
             "exc_info": self.formatException(record.exc_info) if record.exc_info else None,
         }
+
+        # If extra data (like our metrics) is present, add it to the log entry.
+        # This assumes your database log table has a 'details' or 'extra' column
+        # of a JSON or TEXT type.
+        if hasattr(record, 'extra_data'):
+            # Check if the 'details' column exists in the table model
+            if 'details' in self.log_table.c:
+                log_entry['details'] = record.extra_data
+            else:
+                # Fallback: if no 'details' column, serialize it into the message
+                log_entry['message'] += f" | DETAILS: {json.dumps(record.extra_data)}"
 
         # Use SQLAlchemy's insert() function for a safe, consistent query
         insert_stmt = insert(self.log_table).values(log_entry)
