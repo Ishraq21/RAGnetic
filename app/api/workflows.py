@@ -1,0 +1,196 @@
+import logging
+import yaml
+import json
+from fastapi import APIRouter, HTTPException, Request, status
+from typing import Dict, Any, Optional
+from sqlalchemy import create_engine, select, insert, update, delete
+from sqlalchemy.exc import IntegrityError
+from pydantic import ValidationError
+
+from app.db.models import workflows_table, workflow_runs_table, human_tasks_table
+from app.core.config import get_db_connection, get_memory_storage_config, get_log_storage_config
+from app.workflows.engine import WorkflowEngine
+from app.schemas.workflow import WorkflowCreate, WorkflowUpdate, Workflow
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+
+def get_sync_db_engine():
+    """Helper to get a synchronous SQLAlchemy engine."""
+    mem_cfg = get_memory_storage_config()
+    log_cfg = get_log_storage_config()
+    conn_name = (
+        mem_cfg.get("connection_name")
+        if mem_cfg.get("type") in ["db", "sqlite"]
+        else log_cfg.get("connection_name")
+    )
+    if not conn_name:
+        raise RuntimeError("No database connection is configured for workflows.")
+    conn_str = get_db_connection(conn_name)
+    # strip async markers for sync engine
+    return create_engine(conn_str.replace("+aiosqlite", "").replace("+asyncpg", ""))
+
+
+class WorkflowResumeRequest(WorkflowUpdate):
+    user_input: Optional[Dict[str, Any]] = None
+
+
+@router.post("/workflows", status_code=status.HTTP_201_CREATED, response_model=Workflow)
+async def create_workflow(request: Request):
+    """Creates a new workflow definition (JSON or YAML) in the database."""
+    content_type = request.headers.get("content-type", "").lower()
+    try:
+        if "yaml" in content_type or "yml" in content_type:
+            raw = await request.body()
+            payload = yaml.safe_load(raw)
+        else:
+            payload = await request.json()
+        wf_in = WorkflowCreate(**payload)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid format: {e}")
+
+    engine = get_sync_db_engine()
+    with engine.connect() as conn:
+        stmt = insert(workflows_table).values(
+            name=wf_in.name,
+            agent_name=wf_in.agent_name,
+            description=wf_in.description,
+            definition=wf_in.model_dump(),
+        )
+        try:
+            res = conn.execute(stmt)
+            conn.commit()
+        except IntegrityError:
+            raise HTTPException(status_code=409, detail=f"Workflow '{wf_in.name}' already exists.")
+        except Exception as e:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+        row = conn.execute(
+            select(workflows_table).where(workflows_table.c.id == res.inserted_primary_key[0])
+        ).mappings().first()
+
+    data = dict(row["definition"])
+    data["id"] = row["id"]
+    return Workflow.model_validate(data)
+
+
+@router.get("/workflows/{workflow_name}", response_model=Workflow)
+def get_workflow(workflow_name: str):
+    """Retrieves a workflow definition by name."""
+    engine = get_sync_db_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(workflows_table).where(workflows_table.c.name == workflow_name)
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found.")
+
+    data = dict(row["definition"])
+    data["id"] = row["id"]
+    return Workflow.model_validate(data)
+
+
+@router.put("/workflows/{workflow_name}", response_model=Workflow)
+async def update_workflow(workflow_name: str, request: Request):
+    """Updates an existing workflow definition (JSON or YAML)."""
+    content_type = request.headers.get("content-type", "").lower()
+    try:
+        if "yaml" in content_type or "yml" in content_type:
+            raw = await request.body()
+            payload = yaml.safe_load(raw)
+        else:
+            payload = await request.json()
+        upd = WorkflowUpdate(**payload).model_dump(exclude_unset=True)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid format: {e}")
+
+    engine = get_sync_db_engine()
+    with engine.connect() as conn:
+        existing = conn.execute(
+            select(workflows_table).where(workflows_table.c.name == workflow_name)
+        ).mappings().first()
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found.")
+
+        if "steps" in upd:
+            # Parse the existing definition from the DB
+            existing_definition = json.loads(existing["definition"]) if isinstance(existing["definition"], str) else existing["definition"]
+            # Merge the update into the existing definition
+            full = {**existing_definition, **upd}
+            upd["definition"] = full
+
+        conn.execute(
+            update(workflows_table)
+            .where(workflows_table.c.name == workflow_name)
+            .values(**upd)
+        )
+        conn.commit()
+
+    return get_workflow(upd.get("name", workflow_name))
+
+@router.delete("/workflows/{workflow_name}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_workflow(workflow_name: str):
+    """Deletes a workflow definition."""
+    engine = get_sync_db_engine()
+    with engine.connect() as conn:
+        res = conn.execute(
+            delete(workflows_table).where(workflows_table.c.name == workflow_name)
+        )
+        conn.commit()
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found.")
+
+
+@router.post("/workflows/{workflow_name}/trigger", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_workflow(workflow_name: str, initial_input: Optional[Dict[str, Any]] = None):
+    """Triggers execution of a workflow by name."""
+    try:
+        engine = WorkflowEngine(get_sync_db_engine())
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not connect to database.")
+    logger.info(f"Triggering workflow '{workflow_name}'…")
+    engine.run_workflow(workflow_name, initial_input)
+    return {"message": f"Workflow '{workflow_name}' triggered successfully."}
+
+
+@router.post("/workflows/{run_id}/resume", status_code=status.HTTP_202_ACCEPTED)
+async def resume_workflow(run_id: str, request: WorkflowResumeRequest):
+    """Resumes a paused workflow run, supplying any human input."""
+    engine = get_sync_db_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(
+                workflow_runs_table,
+                workflows_table.c.name.label("workflow_name")
+            )
+            .join(workflows_table, workflow_runs_table.c.workflow_id == workflows_table.c.id)
+            .where(workflow_runs_table.c.run_id == run_id)
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
+        if row["status"] != "paused":
+            raise HTTPException(status_code=409, detail=f"Run not paused (status={row['status']}).")
+
+        conn.execute(
+            update(human_tasks_table)
+            .where(
+                human_tasks_table.c.run_id == row["id"],
+                human_tasks_table.c.status == "pending"
+            )
+            .values(status="completed", resolution_data=request.user_input)
+        )
+        conn.commit()
+
+    try:
+        engine = WorkflowEngine(get_sync_db_engine())
+        engine.run_workflow(workflow_name=row["workflow_name"], resume_run_id=run_id)
+        return {"message": f"Workflow run '{run_id}' resumed successfully."}
+    except Exception:
+        logger.exception("Error resuming workflow.")
+        raise HTTPException(status_code=500, detail="Error resuming workflow.")

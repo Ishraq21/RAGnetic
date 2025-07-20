@@ -1,0 +1,10 @@
+# workflows/basic_test.yaml
+name: "basic_test"
+description: "A simple workflow to test the http_request_tool."
+steps:
+  - name: "get_sample_post"
+    type: "tool_call"
+    tool_name: "http_request_tool"
+    tool_input:
+      method: "GET"
+      url: "https://jsonplaceholder.typicode.com/posts/1"

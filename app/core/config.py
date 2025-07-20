@@ -70,6 +70,7 @@ def get_path_settings() -> Dict[str, Path | List[Path]]:
         "MEMORY_DIR": project_root / "memory",
         "TEMP_CLONES_DIR": project_root / ".ragnetic" / ".ragnetic_temp_clones",
         "BENCHMARK_DIR": project_root / "benchmark",
+        "WORKFLOWS_DIR": project_root / "workflows",
     }
 
     default_allowed_dirs = f"{paths['DATA_DIR']},{paths['AGENTS_DIR']},{paths['TEMP_CLONES_DIR']}"

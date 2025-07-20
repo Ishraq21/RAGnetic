@@ -54,6 +54,7 @@ from app.tools.search_engine_tool import SearchTool
 
 # System
 from app.watcher import start_watcher
+from app.workflows.scheduler import start_scheduler_process  # <-- NEW IMPORT
 from sqlalchemy import create_engine as create_sync_engine
 import alembic.config
 from alembic.runtime.migration import MigrationContext
@@ -65,6 +66,9 @@ from app.api.audit import router as audit_api_router
 from app.api.query import router as query_api_router
 from app.api.evaluation import router as evaluation_api_router
 from app.api.metrics import router as metrics_api_router
+from app.api.schedules import router as schedules_api_router
+
+from app.api import workflows
 
 # --- Base Logging Configuration ---
 _APP_PATHS = get_path_settings()
@@ -98,7 +102,7 @@ LOGGING_CONFIG = {
     "loggers": {
         "ragnetic": {"handlers": ["console", "database_handler"], "level": "INFO", "propagate": False},
         "ragnetic.metrics": {
-            "handlers": ["database_handler"], # <-- CHANGE THIS LINE
+            "handlers": ["database_handler"],  # <-- CHANGE THIS LINE
             "level": "INFO",
             "propagate": False
         },
@@ -156,6 +160,10 @@ app.include_router(audit_api_router)
 app.include_router(query_api_router)
 app.include_router(evaluation_api_router)
 app.include_router(metrics_api_router)
+
+app.include_router(workflows.router, prefix="/api/v1")
+app.include_router(schedules_api_router, prefix="/api/v1")
+
 
 
 # --- WebSocket Connection Managers (Dual Mode) ---
@@ -218,11 +226,12 @@ else:
     manager = MemoryConnectionManager()
 
 _watcher_process: Optional[Process] = None
+_scheduler_process: Optional[Process] = None
 
 
 @app.on_event("startup")
 async def startup_event():
-    global _watcher_process
+    global _watcher_process, _scheduler_process
     logger.info("Application startup: Initializing components.")
     if isinstance(manager, RedisConnectionManager):
         try:
@@ -280,14 +289,26 @@ async def startup_event():
         logger.error(f"'{_DATA_DIR}' not found. Please run 'ragnetic init'.")
         return
 
-    _watcher_process = Process(target=start_watcher, args=(_DATA_DIR,), daemon=True)
+    _watcher_process = Process(target=start_watcher, args=(_DATA_DIR,))
+    _watcher_process.daemon = False  # <-- ADDED
     _watcher_process.start()
     logger.info("Automated file watcher started.")
+
+    # --- START: New scheduler process (Task 3) ---
+    schedule_config = {
+        "workflows": [
+            {"workflow_name": "hourly_report_workflow"},  # Placeholder for a real config
+        ]
+    }
+    _scheduler_process = Process(target=start_scheduler_process, args=())
+    _scheduler_process.daemon = False
+    _scheduler_process.start()
+    logger.info("Automated workflow scheduler started.")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global _watcher_process
+    global _watcher_process, _scheduler_process
     if isinstance(manager, RedisConnectionManager) and manager.connection:
         await manager.connection.close()
         logger.info("Redis connection closed.")
@@ -296,6 +317,13 @@ async def shutdown_event():
         _watcher_process.terminate()
         _watcher_process.join(timeout=5)
         logger.info("File watcher process stopped.")
+
+    # --- START: Stop the scheduler process (Task 3) ---
+    if _scheduler_process and _scheduler_process.is_alive():
+        _scheduler_process.terminate()
+        _scheduler_process.join(timeout=5)
+        logger.info("Workflow scheduler process stopped.")
+    # --- END: Stop the scheduler process (Task 3) ---
 
 
 class RenameRequest(BaseModel):
@@ -483,7 +511,7 @@ async def redis_listen(ws: WebSocket, channel: str):
             except RedisConnectionError as e:
                 logger.warning(f"Redis pubsub lost for {channel}; reconnecting: {e}")
                 manager.pubsub = None
-                return await redis_listen(ws, channel)   # restart subscription loop
+                return await redis_listen(ws, channel)  # restart subscription loop
             if message and ws.client_state == WebSocketState.CONNECTED:
                 await ws.send_text(message["data"])
     except asyncio.CancelledError:
@@ -521,7 +549,6 @@ async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph
                             agent_run_id=run_db_id,
                             node_name=name,
                             start_time=step_start_time,
-                            status='running',
                             inputs=serialized_input
                         ).returning(agent_run_steps.c.id)
                         step_db_id = (await db.execute(insert_step_stmt)).scalar_one()
