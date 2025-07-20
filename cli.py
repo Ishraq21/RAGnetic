@@ -52,8 +52,9 @@ from app.watcher import start_watcher
 import pytest
 from app.core.validation import is_valid_agent_name_cli
 from app.db.models import metadata, agent_runs, chat_sessions_table, users_table
-from app.db.models import metadata, agent_runs, chat_sessions_table, users_table, agent_run_steps
-
+from app.db.models import metadata, agent_runs, chat_sessions_table, users_table, agent_run_steps, workflows_table, workflow_runs_table
+from app.workflows.engine import WorkflowEngine
+from app.schemas.workflow import Workflow
 
 
 # --- Centralized Path Configuration ---
@@ -68,6 +69,8 @@ _CONFIG_FILE = _APP_PATHS["CONFIG_FILE_PATH"]
 _RAGNETIC_DIR = _APP_PATHS["RAGNETIC_DIR"]
 _TEMP_CLONES_DIR = _APP_PATHS["TEMP_CLONES_DIR"]
 _BENCHMARK_DIR = _APP_PATHS["BENCHMARK_DIR"]
+_WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
+
 
 # --- Load Environment Variables ---
 load_dotenv(dotenv_path=_PROJECT_ROOT / ".env")
@@ -149,6 +152,57 @@ app.add_typer(auth_app)
 
 eval_app = typer.Typer(name="evaluate", help="Commands for evaluating agent performance.")
 app.add_typer(eval_app)
+
+run_app = typer.Typer(name="run", help="Commands for running workflows and other processes.")
+app.add_typer(run_app)
+
+
+@run_app.command(name="workflow", help="Triggers a workflow to run via the API.")
+def run_workflow_cli(
+        workflow_name: str = typer.Argument(..., help="The name of the workflow to run."),
+        initial_input_json: Optional[str] = typer.Option(
+            None, "--input", "-i", help="Initial JSON input for the workflow."
+        ),
+):
+    """Triggers a workflow run by calling the local API endpoint."""
+    setup_cli_logging()
+
+    # Read server host and port from config file
+    config = configparser.ConfigParser()
+    config.read(_CONFIG_FILE)
+    host = config.get('SERVER', 'host', fallback='127.0.0.1')
+    port = config.get('SERVER', 'port', fallback='8000')
+
+    url = f"http://{host}:{port}/api/v1/workflows/{workflow_name}/trigger"
+    headers = {"Content-Type": "application/json"}
+
+    initial_input = {}
+    if initial_input_json:
+        try:
+            initial_input = json.loads(initial_input_json)
+        except json.JSONDecodeError:
+            typer.secho("Error: Invalid JSON input.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+    try:
+        typer.secho(f"Attempting to trigger workflow '{workflow_name}' via API...", fg=typer.colors.CYAN)
+        response = requests.post(url, headers=headers, json=initial_input, timeout=10)
+        response.raise_for_status()
+
+        # Check for accepted status
+        if response.status_code == 202:
+            typer.secho(f"Successfully triggered workflow '{workflow_name}'.", fg=typer.colors.GREEN)
+            typer.secho(f"API response: {response.json()}", fg=typer.colors.BRIGHT_WHITE)
+        else:
+            typer.secho(f"Workflow trigger failed with status code {response.status_code}.", fg=typer.colors.RED)
+            typer.echo(f"Response: {response.text}")
+            raise typer.Exit(code=1)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error: Could not connect to the RAGnetic server at {url}", fg=typer.colors.RED)
+        typer.echo(f"Please ensure the server is running with 'ragnetic start-server'.")
+        typer.echo(f"Detailed error: {e}")
+        raise typer.Exit(code=1)
 
 MODEL_PROVIDERS = {
     "OpenAI": "OPENAI_API_KEY",
@@ -493,7 +547,7 @@ def init():
     typer.secho("Initializing new RAGnetic project...", bold=True)
     paths_to_create = {
         "DATA_DIR", "AGENTS_DIR", "VECTORSTORE_DIR", "MEMORY_DIR",
-        "LOGS_DIR", "TEMP_CLONES_DIR", "RAGNETIC_DIR", "BENCHMARK_DIR"
+        "LOGS_DIR", "TEMP_CLONES_DIR", "RAGNETIC_DIR", "BENCHMARK_DIR", "WORKFLOWS_DIR"
     }
     for key, path in _APP_PATHS.items():
         if key in paths_to_create and not os.path.exists(path):
@@ -1139,6 +1193,135 @@ def list_runs(
 
     except Exception as e:
         typer.secho(f"An error occurred while fetching agent runs: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+
+@audit_app.command("list-workflows", help="Lists recent workflow runs.")
+def list_workflow_runs(
+        limit: int = typer.Option(20, "--limit", "-n", help="Number of recent workflow runs to display."),
+):
+    """Connects to the database and lists the most recent workflow runs."""
+    setup_cli_logging()
+    if not _is_db_configured():
+        typer.secho("Auditing requires a database. Please configure one using 'ragnetic configure'.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    engine = _get_sync_db_engine()
+
+    # Query the workflow_runs_table and join with workflows_table to get the name
+    stmt = (
+        select(
+            workflow_runs_table.c.run_id,
+            workflow_runs_table.c.status,
+            workflow_runs_table.c.start_time,
+            workflow_runs_table.c.end_time,
+            workflows_table.c.name.label("workflow_name"),
+        )
+        .join(workflows_table, workflow_runs_table.c.workflow_id == workflows_table.c.id)
+        .order_by(workflow_runs_table.c.start_time.desc())
+        .limit(limit)
+    )
+
+    try:
+        with engine.connect() as connection:
+            results = connection.execute(stmt).fetchall()
+
+        if not results:
+            typer.secho("No workflow runs found in the database.", fg=typer.colors.YELLOW)
+            return
+
+        typer.secho(f"--- Showing Last {len(results)} Workflow Runs ---", bold=True)
+
+        header = ["Run ID", "Workflow Name", "Status", "Start Time (UTC)", "Duration (s)"]
+        rows = []
+        for run in results:
+            status_color = typer.colors.GREEN if run.status == 'completed' else (
+                typer.colors.YELLOW if run.status in ['running', 'paused'] else typer.colors.RED)
+
+            duration = "N/A"
+            if run.end_time and run.start_time:
+                duration = f"{(run.end_time - run.start_time).total_seconds():.2f}"
+
+            rows.append([
+                run.run_id,
+                run.workflow_name,
+                typer.style(run.status, fg=status_color),
+                run.start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                duration
+            ])
+
+        # Simple print for alignment
+        for row in [header] + rows:
+            print(" | ".join(f"{item:<36}" if i == 0 else f"{item:<20}" for i, item in enumerate(row)))
+
+    except Exception as e:
+        typer.secho(f"An error occurred while fetching workflow runs: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+
+@audit_app.command("inspect-workflow", help="Inspect a specific workflow run and its I/O.")
+def inspect_workflow_run(
+        run_id: str = typer.Argument(..., help="The unique ID of the workflow run to inspect."),
+):
+    """Fetches and displays the details for a single workflow run."""
+    setup_cli_logging()
+    if not _is_db_configured():
+        typer.secho("Auditing requires a database. Please configure one using 'ragnetic configure'.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    engine = _get_sync_db_engine()
+
+    try:
+        with engine.connect() as connection:
+            # Fetch the main run details, joining with the workflow table to get the name
+            stmt = (
+                select(
+                    workflow_runs_table,
+                    workflows_table.c.name.label("workflow_name")
+                )
+                .join(workflows_table, workflow_runs_table.c.workflow_id == workflows_table.c.id)
+                .where(workflow_runs_table.c.run_id == run_id)
+            )
+            run = connection.execute(stmt).first()
+
+            if not run:
+                typer.secho(f"Error: Workflow Run with ID '{run_id}' not found.", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
+
+        # --- Display the results ---
+        typer.secho(f"\n--- Audit Trail for Workflow Run: {run.run_id} ---", bold=True)
+
+        status_color = typer.colors.GREEN if run.status == 'completed' else (
+            typer.colors.YELLOW if run.status in ['running', 'paused'] else typer.colors.RED)
+
+        duration = "N/A"
+        if run.end_time and run.start_time:
+            duration = f"{(run.end_time - run.start_time).total_seconds():.2f}s"
+
+        typer.echo(f"  {'Status:':<15} {typer.style(run.status.upper(), fg=status_color)}")
+        typer.echo(f"  {'Workflow:':<15} {run.workflow_name}")
+        typer.echo(f"  {'Start Time:':<15} {run.start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        typer.echo(f"  {'End Time:':<15} {run.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') if run.end_time else 'N/A'}")
+        typer.echo(f"  {'Duration:':<15} {duration}")
+
+        # Display the detailed JSON blobs
+        if run.initial_input:
+            typer.secho("\n--- Initial Input ---", bold=True, fg=typer.colors.BLUE)
+            typer.echo(json.dumps(run.initial_input, indent=2))
+
+        if run.final_output:
+            typer.secho("\n--- Final Output (Context) ---", bold=True, fg=typer.colors.MAGENTA)
+            typer.echo(json.dumps(run.final_output, indent=2))
+
+        if run.status == 'paused' and run.last_execution_state:
+            typer.secho("\n--- Paused State ---", bold=True, fg=typer.colors.YELLOW)
+            typer.echo(json.dumps(run.last_execution_state, indent=2))
+
+
+    except Exception as e:
+        typer.secho(f"An error occurred while inspecting the workflow run: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
 
