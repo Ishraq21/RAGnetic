@@ -60,6 +60,8 @@ class WorkflowBase(BaseModel):
     agent_name: Optional[str] = Field(None, description="The default agent to use for this workflow. Optional.")
     description: Optional[str] = Field(None, description="A description of what the workflow does.")
     steps: List[WorkflowStep] = Field(..., description="An ordered list of steps to execute.")
+    trigger: Optional[Dict[str, Any]] = Field(default=None, description="The trigger that starts the workflow, e.g., a schedule.")
+
 
 class WorkflowCreate(BaseModel):
     name: str
