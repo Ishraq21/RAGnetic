@@ -72,6 +72,8 @@ from app.api.schedules import router as schedules_api_router
 from app.api.webhooks import setup_dynamic_webhooks
 
 from app.api import workflows
+from app.db.models import schedules_table
+import re
 
 # --- Base Logging Configuration ---
 _APP_PATHS = get_path_settings()
@@ -223,14 +225,36 @@ _watcher_process: Optional[Process] = None
 _scheduler_process: Optional[Process] = None
 
 
-# app/main.py
+def _parse_schedule_time(time_str: str) -> Dict[str, int]:
+    """Parses time strings like '9:00am' or '16:30' into hour and minute."""
+    if not isinstance(time_str, str):
+        return {}
+
+    time_str = time_str.lower()
+    is_pm = 'pm' in time_str
+
+    # Remove am/pm for parsing and split
+    time_part = re.sub(r'[ap]m', '', time_str).strip()
+
+    try:
+        hour, minute = map(int, time_part.split(':'))
+
+        if is_pm and hour < 12:
+            hour += 12
+        elif not is_pm and hour == 12:  # Handle '12:00am' case
+            hour = 0
+
+        return {"hour": hour, "minute": minute}
+    except (ValueError, TypeError):
+        logger.warning(f"Could not parse time string '{time_str}' in schedule. Skipping.")
+        return {}
+
 
 def _sync_workflows_from_files():
     """
-    Scans the workflows directory and syncs YAML definitions with the database.
-
-    This makes workflows defined in files available to the WorkflowEngine and ensures
-    their full definitions, including triggers, are stored correctly.
+    Scans the workflows directory, syncs YAML definitions with the database,
+    and automatically manages associated schedules based on the 'trigger' section.
+    This version correctly handles both frequency/time and direct cron configurations.
     """
     if not is_db_configured():
         logger.warning("Skipping workflow sync: No database is configured.")
@@ -238,80 +262,101 @@ def _sync_workflows_from_files():
 
     workflows_dir = _APP_PATHS.get("WORKFLOWS_DIR")
     if not workflows_dir or not workflows_dir.is_dir():
-        logger.warning(f"Workflows directory not found at '{workflows_dir}', skipping sync.")
         return
 
-    logger.info("Starting sync of workflow files with the database...")
+    logger.info("Starting sync of workflow and schedule files with the database...")
 
-    # Correctly determine the active database connection name
-    mem_cfg = get_memory_storage_config()
-    log_cfg = get_log_storage_config()
-    conn_name = (
-        mem_cfg.get("connection_name")
-        if mem_cfg.get("type") in ["db", "sqlite"]
-        else log_cfg.get("connection_name")
-    )
+    conn_name = (get_memory_storage_config().get("connection_name") or
+                 get_log_storage_config().get("connection_name"))
     if not conn_name:
-        logger.error("Could not determine the database connection name for workflow sync.")
+        logger.error("Could not determine DB connection name for workflow sync.")
         return
 
     sync_conn_str = get_db_connection(conn_name).replace('+aiosqlite', '').replace('+asyncpg', '')
     engine = create_sync_engine(sync_conn_str)
 
     with engine.connect() as conn:
+        synced_workflow_names = set()
         for filepath in workflows_dir.glob("*.yaml"):
             try:
                 with open(filepath, 'r') as f:
-                    # Load the raw YAML payload directly.
                     payload = yaml.safe_load(f)
-                    # Validate the payload against the Pydantic model.
-                    # This ensures the YAML is structured correctly but doesn't strip any fields.
                     wf_in = WorkflowCreate(**payload)
+                    synced_workflow_names.add(wf_in.name)
 
-                existing = conn.execute(
-                    select(workflows_table).where(workflows_table.c.name == wf_in.name)
-                ).first()
-
-                # ** THE FIX IS APPLIED BELOW **
-                # We now use the complete 'payload' dictionary for the definition,
-                # which preserves the 'trigger' key and other top-level fields.
-
-                if existing:
-                    # Update the existing workflow record.
-                    stmt = (
-                        update(workflows_table)
-                        .where(workflows_table.c.name == wf_in.name)
-                        .values(
-                            agent_name=wf_in.agent_name,
-                            description=wf_in.description,
-                            definition=payload,  # Use the full payload
-                            updated_at=datetime.utcnow()
-                        )
-                    )
-                    conn.execute(stmt)
-                    logger.info(f"Updated workflow '{wf_in.name}' in the database.")
+                existing_workflow = conn.execute(
+                    select(workflows_table).where(workflows_table.c.name == wf_in.name)).first()
+                wf_values = {"agent_name": wf_in.agent_name, "description": wf_in.description, "definition": payload,
+                             "updated_at": datetime.utcnow()}
+                if existing_workflow:
+                    stmt = update(workflows_table).where(workflows_table.c.id == existing_workflow.id).values(
+                        **wf_values)
                 else:
-                    # Insert a new workflow record.
-                    stmt = insert(workflows_table).values(
-                        name=wf_in.name,
-                        agent_name=wf_in.agent_name,
-                        description=wf_in.description,
-                        definition=payload,  # Use the full payload
-                    )
-                    conn.execute(stmt)
-                    logger.info(f"Registered new workflow '{wf_in.name}' in the database.")
+                    stmt = insert(workflows_table).values(name=wf_in.name, **wf_values)
+                conn.execute(stmt)
 
-                # Commit the transaction for the current file.
+                trigger = payload.get("trigger", {})
+                schedule_info = trigger.get("schedule")
+                is_scheduled = trigger.get("type") == "schedule" and isinstance(schedule_info, dict)
+
+                existing_schedule = conn.execute(
+                    select(schedules_table).where(schedules_table.c.workflow_name == wf_in.name)).first()
+
+                if is_scheduled:
+                    cron_config = {}
+                    # Handle frequency/time format
+                    if "frequency" in schedule_info:
+                        cron_config = _parse_schedule_time(schedule_info.get("time", ""))
+                        if schedule_info.get("frequency") == "weekly":
+                            days = schedule_info.get("day_of_week", [])
+                            cron_config["day_of_week"] = ",".join(day[:3].lower() for day in days)
+                    # Handle direct cron format
+                    else:
+                        cron_config = {k: v for k, v in schedule_info.items() if
+                                       k in ['year', 'month', 'day', 'week', 'day_of_week', 'hour', 'minute', 'second']}
+
+                    if not cron_config:
+                        logger.warning(
+                            f"Could not determine a valid cron configuration for workflow '{wf_in.name}'. Skipping schedule.")
+                        continue
+
+                    schedule_values = {"cron_schedule": cron_config, "is_enabled": True}
+
+                    if existing_schedule:
+                        update_stmt = update(schedules_table).where(
+                            schedules_table.c.id == existing_schedule.id).values(**schedule_values)
+                        conn.execute(update_stmt)
+                        logger.info(f"Updated schedule for workflow '{wf_in.name}' with rule: {cron_config}")
+                    else:
+                        insert_stmt = insert(schedules_table).values(name=f"schedule_for_{wf_in.name}",
+                                                                     workflow_name=wf_in.name, **schedule_values)
+                        conn.execute(insert_stmt)
+                        logger.info(f"Created new schedule for workflow '{wf_in.name}' with rule: {cron_config}")
+
+                elif existing_schedule and existing_schedule.is_enabled:
+                    # Disable schedule if trigger is removed from YAML
+                    disable_stmt = update(schedules_table).where(schedules_table.c.id == existing_schedule.id).values(
+                        is_enabled=False)
+                    conn.execute(disable_stmt)
+                    logger.info(f"Disabled schedule for '{wf_in.name}' (trigger removed from YAML).")
+
                 conn.commit()
 
-            except (IntegrityError, SQLAlchemyError) as e:
-                conn.rollback()
-                logger.error(f"Database error syncing workflow file '{filepath.name}': {e}")
             except Exception as e:
-                logger.error(f"Failed to parse or validate workflow file '{filepath.name}': {e}", exc_info=True)
+                conn.rollback()
+                logger.error(f"Failed to sync workflow file '{filepath.name}': {e}", exc_info=True)
+
+        # Disable schedules for deleted workflow files
+        stale_schedules = conn.execute(
+            select(schedules_table).where(schedules_table.c.workflow_name.not_in(synced_workflow_names))).fetchall()
+        for stale in stale_schedules:
+            if stale.is_enabled:
+                conn.execute(update(schedules_table).where(schedules_table.c.id == stale.id).values(is_enabled=False))
+                logger.info(f"Disabled schedule for deleted workflow YAML: '{stale.workflow_name}'.")
+        conn.commit()
 
     engine.dispose()
-    logger.info("Workflow sync complete.")
+    logger.info("Workflow and schedule sync complete.")
 
 @app.on_event("startup")
 async def startup_event():
