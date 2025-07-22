@@ -12,6 +12,7 @@ from multiprocessing import Process
 from pathlib import Path
 from datetime import datetime
 from pydantic import BaseModel
+import yaml
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, status
 from fastapi.templating import Jinja2Templates
@@ -24,10 +25,10 @@ from starlette.websockets import WebSocketState
 # --- RAGnetic Imports ---
 
 # Database & Models
-from app.db.models import chat_sessions_table, chat_messages_table, users_table, agent_runs, agent_run_steps
+from app.db.models import chat_sessions_table, chat_messages_table, users_table, agent_runs, agent_run_steps, workflows_table
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, insert, update, text, delete
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError # <-- ADD IntegrityError
 
 # Core Components
 from app.core.config import get_path_settings, get_server_api_keys, get_log_storage_config, \
@@ -38,6 +39,7 @@ from app.core.validation import sanitize_for_path
 from app.core.security import get_http_api_key, get_websocket_api_key
 from app.schemas.agent import AgentConfig
 from app.core.serialization import _serialize_for_db
+from app.schemas.workflow import WorkflowCreate
 
 # Agents & Pipelines
 from app.agents.config_manager import get_agent_configs, load_agent_config
@@ -229,6 +231,82 @@ _watcher_process: Optional[Process] = None
 _scheduler_process: Optional[Process] = None
 
 
+def _sync_workflows_from_files():
+    """
+    Scans the workflows directory and syncs YAML definitions with the database.
+    This makes workflows defined in files available to the WorkflowEngine.
+    """
+    if not is_db_configured():
+        logger.warning("Skipping workflow sync: No database is configured.")
+        return
+
+    workflows_dir = _APP_PATHS.get("WORKFLOWS_DIR")
+    if not workflows_dir or not workflows_dir.is_dir():
+        logger.warning(f"Workflows directory not found at '{workflows_dir}', skipping sync.")
+        return
+
+    logger.info("Starting sync of workflow files with the database...")
+
+    # Correctly determine the active database connection name
+    mem_cfg = get_memory_storage_config()
+    log_cfg = get_log_storage_config()
+    conn_name = (
+        mem_cfg.get("connection_name")
+        if mem_cfg.get("type") in ["db", "sqlite"]
+        else log_cfg.get("connection_name")
+    )
+    if not conn_name:
+        logger.error("Could not determine the database connection name for workflow sync.")
+        return
+
+    sync_conn_str = get_db_connection(conn_name).replace('+aiosqlite', '').replace('+asyncpg', '')
+    engine = create_sync_engine(sync_conn_str)
+
+    with engine.connect() as conn:
+        for filepath in workflows_dir.glob("*.yaml"):
+            try:
+                with open(filepath, 'r') as f:
+                    payload = yaml.safe_load(f)
+                    wf_in = WorkflowCreate(**payload)
+
+                existing = conn.execute(
+                    select(workflows_table).where(workflows_table.c.name == wf_in.name)
+                ).first()
+
+                if existing:
+                    stmt = (
+                        update(workflows_table)
+                        .where(workflows_table.c.name == wf_in.name)
+                        .values(
+                            agent_name=wf_in.agent_name,
+                            description=wf_in.description,
+                            definition=wf_in.model_dump(),
+                            updated_at=datetime.utcnow()
+                        )
+                    )
+                    conn.execute(stmt)
+                    logger.info(f"Updated workflow '{wf_in.name}' in the database.")
+                else:
+                    stmt = insert(workflows_table).values(
+                        name=wf_in.name,
+                        agent_name=wf_in.agent_name,
+                        description=wf_in.description,
+                        definition=wf_in.model_dump(),
+                    )
+                    conn.execute(stmt)
+                    logger.info(f"Registered new workflow '{wf_in.name}' in the database.")
+
+                conn.commit()
+
+            except (IntegrityError, SQLAlchemyError) as e:
+                conn.rollback()
+                logger.error(f"Database error syncing workflow file '{filepath.name}': {e}")
+            except Exception as e:
+                logger.error(f"Failed to parse or validate workflow file '{filepath.name}': {e}")
+
+    engine.dispose()
+    logger.info("Workflow sync complete.")
+
 @app.on_event("startup")
 async def startup_event():
     global _watcher_process, _scheduler_process
@@ -274,6 +352,9 @@ async def startup_event():
                 else:
                     logger.info("Database schema is up-to-date.")
             engine.dispose()
+
+            _sync_workflows_from_files()
+
             conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
                 "connection_name")
             if not conn_name:

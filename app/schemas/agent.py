@@ -220,9 +220,9 @@ class AgentConfig(BaseModel):
         default_factory=list,
         description="A list of data sources for the agent to retrieve information from. Optional for generic chatbots."
     )
-    tools: Optional[List[Literal['retriever', 'sql_toolkit', 'arxiv','search_engine']]] = Field(
+    tools: Optional[List[str]] = Field(
         default_factory=list,
-        description="A list of tools the agent can use. Defaults to an empty list, meaning no tools are used unless specified."
+        description="A list of tools the agent can use. Defaults to an empty list."
     )
 
     # Users can now specify models in their agent.yaml file.

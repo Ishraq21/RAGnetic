@@ -1,64 +1,39 @@
+# app/tools/http_request_tool.py
+
+from typing import Dict, Any, Optional, Literal
 import requests
-import json
-import logging
-from typing import Dict, Any, Optional
+from pydantic.v1 import BaseModel, Field
 
-logger = logging.getLogger(__name__)
-
+class ToolInput(BaseModel):
+    method: Literal['GET', 'POST', 'PUT', 'DELETE'] = Field(..., description="The HTTP method to use.")
+    url: str = Field(..., description="The URL to send the request to.")
+    params: Optional[Dict[str, Any]] = Field(None, description="URL parameters for GET requests.")
+    headers: Optional[Dict[str, Any]] = Field(None, description="Request headers.")
+    json_payload: Optional[Dict[str, Any]] = Field(None, description="JSON body for POST/PUT requests.")
 
 class HTTPRequestTool:
-    """
-    A tool to make HTTP requests from a RAGnetic workflow.
-    Supports GET, POST, PUT, PATCH, and DELETE methods.
-    """
+    """A tool for making HTTP requests."""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        self.config = config or {}
-
-    def run(self, method: str, url: str, headers: Optional[Dict[str, str]] = None,
-            body: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    def run(self, method: str, url: str, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, Any]] = None, json_payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Makes an HTTP request to the specified URL.
-
-        Args:
-            method (str): The HTTP method (e.g., 'GET', 'POST', 'PUT').
-            url (str): The URL to make the request to.
-            headers (Optional[Dict]): A dictionary of HTTP headers.
-            body (Optional[Dict]): A dictionary of the request body (for POST, PUT, etc.).
-            params (Optional[Dict]): A dictionary of URL parameters.
-
-        Returns:
-            Dict: A dictionary containing the response status code, headers, and body.
+        Executes an HTTP request and returns the JSON response.
         """
-        if not url:
-            return {"error": "URL is required for HTTP request."}
-
         try:
-            logger.info(f"Making {method} request to {url} with params: {params} and body: {body}")
             response = requests.request(
-                method=method.upper(),
+                method=method,
                 url=url,
-                headers=headers,
-                json=body,
                 params=params,
-                timeout=15  # Set a reasonable timeout
+                headers=headers,
+                json=json_payload,
+                timeout=10
             )
-            response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-
-            logger.info(f"Request to {url} successful.")
-
-            # Try to parse JSON response, fall back to text
-            try:
-                response_body = response.json()
-            except json.JSONDecodeError:
-                response_body = response.text
-
-            return {
-                "status_code": response.status_code,
-                "headers": dict(response.headers),
-                "body": response_body
-            }
-
+            response.raise_for_status()
+            return response.json()
         except requests.exceptions.RequestException as e:
-            logger.error(f"HTTP request to {url} failed: {e}")
-            return {"error": str(e), "status_code": None, "body": None}
+            return {"error": f"HTTP request failed: {e}"}
+        except ValueError: # Catches JSON decoding errors
+            return {"error": "Failed to decode JSON response.", "content": response.text}
+
+    # This method allows the engine to discover the tool's input schema
+    def get_input_schema(self) -> Dict[str, Any]:
+        return ToolInput.schema()
