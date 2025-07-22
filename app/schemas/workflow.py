@@ -1,8 +1,10 @@
+# app/schemas/workflow.py
+
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Any, Union
+from typing import Dict, List, Literal, Optional, Any, Union, Annotated
 from pydantic import BaseModel, Field, ConfigDict
 
-# --- Step Type Enums ---
+# --- Step Type Enum ---
 class StepType(str, Enum):
     AGENT_CALL = "agent_call"
     TOOL_CALL = "tool_call"
@@ -10,32 +12,31 @@ class StepType(str, Enum):
     LOOP = "loop"
     HUMAN_IN_THE_LOOP = "human_in_the_loop"
 
-# --- Common Step Models ---
+# --- Base Step Model ---
 class BaseStep(BaseModel):
     name: str = Field(..., description="A unique name for the step within the workflow.")
-    type: StepType = Field(..., description="The type of the step, e.g., agent_call or tool_call.")
     description: Optional[str] = None
 
 # --- Specific Step Models ---
+# This is the model for our new agent-driven steps
 class AgentCallStep(BaseStep):
     type: Literal[StepType.AGENT_CALL] = StepType.AGENT_CALL
-    agent_name: str
-    input: Dict[str, Any] = Field(..., description="The input data to pass to the agent.")
+    task: str = Field(..., description="The high-level task for the agent to complete.")
+    # This is optional because it can be inherited from the top-level workflow
+    agent_name: Optional[str] = None
 
 class ToolCallStep(BaseStep):
     type: Literal[StepType.TOOL_CALL] = StepType.TOOL_CALL
     tool_name: str
     tool_input: Dict[str, Any] = Field(..., description="The input arguments for the tool.")
 
-class IfThenStep(BaseModel):
-    name: str
+class IfThenStep(BaseStep):
     type: Literal[StepType.IF_THEN] = StepType.IF_THEN
     condition: str = Field(..., description="A condition to evaluate.")
     on_true: List['WorkflowStep'] = Field(..., description="A list of steps to execute if the condition is true.")
     on_false: Optional[List['WorkflowStep']] = Field(None, description="A list of steps to execute if the condition is false.")
 
-class LoopStep(BaseModel):
-    name: str
+class LoopStep(BaseStep):
     type: Literal[StepType.LOOP] = StepType.LOOP
     iterable: str = Field(..., description="The context variable to iterate over.")
     loop_variable: str = Field(..., description="The name of the variable to hold the current item in the loop.")
@@ -47,11 +48,17 @@ class HumanInTheLoopStep(BaseStep):
     user_id: Optional[str] = Field(None, description="The ID of the user to assign the task to. Optional.")
     data: Optional[Dict[str, Any]] = Field(None, description="Additional data to present to the user. Optional.")
 
-WorkflowStep = Union[AgentCallStep, ToolCallStep, IfThenStep, LoopStep, HumanInTheLoopStep]
+# --- THE CRITICAL FIX: Discriminated Union ---
+# This tells Pydantic to use the 'type' field to decide which model to use for validation.
+WorkflowStep = Annotated[
+    Union[AgentCallStep, ToolCallStep, IfThenStep, LoopStep, HumanInTheLoopStep],
+    Field(discriminator="type")
+]
 
+# --- Main Workflow Schemas ---
 class WorkflowBase(BaseModel):
     name: str = Field(..., description="The unique name of the workflow.")
-    agent_name: Optional[str] = Field(None, description="The agent context to use for this workflow. Optional.")
+    agent_name: Optional[str] = Field(None, description="The default agent to use for this workflow. Optional.")
     description: Optional[str] = Field(None, description="A description of what the workflow does.")
     steps: List[WorkflowStep] = Field(..., description="An ordered list of steps to execute.")
 
@@ -66,12 +73,17 @@ class WorkflowUpdate(BaseModel):
 
 class Workflow(WorkflowBase):
     id: int
-
     model_config = ConfigDict(
         extra="ignore",
         from_attributes=True,
     )
 
+# --- Skill Schema ---
+class Skill(BaseModel):
+    name: str = Field(..., description="The unique name of the skill.")
+    description: str = Field(..., description="A short, clear description of what the skill does.")
+    instructions: str = Field(..., description="The detailed, step-by-step instructions for the LLM to follow when executing this skill.")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="A dictionary defining the expected parameters for the skill.")
 
 # Pydantic's forward reference handling
 IfThenStep.model_rebuild()
