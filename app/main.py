@@ -56,7 +56,7 @@ from app.tools.search_engine_tool import SearchTool
 
 # System
 from app.watcher import start_watcher
-from app.workflows.scheduler import start_scheduler_process  # <-- NEW IMPORT
+from app.workflows.scheduler import start_scheduler_process
 from sqlalchemy import create_engine as create_sync_engine
 import alembic.config
 from alembic.runtime.migration import MigrationContext
@@ -69,6 +69,7 @@ from app.api.query import router as query_api_router
 from app.api.evaluation import router as evaluation_api_router
 from app.api.metrics import router as metrics_api_router
 from app.api.schedules import router as schedules_api_router
+from app.api.webhooks import setup_dynamic_webhooks
 
 from app.api import workflows
 
@@ -104,7 +105,7 @@ LOGGING_CONFIG = {
     "loggers": {
         "ragnetic": {"handlers": ["console", "database_handler"], "level": "INFO", "propagate": False},
         "ragnetic.metrics": {
-            "handlers": ["database_handler"],  # <-- CHANGE THIS LINE
+            "handlers": ["database_handler"],
             "level": "INFO",
             "propagate": False
         },
@@ -156,15 +157,6 @@ app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credenti
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- INCLUDE THE API ROUTERS ---
-app.include_router(agents_api_router)
-app.include_router(audit_api_router)
-app.include_router(query_api_router)
-app.include_router(evaluation_api_router)
-app.include_router(metrics_api_router)
-
-app.include_router(workflows.router, prefix="/api/v1")
-app.include_router(schedules_api_router, prefix="/api/v1")
 
 
 
@@ -231,10 +223,14 @@ _watcher_process: Optional[Process] = None
 _scheduler_process: Optional[Process] = None
 
 
+# app/main.py
+
 def _sync_workflows_from_files():
     """
     Scans the workflows directory and syncs YAML definitions with the database.
-    This makes workflows defined in files available to the WorkflowEngine.
+
+    This makes workflows defined in files available to the WorkflowEngine and ensures
+    their full definitions, including triggers, are stored correctly.
     """
     if not is_db_configured():
         logger.warning("Skipping workflow sync: No database is configured.")
@@ -266,43 +262,53 @@ def _sync_workflows_from_files():
         for filepath in workflows_dir.glob("*.yaml"):
             try:
                 with open(filepath, 'r') as f:
+                    # Load the raw YAML payload directly.
                     payload = yaml.safe_load(f)
+                    # Validate the payload against the Pydantic model.
+                    # This ensures the YAML is structured correctly but doesn't strip any fields.
                     wf_in = WorkflowCreate(**payload)
 
                 existing = conn.execute(
                     select(workflows_table).where(workflows_table.c.name == wf_in.name)
                 ).first()
 
+                # ** THE FIX IS APPLIED BELOW **
+                # We now use the complete 'payload' dictionary for the definition,
+                # which preserves the 'trigger' key and other top-level fields.
+
                 if existing:
+                    # Update the existing workflow record.
                     stmt = (
                         update(workflows_table)
                         .where(workflows_table.c.name == wf_in.name)
                         .values(
                             agent_name=wf_in.agent_name,
                             description=wf_in.description,
-                            definition=wf_in.model_dump(),
+                            definition=payload,  # Use the full payload
                             updated_at=datetime.utcnow()
                         )
                     )
                     conn.execute(stmt)
                     logger.info(f"Updated workflow '{wf_in.name}' in the database.")
                 else:
+                    # Insert a new workflow record.
                     stmt = insert(workflows_table).values(
                         name=wf_in.name,
                         agent_name=wf_in.agent_name,
                         description=wf_in.description,
-                        definition=wf_in.model_dump(),
+                        definition=payload,  # Use the full payload
                     )
                     conn.execute(stmt)
                     logger.info(f"Registered new workflow '{wf_in.name}' in the database.")
 
+                # Commit the transaction for the current file.
                 conn.commit()
 
             except (IntegrityError, SQLAlchemyError) as e:
                 conn.rollback()
                 logger.error(f"Database error syncing workflow file '{filepath.name}': {e}")
             except Exception as e:
-                logger.error(f"Failed to parse or validate workflow file '{filepath.name}': {e}")
+                logger.error(f"Failed to parse or validate workflow file '{filepath.name}': {e}", exc_info=True)
 
     engine.dispose()
     logger.info("Workflow sync complete.")
@@ -354,6 +360,11 @@ async def startup_event():
             engine.dispose()
 
             _sync_workflows_from_files()
+            setup_dynamic_webhooks(app)
+            for route in app.router.routes:
+                if "Webhooks" in getattr(route, "tags", []):
+                    logger.info(f"Registered webhook: {route.path} → {route.methods}")
+
 
             conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
                 "connection_name")
@@ -405,6 +416,18 @@ async def shutdown_event():
         _scheduler_process.join(timeout=5)
         logger.info("Workflow scheduler process stopped.")
     # --- END: Stop the scheduler process (Task 3) ---
+
+
+
+# --- INCLUDE THE API ROUTERS ---
+app.include_router(agents_api_router)
+app.include_router(audit_api_router)
+app.include_router(query_api_router)
+app.include_router(evaluation_api_router)
+app.include_router(metrics_api_router)
+
+app.include_router(workflows.router, prefix="/api/v1")
+app.include_router(schedules_api_router, prefix="/api/v1")
 
 
 class RenameRequest(BaseModel):
