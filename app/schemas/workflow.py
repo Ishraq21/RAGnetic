@@ -48,7 +48,6 @@ class HumanInTheLoopStep(BaseStep):
     user_id: Optional[str] = Field(None, description="The ID of the user to assign the task to. Optional.")
     data: Optional[Dict[str, Any]] = Field(None, description="Additional data to present to the user. Optional.")
 
-# --- THE CRITICAL FIX: Discriminated Union ---
 # This tells Pydantic to use the 'type' field to decide which model to use for validation.
 WorkflowStep = Annotated[
     Union[AgentCallStep, ToolCallStep, IfThenStep, LoopStep, HumanInTheLoopStep],
@@ -62,9 +61,12 @@ class WorkflowBase(BaseModel):
     description: Optional[str] = Field(None, description="A description of what the workflow does.")
     steps: List[WorkflowStep] = Field(..., description="An ordered list of steps to execute.")
 
-class WorkflowCreate(WorkflowBase):
-    pass
-
+class WorkflowCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    agent_name: Optional[str] = None
+    trigger: Optional[Dict[str, Any]] = None
+    steps: List[Dict[str, Any]]
 class WorkflowUpdate(BaseModel):
     name: Optional[str] = None
     agent_name: Optional[str] = None
