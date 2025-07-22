@@ -449,7 +449,7 @@ Return a JSON object that matches this Pydantic schema:
                 llm = self._get_llm()
                 plan: Plan
                 if hasattr(llm, "with_structured_output"):
-                    structured_llm = llm.with_structured_output(Plan)
+                    structured_llm = llm.with_structured_output(Plan, method="function_calling")
                     plan = structured_llm.invoke(prompt)
                 else:
                     # Fallback: raw call then parse
