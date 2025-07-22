@@ -5,6 +5,8 @@ from app.db.models import metadata
 from urllib.parse import urlparse, urlunparse
 from pathlib import Path
 import logging
+from sqlalchemy import create_engine
+
 
 logger = logging.getLogger(__name__)
 
@@ -66,3 +68,23 @@ async def get_db() -> AsyncSession:
             yield session
         finally:
             await session.close()
+
+
+
+def get_sync_db_engine():
+    """Helper to get a synchronous SQLAlchemy engine for background tasks."""
+    from app.core.config import get_memory_storage_config, get_log_storage_config, get_db_connection
+
+    mem_cfg = get_memory_storage_config()
+    log_cfg = get_log_storage_config()
+    conn_name = (
+        mem_cfg.get("connection_name")
+        if mem_cfg.get("type") in ["db", "sqlite"]
+        else log_cfg.get("connection_name")
+    )
+    if not conn_name:
+        raise RuntimeError("No database connection is configured for background worker.")
+
+    conn_str = get_db_connection(conn_name)
+    sync_conn_str = conn_str.replace('+aiosqlite', '').replace('+asyncpg', '')
+    return create_engine(sync_conn_str)

@@ -55,7 +55,7 @@ from app.db.models import metadata, agent_runs, chat_sessions_table, users_table
 from app.db.models import metadata, agent_runs, chat_sessions_table, users_table, agent_run_steps, workflows_table, workflow_runs_table
 from app.workflows.engine import WorkflowEngine
 from app.schemas.workflow import Workflow
-
+import subprocess
 
 # --- Centralized Path Configuration ---
 _APP_PATHS = get_path_settings()
@@ -654,45 +654,75 @@ def auth_gdrive():
         raise typer.Exit(code=1)
 
 
-@app.command(help="Starts the RAGnetic server.")
+@app.command(help="Starts the RAGnetic server and background worker.")
 def start_server(
         host: str = typer.Option(None, help="Server host. Overrides config."),
         port: int = typer.Option(None, help="Server port. Overrides config."),
         reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
 ):
     """
-    Starts the RAGnetic server.
-    Logging is configured by the main application file (main.py).
+    Starts the RAGnetic server (Uvicorn) and the Celery background worker.
     """
     config = configparser.ConfigParser()
     config.read(_CONFIG_FILE)
     final_host = host or config.get('SERVER', 'host', fallback="127.0.0.1")
     final_port = port or config.getint('SERVER', 'port', fallback=8000)
-    websocket_mode = config.get('SERVER', 'websocket_mode', fallback='memory')
 
+    # --- Warnings ---
     if not get_server_api_keys():
         typer.secho("SECURITY WARNING: Server starting without an API key.", fg=typer.colors.YELLOW, bold=True)
-        typer.secho("Run 'ragnetic set-server-key' to secure the API.", fg=typer.colors.YELLOW)
-
     if get_cors_settings() == ["*"]:
         typer.secho("SECURITY WARNING: Server is allowing requests from all origins ('*').", fg=typer.colors.YELLOW,
                     bold=True)
-        typer.secho("This is not recommended for production. Use 'ragnetic configure' to set allowed origins.",
-                    fg=typer.colors.YELLOW)
-
-    if websocket_mode == 'memory':
-        typer.secho("\nWARNING: Running in 'memory' WebSocket mode.", fg=typer.colors.YELLOW, bold=True)
-        typer.secho("This mode does not support multiple server processes and is not recommended for production.",
-                    fg=typer.colors.YELLOW)
-
-    if websocket_mode == 'redis' and not os.environ.get("REDIS_URL"):
-        typer.secho("\nINFO: Using default Redis URL 'redis://localhost'.", fg=typer.colors.BLUE)
-        typer.secho("Set the 'REDIS_URL' environment variable to use a different Redis instance.", fg=typer.colors.BLUE)
 
     if reload:
-        logging.getLogger("ragnetic").warning("Running in --reload mode.")
+        # For development, use reloaders for both processes
+        typer.secho("Starting server and worker in --reload mode...", fg=typer.colors.YELLOW, bold=True)
 
-    uvicorn.run("app.main:app", host=final_host, port=final_port, reload=reload)
+        uvicorn_cmd = ["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port), "--reload"]
+
+        # Use 'watchmedo' (from watchdog) to auto-restart the Celery worker on file changes
+        celery_cmd = [
+            "watchmedo", "auto-restart",
+            "--directory=./app",  # Watch the 'app' directory
+            "--pattern=*.py",  # For any Python file change
+            "--recursive",  # Include subdirectories
+            "--",  # Separator for the command to run
+            "celery", "-A", "app.workflows.tasks", "worker", "--loglevel=info"
+        ]
+
+        uvicorn_process = subprocess.Popen(uvicorn_cmd)
+        celery_process = subprocess.Popen(celery_cmd)
+
+        try:
+            uvicorn_process.wait()
+        except KeyboardInterrupt:
+            typer.echo("\nShutting down...")
+        finally:
+            celery_process.terminate()
+            celery_process.wait()
+
+    else:
+        # For production, run them as standard background/foreground processes
+        worker_process = None
+        try:
+            typer.secho("Starting Celery worker...", fg=typer.colors.BLUE, bold=True)
+            worker_process = subprocess.Popen(["celery", "-A", "app.workflows.tasks", "worker", "--loglevel=info"])
+
+            typer.secho(f"Starting Uvicorn server on http://{final_host}:{final_port}...", fg=typer.colors.BLUE,
+                        bold=True)
+            subprocess.run(["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port)], check=True)
+
+        except KeyboardInterrupt:
+            typer.echo("\nShutting down processes...")
+        except Exception as e:
+            typer.secho(f"An error occurred: {e}", fg=typer.colors.RED)
+        finally:
+            if worker_process:
+                worker_process.terminate()
+                worker_process.wait()
+
+    typer.secho("Shutdown complete.", fg=typer.colors.GREEN)
 
 
 @app.command(help="Lists all configured agents.")
