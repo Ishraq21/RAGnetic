@@ -11,6 +11,7 @@ from app.db.models import workflows_table, workflow_runs_table, human_tasks_tabl
 from app.core.config import get_db_connection, get_memory_storage_config, get_log_storage_config
 from app.workflows.engine import WorkflowEngine
 from app.schemas.workflow import WorkflowCreate, WorkflowUpdate, Workflow
+from app.workflows.tasks import run_workflow_task
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -147,18 +148,6 @@ def delete_workflow(workflow_name: str):
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found.")
 
 
-@router.post("/workflows/{workflow_name}/trigger", status_code=status.HTTP_202_ACCEPTED)
-async def trigger_workflow(workflow_name: str, initial_input: Optional[Dict[str, Any]] = None):
-    """Triggers execution of a workflow by name."""
-    try:
-        engine = WorkflowEngine(get_sync_db_engine())
-    except Exception:
-        raise HTTPException(status_code=500, detail="Could not connect to database.")
-    logger.info(f"Triggering workflow '{workflow_name}'…")
-    engine.run_workflow(workflow_name, initial_input)
-    return {"message": f"Workflow '{workflow_name}' triggered successfully."}
-
-
 @router.post("/workflows/{run_id}/resume", status_code=status.HTTP_202_ACCEPTED)
 async def resume_workflow(run_id: str, request: WorkflowResumeRequest):
     """Resumes a paused workflow run, supplying any human input."""
@@ -194,3 +183,44 @@ async def resume_workflow(run_id: str, request: WorkflowResumeRequest):
     except Exception:
         logger.exception("Error resuming workflow.")
         raise HTTPException(status_code=500, detail="Error resuming workflow.")
+
+
+@router.post("/workflows/{workflow_name}/trigger", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_workflow(workflow_name: str, initial_input: Optional[Dict[str, Any]] = None):
+    """
+    Triggers execution of a workflow by dispatching it to a background worker.
+    """
+    # First, validate that the workflow exists in the DB to prevent sending invalid tasks.
+    engine = get_sync_db_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(workflows_table).where(workflows_table.c.name == workflow_name)
+        ).first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found.")
+
+    # Dispatch the task to the Celery worker
+    logger.info(f"Dispatching workflow '{workflow_name}' to background worker.")
+    run_workflow_task.delay(workflow_name, initial_input)
+
+    return {"message": f"Workflow '{workflow_name}' has been successfully dispatched for execution."}
+
+
+
+@router.post("/workflows/{workflow_name}/trigger", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_workflow(workflow_name: str, initial_input: Optional[Dict[str, Any]] = None):
+    """
+    Triggers execution of a workflow by dispatching it to a background worker.
+    """
+    engine = get_sync_db_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(workflows_table).where(workflows_table.c.name == workflow_name)
+        ).first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found.")
+
+    logger.info(f"Dispatching workflow '{workflow_name}' to background worker.")
+    run_workflow_task.delay(workflow_name, initial_input)
+
+    return {"message": f"Workflow '{workflow_name}' has been successfully dispatched for execution."}

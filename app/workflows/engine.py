@@ -396,6 +396,10 @@ You are a helpful and reliable AI agent. Complete the task by thinking step-by-s
 You may call SKILLS (smart LLM instructions) and TOOLS (real-world actions).
 Each action lists the expected JSON input schema. Follow it exactly.
 
+--- IMPORTANT TOOL INSTRUCTIONS ---
+When using the 'python_script_tool', you MUST use a `print()` statement to output the result. The value of the last line is not captured.
+--- END IMPORTANT TOOL INSTRUCTIONS ---
+
 --- AVAILABLE ACTIONS ---
 {json.dumps(actions, indent=2)}
 --- END AVAILABLE ACTIONS ---
