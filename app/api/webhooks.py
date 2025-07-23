@@ -41,11 +41,11 @@ def setup_dynamic_webhooks(app: FastAPI):
         for row in workflows:
             wf: Dict[str, Any] = row._mapping
             workflow_name = wf.get("name")
-            logger.info(f"Found workflow: {workflow_name}")
+            logger.debug(f"Found workflow: {workflow_name}")
 
             # The 'definition' column is already a dict because of the JSON type.
             definition = wf.get("definition")
-            logger.info(f"Found definition: {definition}")
+            logger.debug(f"Found definition: {definition}")
             if not isinstance(definition, dict):
                 logger.error(f"Workflow '{workflow_name}' has an invalid definition type: {type(definition)}")
                 continue

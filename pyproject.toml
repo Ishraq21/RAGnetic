@@ -65,7 +65,11 @@ dependencies     = [
   "sqlalchemy",
   "tiktoken",
   'pyarrow',
-  'langgraph-checkpoint-postgres'
+  'langgraph-checkpoint-postgres',
+  "RestrictedPython",
+  "python-hcl2",
+  "sql-metadata",
+  "lark"
 ]
 scripts = { "ragnetic" = "cli:app" }
 

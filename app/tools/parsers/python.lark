@@ -1,0 +1,17 @@
+?start: program
+
+program: (statement | NEWLINE)*
+
+statement: function_def
+
+function_def: "def" NAME "(" ")" ":" suite
+
+suite: NEWLINE INDENT statement+ DEDENT
+
+%import common.CNAME -> NAME
+%import common.NEWLINE
+%import common.WS_INLINE
+%ignore WS_INLINE
+
+%import common.INDENT
+%import common.DEDENT

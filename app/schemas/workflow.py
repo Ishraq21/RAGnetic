@@ -89,6 +89,18 @@ class Skill(BaseModel):
     instructions: str = Field(..., description="The detailed, step-by-step instructions for the LLM to follow when executing this skill.")
     parameters: Dict[str, Any] = Field(default_factory=dict, description="A dictionary defining the expected parameters for the skill.")
 
+class Plan(BaseModel):
+    thought: str = Field(
+        ..., description="The agent's reasoning for its next action."
+    )
+    action: str = Field(
+        ..., description="The name of the skill or tool to execute next."
+    )
+    action_input: Dict[str, Any] = Field(
+        default_factory=dict, description="The input parameters for the chosen action."
+    )
+
+
 # Pydantic's forward reference handling
 IfThenStep.model_rebuild()
 LoopStep.model_rebuild()
