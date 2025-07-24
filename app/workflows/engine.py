@@ -1,3 +1,5 @@
+# app/workflows/engine.py
+
 import logging
 import json
 import os
@@ -18,13 +20,17 @@ from sqlalchemy import select, update, insert
 from langchain_core.runnables import Runnable
 from langchain_core.exceptions import OutputParserException
 
+# ADDED IMPORTS FOR GENERIC RETRY LOGIC
+import httpx
+import openai
+
 from app.agents.config_manager import load_agent_config
 from app.core.config import get_api_key, get_path_settings, get_llm_model
 from app.db.models import human_tasks_table, workflow_runs_table, workflows_table
 from app.schemas.agent import AgentConfig
 from app.schemas.workflow import (
     AgentCallStep,
-    HumanInTheLoopStep,
+    HumanInTheLoopStep,  # Corrected from HumanIn_the_LoopStep
     IfThenStep,
     LoopStep,
     Skill,
@@ -32,7 +38,7 @@ from app.schemas.workflow import (
     ToolCallStep,
     Workflow,
     WorkflowStep,
-    Plan  # Plan is now in app.schemas.workflow
+    Plan
 )
 from app.tools.parsers.code_parser_tool import CodeParserTool
 from app.tools.parsers.notebook_parser_tool import NotebookParserTool
@@ -63,24 +69,29 @@ def _serialize_for_db(data: Any) -> Any:
 
 class WorkflowEngine:
     MAX_REACT_ITERATIONS = 10
+    # Added constants for backoff strategy
+    BASE_BACKOFF_SECONDS = 1.0  # Initial delay for exponential backoff
+    MAX_BACKOFF_SECONDS = 60.0  # Maximum delay for exponential backoff
 
     # Universal Tool Policy to be injected into the system prompt
     UNIVERSAL_TOOL_POLICY = """
---- UNIVERSAL TOOL POLICY ---
-1. Your action must be a valid JSON object matching the `Plan` schema.
-2. Pay close attention to the `action_input` field:
-    • It MUST be a JSON object.
-    • Keys must exactly match the parameter names in the “Input Parameters” for your chosen action.
-    • All **required** parameters must be present.
-3. If you choose a [TOOL] action:
-    • Fill in all required parameters (e.g. `hcl_code`, `resource_type`).
-    • If a parameter can be safely defaulted, inject it (e.g. `resource_type="aws_instance"`).
-4. As soon as a tool returns its result **and** that result completes the user’s objective, you MUST:
-    • Emit action `"finish"`.
-    • Place the serialized output in `action_input.final_answer`.
-5. Only continue iterating if you truly need another tool to fulfill the objective.
---- END UNIVERSAL TOOL POLICY ---
-"""
+    --- UNIVERSAL TOOL POLICY ---
+    1. Your action must be a valid JSON object matching the `Plan` schema.
+    2. Pay close attention to the `action_input` field:
+        • It MUST be a JSON object.
+        • Keys must exactly match the parameter names in the “Input Parameters” for your chosen action.
+        • All **required** parameters must be present.
+    3. When using a [TOOL] action:
+        • Select the tool that is most relevant and efficient for the current sub-objective.
+        • Fill in all required parameters. If a parameter can be safely defaulted or inferred, inject it.
+        • ALWAYS process the `result` from a tool. Do NOT assume the tool's return is the final answer without processing.
+    4. As soon as the user's objective is **fully and completely met** by processed information or a tool's result, you **MUST** use the `"finish"` action.
+        • If the user's objective was to retrieve specific data (like a fact, a piece of information, or a calculation result), the `action_input.final_answer` MUST contain **ONLY** that requested data, concise and direct. Remove any API metadata, thoughts, or extra commentary.
+        • If the objective was to perform an action (e.g., send a message, update a record), the `action_input.final_answer` should be a brief confirmation of success to the user.
+    5. Continue iterating only if further actions are strictly necessary to fully achieve the user's objective. Do not generate extraneous steps.
+    6. If you encounter an error or cannot fulfill the objective, explain clearly to the user why and suggest what they might do next.
+    --- END UNIVERSAL TOOL POLICY ---
+    """
 
     def __init__(self, db_engine: Any):
         self.db_engine = db_engine
@@ -103,7 +114,15 @@ class WorkflowEngine:
         if not self.agent_config:
             raise ValueError("Agent configuration is not loaded.")
         model_name = self.agent_config.llm_model
-        self.llm = get_llm_model(model_name=model_name, model_params=self.agent_config.model_params)
+        model_params = self.agent_config.model_params  # Get the model_params object
+
+        self.llm = get_llm_model(
+            model_name=model_name,
+            model_params=model_params,
+            # Ensuring max_retries and timeout from model_params are explicitly passed
+            retries=model_params.max_retries if model_params and model_params.max_retries is not None else 0,
+            timeout=model_params.timeout if model_params and model_params.timeout is not None else 60,
+        )
         return self.llm
 
     def run_workflow(
@@ -347,12 +366,22 @@ class WorkflowEngine:
 
         system_prompt = f"""You are a helpful AI agent. Complete the objective by thinking step-by-step and choosing one action at a time.
 {self.UNIVERSAL_TOOL_POLICY}
+
 --- AVAILABLE ACTIONS AND THEIR PARAMETERS ---
 {action_details_str}
 --- END AVAILABLE ACTIONS ---
+
 --- WORKFLOW CONTEXT (Results from previous steps) ---
 {ctx_json}
 --- END CONTEXT ---
+
+**Execution Guidelines:**
+- For data retrieval tasks (e.g., "get X", "find Y", "fetch Z"), you are expected to:
+    1. Select and use the appropriate tool to get the raw data.
+    2. Immediately process the tool's `result` to extract the specific information requested.
+    3. Conclude the turn by using the `finish` action, with the extracted, refined answer in `action_input.final_answer`.
+- If the objective is ambiguous or requires more information from the user, you may ask clarifying questions.
+- Always provide direct answers based on your capabilities and tools.
 
 Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
         return [
@@ -381,71 +410,141 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
         max_iterations = getattr(step, "max_iterations", self.MAX_REACT_ITERATIONS)
         history: List[BaseMessage] = []
         trace: List[Dict[str, Any]] = []
+        # Re-added the actions list acquisition
         available_actions = self._get_available_actions()
+        plan = None  # Initialize plan as None
 
-        plan = None
         for i in range(max_iterations):
             logger.debug(f"[{step.name}] ReAct iteration {i + 1}/{max_iterations}")
             prompt = self._build_agent_prompt(task, available_actions, history)
 
-            try:
-                llm = self._get_llm()
+            # Retrieve retry parameters from agent_config.model_params
+            llm_max_retries = self.agent_config.model_params.max_retries if self.agent_config.model_params and self.agent_config.model_params.max_retries is not None else 3  # Default to 3 retries
 
-                if hasattr(llm, "with_structured_output"):
-                    structured_llm = llm.with_structured_output(Plan, method="function_calling")
+            # Use fixed base for backoff, capped at MAX_BACKOFF_SECONDS
+            # initial_backoff_delay is BASE_BACKOFF_SECONDS for the first retry, then exponential
 
-                    try:
-                        plan = await structured_llm.ainvoke(prompt)
-                        if not isinstance(plan.action_input, dict):
-                            raise ValidationError([{"loc": ("action_input",), "msg": "value is not a valid dict",
-                                                    "type": "type_error.dict"}], Plan)
-                        logger.info(f"Thought: {plan.thought}")
-                        break
-                    except (ValidationError, OutputParserException) as e:
-                        logger.error(
-                            f"LLM structured output validation/parsing failed (attempt {i + 1}/{max_iterations}): {e}")
+            for api_retry_count in range(
+                    llm_max_retries + 1):  # Loop from 0 to llm_max_retries (total attempts = llm_max_retries + 1)
+                try:
+                    llm = self._get_llm()
+
+                    # Attempt structured output first
+                    if hasattr(llm, "with_structured_output"):
+                        structured_llm = llm.with_structured_output(Plan, method="function_calling")
                         try:
-                            raw_llm_output = await llm.ainvoke(prompt)
-                            plan = self._parse_plan_fallback(raw_llm_output)
+                            plan = await structured_llm.ainvoke(prompt)
                             if not isinstance(plan.action_input, dict):
                                 raise ValidationError([{"loc": ("action_input",), "msg": "value is not a valid dict",
                                                         "type": "type_error.dict"}], Plan)
-                            logger.info(f"Fallback successful. Thought: {plan.thought}")
-                            break
-                        except Exception as fallback_e:
+                            logger.info(f"Thought: {plan.thought}")
+                            break  # Exit inner api_retry loop on successful structured parse
+                        except (httpx.RequestError, openai.APIConnectionError) as e:
+                            logger.debug(
+                                f"Connection error during structured LLM call (ReAct iter {i + 1}, api_retry {api_retry_count + 1}/{llm_max_retries}): {e}. Retrying...")
+                            if api_retry_count < llm_max_retries:  # Only sleep if more retries are available
+                                await asyncio.sleep(
+                                    min(self.BASE_BACKOFF_SECONDS * (2 ** api_retry_count), self.MAX_BACKOFF_SECONDS))
+                            continue  # Continue to next api_retry
+                        except (ValidationError, OutputParserException) as e:
+                            # Parsing/Validation error, not a network error. Try fallback.
                             logger.error(
-                                f"Fallback parsing also failed (attempt {i + 1}/{max_iterations}): {fallback_e}")
-                            if i == max_iterations - 1:
-                                raise e if isinstance(e, (ValidationError, OutputParserException)) else fallback_e
-                else:
-                    raw = await llm.ainvoke(prompt)
-                    plan = self._parse_plan_fallback(raw)
-                    if not isinstance(plan.action_input, dict):
-                        raise ValidationError(
-                            [{"loc": ("action_input",), "msg": "value is not a valid dict", "type": "type_error.dict"}],
-                            Plan)
-                    logger.info(f"Thought: {plan.thought}")
+                                f"LLM structured output validation/parsing failed (ReAct iter {i + 1}, api_retry {api_retry_count}): {e}")
+                            # Fallback to raw invoke and custom parsing
+                            try:
+                                raw_llm_output = await llm.ainvoke(prompt)
+                                plan = self._parse_plan_fallback(raw_llm_output)
+                                if not isinstance(plan.action_input, dict):
+                                    raise ValidationError(
+                                        [{"loc": ("action_input",), "msg": "value is not a valid dict",
+                                          "type": "type_error.dict"}], Plan)
+                                logger.info(f"Fallback successful. Thought: {plan.thought}")
+                                break  # Exit inner api_retry loop on successful fallback parse
+                            except (httpx.RequestError, openai.APIConnectionError) as conn_err_fallback:
+                                logger.debug(
+                                    f"Connection error during fallback LLM call (ReAct iter {i + 1}, api_retry {api_retry_count + 1}/{llm_max_retries}): {conn_err_fallback}. Retrying...")
+                                if api_retry_count < llm_max_retries:  # Only sleep if more retries are available
+                                    await asyncio.sleep(min(self.BASE_BACKOFF_SECONDS * (2 ** api_retry_count),
+                                                            self.MAX_BACKOFF_SECONDS))
+                                continue  # Continue to next api_retry
+                            except Exception as fallback_e:
+                                logger.error(
+                                    f"Fallback parsing also failed (ReAct iter {i + 1}, api_retry {api_retry_count}): {fallback_e}",
+                                    exc_info=True)
+                                # If all retries are exhausted, or this is a non-retriable parsing error after all attempts, break and let outer loop handle.
+                                break  # Break inner retry loop, plan remains None or invalid if not set.
+                    else:  # For LLMs without structured_output built-in
+                        try:
+                            raw = await llm.ainvoke(prompt)
+                            plan = self._parse_plan_fallback(raw)
+                            if not isinstance(plan.action_input, dict):
+                                raise ValidationError(
+                                    [{"loc": ("action_input",), "msg": "value is not a valid dict",
+                                      "type": "type_error.dict"}],
+                                    Plan)
+                            logger.info(f"Thought: {plan.thought}")
+                            break  # Exit inner api_retry loop on success
+                        except (httpx.RequestError, openai.APIConnectionError) as conn_err:
+                            logger.debug(
+                                f"Connection error during LLM call (ReAct iter {i + 1}, api_retry {api_retry_count + 1}/{llm_max_retries}): {conn_err}. Retrying...")
+                            if api_retry_count < llm_max_retries:  # Only sleep if more retries are available
+                                await asyncio.sleep(
+                                    min(self.BASE_BACKOFF_SECONDS * (2 ** api_retry_count), self.MAX_BACKOFF_SECONDS))
+                            continue  # Continue to next api_retry
+                        except Exception as e:
+                            logger.error(
+                                f"An unexpected error occurred during agent call without structured output (ReAct iter {i + 1}, api_retry {api_retry_count}): {e}",
+                                exc_info=True)
+                            break  # Break inner retry loop, plan remains None or invalid.
+
+                except (httpx.RequestError, openai.APIConnectionError) as e:
+                    # This catches any network errors if they occur directly outside the specific invoke attempts
+                    logger.debug(
+                        f"Connection error during agent call (ReAct iter {i + 1}, api_retry {api_retry_count + 1}/{llm_max_retries}): {e}. Retrying...")
+                    if api_retry_count < llm_max_retries:  # Only sleep if more retries are available
+                        await asyncio.sleep(min(self.BASE_BACKOFF_SECONDS * (2 ** api_retry_count),
+                                                self.MAX_BACKOFF_SECONDS))  # Exponential backoff
+                    continue  # Continue to next api_retry
+                except Exception as e:
+                    # Catch any other unexpected errors that are not connection or parsing related
+                    logger.error(
+                        f"An unexpected non-connection/non-parsing error occurred during agent call (ReAct iter {i + 1}, api_retry {api_retry_count}): {e}",
+                        exc_info=True)
+                    # No retry for these types of errors in this loop, so we break out of the retry loop.
                     break
 
-            except Exception as e:
-                logger.error(f"An unexpected error occurred during agent call (attempt {i + 1}/{max_iterations}): {e}",
-                             exc_info=True)
-                if i == max_iterations - 1:
-                    raise
+                    # After the inner api_retry loop, check if a valid plan was obtained
+            if plan:  # If plan was set successfully in the inner loop
+                break  # Exit the outer ReAct iteration loop, as we have a valid plan
+            else:
+                # If plan is still None here, it means the LLM did not provide a parseable plan for this ReAct iteration,
+                # even after retries for connection issues. Log a warning and the outer `for i in range(max_iterations)` loop will handle proceeding to the next ReAct iteration.
+                logger.warning(
+                    f"No valid plan obtained from LLM after all attempts in ReAct iteration {i + 1}. Moving to next iteration (if allowed).")
 
+        # Final check and processing of the obtained plan
+        # This block is executed AFTER all MAX_REACT_ITERATIONS attempts.
         if plan is None:
-            raise RuntimeError(f"Failed to get a valid plan after {max_iterations} iterations.")
+            raise RuntimeError(
+                f"Failed to get a valid plan after {max_iterations} ReAct iterations, possibly due to persistent issues with the LLM API or its output format.")
 
-        logger.debug(f"Action: {plan.action} | Input: {plan.action_input}")
-        history.append(AIMessage(content=plan.json()))
-        trace.append(
+        # Always capture trace and log step end here, after plan is confirmed not None
+        # and before any early exit on "finish" or further action execution.
+        self.context[f"{step.name}_trace"] = trace
+        logger.debug(f"Action: {plan.action} | Input: {plan.action_input}")  # Moved here, now guarded by `if plan`
+        history.append(AIMessage(content=plan.json()))  # Ensure history is updated after plan is confirmed
+        trace.append(  # Ensure trace is updated after plan is confirmed
             {"iteration": i + 1, "plan": json.loads(plan.json())})
+
+        # This log now runs after the trace is fully captured for the step
+        logger.info(f"--- End Agent Step: '{step.name}' ---")
 
         if plan.action == "finish":
             logger.info("Agent signaled finish.")
             self.context[step.name] = plan.action_input.get(
                 "final_answer", "Completed"
             )
+            return  # Exit the async function for this step if agent finished.
         else:
             try:
                 if plan.action in self.skills:
@@ -476,8 +575,8 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
                     {"error": str(e)})))
                 trace[-1]["error"] = str(e)
 
-        self.context[f"{step.name}_trace"] = trace
-        logger.info(f"--- End Agent Step: '{step.name}' ---")
+        # Removed redundant trace assignment from here, it's now handled before the 'if plan.action == "finish"' block.
+        # Removed redundant end logging from here.
 
     async def _invoke_tool(self, tool_name: str, params: Dict[str, Any]):
         tool = self._get_tool(tool_name)
