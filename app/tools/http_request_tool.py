@@ -1,7 +1,7 @@
 # app/tools/http_request_tool.py
 
-from typing import Dict, Any, Optional, Literal
 import requests
+from typing import Dict, Any, Optional, Literal, Type
 from pydantic.v1 import BaseModel, Field
 
 class ToolInput(BaseModel):
@@ -13,11 +13,30 @@ class ToolInput(BaseModel):
 
 class HTTPRequestTool:
     """A tool for making HTTP requests."""
+    name: str = "http_request_tool"
+    description: str = "A tool for making HTTP requests (GET, POST, PUT, DELETE) to a specified URL."
+    args_schema: Type[BaseModel] = ToolInput
 
-    def run(self, method: str, url: str, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, Any]] = None, json_payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def get_input_schema(self) -> Dict[str, Any]:
+        return ToolInput.schema()
+
+    def run(self, **kwargs: Any) -> Dict[str, Any]:
         """
         Executes an HTTP request and returns the JSON response.
         """
+        try:
+            # Parse kwargs into the ToolInput model for validation and clear access
+            parsed_input = ToolInput(**kwargs)
+        except Exception as e:
+            # Handle validation errors explicitly
+            return {"error": f"Invalid input for HTTPRequestTool: {e}"}
+
+        method = parsed_input.method
+        url = parsed_input.url
+        params = parsed_input.params
+        headers = parsed_input.headers
+        json_payload = parsed_input.json_payload
+
         try:
             response = requests.request(
                 method=method,
@@ -32,8 +51,5 @@ class HTTPRequestTool:
         except requests.exceptions.RequestException as e:
             return {"error": f"HTTP request failed: {e}"}
         except ValueError: # Catches JSON decoding errors
-            return {"error": "Failed to decode JSON response.", "content": response.text}
-
-    # This method allows the engine to discover the tool's input schema
-    def get_input_schema(self) -> Dict[str, Any]:
-        return ToolInput.schema()
+            # Ensure response text is included for debugging
+            return {"error": "Failed to decode JSON response.", "content": response.text if response else "No response content."}
