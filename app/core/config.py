@@ -36,12 +36,26 @@ MODEL_PROVIDER_MAPPING = {
 _llm_cache: Dict[str, Any] = {}
 
 
+# --- FIX: New function to intelligently find the project root ---
+@lru_cache(maxsize=1)
+def find_project_root() -> Path:
+    """Searches upward from the current directory for the '.ragnetic' folder."""
+    current_dir = Path.cwd().resolve()
+    while current_dir != current_dir.parent:
+        if (current_dir / ".ragnetic").is_dir():
+            return current_dir
+        current_dir = current_dir.parent
+    # Fallback to the current working directory if .ragnetic is not found
+    return Path.cwd().resolve()
+
+
 # --- Core Configuration Functions ---
 
 @lru_cache(maxsize=1)
 def _get_config_parser() -> configparser.ConfigParser:
-    """Reads and caches the main config.ini file."""
-    project_root = Path(os.environ.get("RAGNETIC_PROJECT_ROOT", Path.cwd()))
+    """Reads and caches the main config.ini file from the project root."""
+    # Use the new find_project_root function
+    project_root = Path(os.environ.get("RAGNETIC_PROJECT_ROOT", find_project_root()))
     config_file_path = project_root / ".ragnetic" / "config.ini"
     config = configparser.ConfigParser()
     if config_file_path.exists():
@@ -55,9 +69,8 @@ def _get_config_parser() -> configparser.ConfigParser:
 def get_path_settings() -> Dict[str, Path | List[Path]]:
     """Retrieves and resolves all critical application paths."""
     config = _get_config_parser()
-    project_root = Path(os.environ.get("RAGNETIC_PROJECT_ROOT", Path.cwd())).resolve()
-    if config.has_option('PATH_SETTINGS', 'PROJECT_ROOT'):
-        project_root = (project_root / config.get('PATH_SETTINGS', 'PROJECT_ROOT')).resolve()
+    # Use the new find_project_root function
+    project_root = Path(os.environ.get("RAGNETIC_PROJECT_ROOT", find_project_root()))
 
     paths = {
         "PROJECT_ROOT": project_root,
@@ -108,7 +121,6 @@ def get_server_api_keys() -> List[str]:
         if keys_str:
             return [key.strip() for key in keys_str.split(",") if key.strip()]
     return []
-
 
 
 def get_db_connection(name: str) -> str:
@@ -224,18 +236,15 @@ def get_llm_model(
     # Find the provider and initialize the model
     for prefix, (model_class, service_key) in MODEL_PROVIDER_MAPPING.items():
         if model_name.startswith(prefix):
-            # Add API key if the service requires one
             if service_key:
                 api_key = get_api_key(service_key)
                 if not api_key:
                     raise ValueError(f"API key for {service_key} is required to use model {model_name}.")
-                # Different providers have different argument names for the key
                 if service_key == "google":
                     model_kwargs["google_api_key"] = api_key
                 else:
                     model_kwargs["api_key"] = api_key
 
-            # Specific handling for local Ollama models
             if model_name.startswith("ollama/"):
                 model_name_only = model_name.split("/", 1)[1]
                 model_kwargs["model"] = model_name_only
@@ -243,7 +252,6 @@ def get_llm_model(
             else:
                 model_kwargs["model"] = model_name
 
-            # Initialize the model class
             try:
                 llm = model_class(**model_kwargs)
                 _llm_cache[cache_key] = llm
@@ -269,4 +277,4 @@ def get_cors_settings() -> List[str]:
         if origins_str:
             return [origin.strip() for origin in origins_str.split(',') if origin.strip()]
 
-    return ["*"]  # Default to all origins if not set
+    return ["*"]

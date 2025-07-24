@@ -196,7 +196,6 @@ class WorkflowEngine:
         try:
             asyncio.run(self._execute_steps(
                 workflow.steps, start_index=start_step_index, run_id=run_id
-                # FIX: Changed 'start_step_index' to 'start_index'
             ))
             logger.info(f"Workflow run '{run_id}' completed successfully.")
             self._update_run_status(run_id, "completed", self.context)
@@ -386,7 +385,7 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
 
         plan = None
         for i in range(max_iterations):
-            logger.info(f"[{step.name}] ReAct iteration {i + 1}/{max_iterations}")
+            logger.debug(f"[{step.name}] ReAct iteration {i + 1}/{max_iterations}")
             prompt = self._build_agent_prompt(task, available_actions, history)
 
             try:
@@ -437,7 +436,7 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
         if plan is None:
             raise RuntimeError(f"Failed to get a valid plan after {max_iterations} iterations.")
 
-        logger.info(f"Action: {plan.action} | Input: {plan.action_input}")
+        logger.debug(f"Action: {plan.action} | Input: {plan.action_input}")
         history.append(AIMessage(content=plan.json()))
         trace.append(
             {"iteration": i + 1, "plan": json.loads(plan.json())})
@@ -463,7 +462,7 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
                     )
 
                 serialized_result = _serialize_for_db(result)
-                logger.info(f"Result: {str(serialized_result)[:500]}")
+                logger.debug(f"Result: {str(serialized_result)[:500]}")
                 history.append(
                     ToolMessage(content=json.dumps({"result": serialized_result}), tool_name=plan.action,
                                 tool_call_id=str(uuid.uuid4()))
@@ -520,7 +519,7 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
                 logger.debug(
                     f"Retriever returned {len(result)} documents. Consolidating into a single text block."
                 )
-                result = "\n\n".join(doc.page_content for doc in result)  # FIX: Removed '---' separator
+                result = "\n\n".join(doc.page_content for doc in result)
 
             self.context[step.name] = _serialize_for_db(result)
 

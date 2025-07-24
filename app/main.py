@@ -1,11 +1,14 @@
 # app/main.py
+import asyncio
+import json
+
 import redis.asyncio as redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 import os
 import logging
 import logging.config
-import json
-import asyncio
+from queue import Queue
+from logging.handlers import QueueListener, QueueHandler
 from uuid import uuid4
 from typing import Optional, List, Dict, Any, Tuple
 from multiprocessing import Process
@@ -22,19 +25,16 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
-# --- RAGnetic Imports ---
-
 # Database & Models
 from app.db.models import chat_sessions_table, chat_messages_table, users_table, agent_runs, agent_run_steps, workflows_table
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, insert, update, text, delete
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError # <-- ADD IntegrityError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 
 # Core Components
 from app.core.config import get_path_settings, get_server_api_keys, get_log_storage_config, \
     get_memory_storage_config, get_db_connection_config, get_db_connection, get_cors_settings, _get_config_parser
 from app.db import initialize_db_connections, get_db
-from app.core.structured_logging import JSONFormatter
 from app.core.validation import sanitize_for_path
 from app.core.security import get_http_api_key, get_websocket_api_key
 from app.schemas.agent import AgentConfig
@@ -46,7 +46,7 @@ from app.agents.config_manager import get_agent_configs, load_agent_config
 from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow, AgentState
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
-from langchain_core.documents import Document  # <-- CORRECTED IMPORT
+from app.core.structured_logging import get_logging_config, DatabaseLogHandler, ragnetic_logs_table
 
 # Tools
 from app.tools.sql_tool import create_sql_toolkit
@@ -62,7 +62,7 @@ import alembic.config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 
-# --- API Routers ---
+# API Routers
 from app.api.agents import router as agents_api_router
 from app.api.audit import router as audit_api_router
 from app.api.query import router as query_api_router
@@ -70,81 +70,19 @@ from app.api.evaluation import router as evaluation_api_router
 from app.api.metrics import router as metrics_api_router
 from app.api.schedules import router as schedules_api_router
 from app.api.webhooks import setup_dynamic_webhooks
-
 from app.api import workflows
 from app.db.models import schedules_table
 import re
 
-# --- Base Logging Configuration ---
-_APP_PATHS = get_path_settings()
-LOGGING_CONFIG = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "default": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"},
-        "json": {"()": "app.core.structured_logging.JSONFormatter"},
-        "metrics_json": {
-            "()": "app.core.structured_logging.JSONFormatter",
-            "format": "%(message)s"
-        }
-    },
-    "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "default"},
-        "metrics_file_json": {
-            "class": "logging.handlers.TimedRotatingFileHandler",
-            "formatter": "metrics_json",
-            "filename": _APP_PATHS["LOGS_DIR"] / "ragnetic_metrics.json",
-            "when": "midnight",
-            "backupCount": 7,
-            "encoding": "utf-8"
-        },
-        "database_handler": {
-            "()": "app.core.structured_logging.DatabaseLogHandler",
-            "connection_name": "ragnetic_logs",
-            "table_name": "ragnetic_logs"
-        }
-    },
-    "loggers": {
-        "ragnetic": {"handlers": ["console", "database_handler"], "level": "INFO", "propagate": False},
-        "ragnetic.metrics": {
-            "handlers": ["database_handler"],
-            "level": "INFO",
-            "propagate": False
-        },
-        "uvicorn.error": {"handlers": ["console"], "level": "INFO"},
-        "uvicorn.access": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "sqlalchemy.engine": {"handlers": ["console"], "level": "WARNING"},
-    },
-    "root": {"handlers": ["console"], "level": "INFO"},
-}
-log_storage_config = get_log_storage_config()
-if log_storage_config.get("type") == "file":
-    log_dir = _APP_PATHS["LOGS_DIR"]
-    log_dir.mkdir(exist_ok=True)
-    LOGGING_CONFIG["handlers"]["app_file"] = {
-        "class": "logging.handlers.TimedRotatingFileHandler",
-        "formatter": "default",
-        "filename": log_dir / "ragnetic_app.log",
-        "when": "midnight", "backupCount": 7, "encoding": "utf-8"
-    }
-    LOGGING_CONFIG["loggers"]["ragnetic"]["handlers"].append("app_file")
-    LOGGING_CONFIG["loggers"]["ragnetic.metrics"]["handlers"].append("metrics_file_json")
-elif log_storage_config.get("type") == "db":
-    conn_name = log_storage_config.get("connection_name")
-    table_name = log_storage_config.get("log_table_name", "ragnetic_logs")
-    if conn_name:
-        LOGGING_CONFIG["handlers"]["database"] = {
-            "()": "app.core.structured_logging.DatabaseLogHandler",
-            "connection_name": conn_name,
-            "table_name": table_name,
-        }
-        LOGGING_CONFIG["loggers"]["ragnetic"]["handlers"].append("database")
-        LOGGING_CONFIG["loggers"]["ragnetic.metrics"]["handlers"].append("database")
-logging.config.dictConfig(LOGGING_CONFIG)
+
+# Get the main application logger after configuration is applied
 logger = logging.getLogger("ragnetic")
 load_dotenv()
 
+
+
 # --- Global Settings & App Initialization ---
+_APP_PATHS = get_path_settings()
 _PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
 _DATA_DIR = _APP_PATHS["DATA_DIR"]
 
@@ -159,8 +97,7 @@ app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credenti
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-
-
+log_listener: Optional[QueueListener] = None
 
 # --- WebSocket Connection Managers (Dual Mode) ---
 class MemoryConnectionManager:
@@ -360,7 +297,37 @@ def _sync_workflows_from_files():
 
 @app.on_event("startup")
 async def startup_event():
-    global _watcher_process, _scheduler_process
+    global _watcher_process, _scheduler_process, log_listener
+
+    # --- Logging Setup ---
+    # 1. Configure base handlers (console, file) using the simplified config
+    logging.config.dictConfig(get_logging_config())
+
+    # 2. Check if DB logging is enabled in your config.ini
+    log_storage_cfg = get_log_storage_config()
+    if log_storage_cfg.get("type") == "db":
+        # 3. Set up the queue-based DB logging manually
+        log_queue = Queue(-1)
+
+        db_handler = DatabaseLogHandler(
+            connection_name=log_storage_cfg.get("connection_name"),
+            table=ragnetic_logs_table
+        )
+
+        # This handler is what your loggers will use. It just puts records on the queue.
+        queue_handler = QueueHandler(log_queue)
+
+        # This listener pulls records from the queue and sends them to the db_handler.
+        log_listener = QueueListener(log_queue, db_handler)
+        log_listener.start()
+
+        # 4. Manually add the queue_handler to the loggers that need to write to the DB.
+        db_logger_names = ["ragnetic", "app.workflows", "ragnetic.metrics"]
+        for name in db_logger_names:
+            logging.getLogger(name).addHandler(queue_handler)
+
+        logging.getLogger("ragnetic").info("Database logging initialized with QueueListener.")
+
     logger.info("Application startup: Initializing components.")
     if isinstance(manager, RedisConnectionManager):
         try:
@@ -427,16 +394,10 @@ async def startup_event():
         return
 
     _watcher_process = Process(target=start_watcher, args=(_DATA_DIR,))
-    _watcher_process.daemon = False  # <-- ADDED
+    _watcher_process.daemon = False
     _watcher_process.start()
     logger.info("Automated file watcher started.")
 
-    # --- START: New scheduler process (Task 3) ---
-    schedule_config = {
-        "workflows": [
-            {"workflow_name": "hourly_report_workflow"},  # Placeholder for a real config
-        ]
-    }
     _scheduler_process = Process(target=start_scheduler_process, args=())
     _scheduler_process.daemon = False
     _scheduler_process.start()
@@ -445,7 +406,7 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global _watcher_process, _scheduler_process
+    global _watcher_process, _scheduler_process, log_listener
     if isinstance(manager, RedisConnectionManager) and manager.connection:
         await manager.connection.close()
         logger.info("Redis connection closed.")
@@ -455,13 +416,14 @@ async def shutdown_event():
         _watcher_process.join(timeout=5)
         logger.info("File watcher process stopped.")
 
-    # --- START: Stop the scheduler process (Task 3) ---
     if _scheduler_process and _scheduler_process.is_alive():
         _scheduler_process.terminate()
         _scheduler_process.join(timeout=5)
         logger.info("Workflow scheduler process stopped.")
-    # --- END: Stop the scheduler process (Task 3) ---
 
+    if log_listener:
+        log_listener.stop()
+        logger.info("Logging queue listener stopped.")
 
 
 # --- INCLUDE THE API ROUTERS ---
@@ -470,7 +432,6 @@ app.include_router(audit_api_router)
 app.include_router(query_api_router)
 app.include_router(evaluation_api_router)
 app.include_router(metrics_api_router)
-
 app.include_router(workflows.router, prefix="/api/v1")
 app.include_router(schedules_api_router, prefix="/api/v1")
 
