@@ -72,9 +72,100 @@ _BENCHMARK_DIR = _APP_PATHS["BENCHMARK_DIR"]
 _WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
 _SKILLS_DIR = _APP_PATHS["SKILLS_DIR"]
 
-
 # --- Load Environment Variables ---
 load_dotenv(dotenv_path=_PROJECT_ROOT / ".env")
+
+# --- Custom SUCCESS Log Level ---
+SUCCESS_LEVEL = 25
+logging.addLevelName(SUCCESS_LEVEL, "SUCCESS")
+
+def success(self, message, *args, **kws):
+    if self.isEnabledFor(SUCCESS_LEVEL):
+        self._log(SUCCESS_LEVEL, message, args, **kws)
+
+logging.Logger.success = success
+
+class TyperLogger(logging.Handler):
+    """A custom logging handler that uses typer.secho for colored output."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.level_styles = {
+            logging.INFO: {"fg": typer.colors.BLUE},
+            SUCCESS_LEVEL: {"fg": typer.colors.GREEN, "bold": True},
+            logging.WARNING: {"fg": typer.colors.YELLOW},
+            logging.ERROR: {"fg": typer.colors.RED},
+            logging.CRITICAL: {"fg": typer.colors.RED, "bold": True},
+        }
+        self.level_prefixes = {
+            logging.INFO: "INFO     ",
+            SUCCESS_LEVEL: "SUCCESS  ",
+            logging.WARNING: "WARNING  ",
+            logging.ERROR: "ERROR    ",
+            logging.CRITICAL: "CRITICAL ",
+        }
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            style = self.level_styles.get(record.levelno, {})
+            prefix = self.level_prefixes.get(record.levelno, "")
+            if "\n" in msg:
+                lines = msg.splitlines()
+                first_line = prefix + lines[0]
+                indented_lines = [f"   {line}" for line in lines[1:]]
+                final_msg = "\n".join([first_line] + indented_lines)
+            else:
+                final_msg = prefix + msg
+            typer.secho(final_msg, **style)
+        except Exception:
+            self.handleError(record)
+
+
+def setup_cli_logging():
+    """Configures logging for clear, colored CLI command feedback."""
+
+    # This works whether the script is run directly or as an installed package,
+    # removing the dependency on a hardcoded package name.
+    handler_class_path = f"{TyperLogger.__module__}.{TyperLogger.__name__}"
+
+    logging_config = {
+        'version': 1,
+        'disable_existing_loggers': False,
+        'formatters': {
+            'cli_formatter': {
+                'format': '%(message)s'
+            }
+        },
+        'handlers': {
+            'typer_handler': {
+                'class': handler_class_path,  # Use the new, dynamic path
+                'formatter': 'cli_formatter',
+                'level': 'INFO'
+            }
+        },
+        'loggers': {
+            'ragnetic': {'handlers': ['typer_handler'], 'level': 'INFO', 'propagate': False},
+            '__main__': {'handlers': ['typer_handler'], 'level': 'INFO', 'propagate': False},
+            'app': {'handlers': ['typer_handler'], 'level': 'INFO', 'propagate': False},
+            'alembic': {'handlers': ['typer_handler'], 'level': 'WARNING', 'propagate': False},
+            'sqlalchemy': {'handlers': ['typer_handler'], 'level': 'WARNING', 'propagate': False},
+            'langchain': {'handlers': ['typer_handler'], 'level': 'WARNING', 'propagate': False},
+            'langchain_core': {'handlers': ['typer_handler'], 'level': 'WARNING', 'propagate': False},
+            'langchain_community': {'handlers': ['typer_handler'], 'level': 'WARNING', 'propagate': False},
+            'uvicorn': {'handlers': ['typer_handler'], 'level': 'INFO', 'propagate': False},
+            'uvicorn.access': {'handlers': ['typer_handler'], 'level': 'WARNING', 'propagate': False},
+            'celery': {'handlers': ['typer_handler'], 'level': 'INFO', 'propagate': False},
+            'celery.app': {'handlers': ['typer_handler'], 'level': 'WARNING', 'propagate': False},
+        },
+        'root': {
+            'handlers': ['typer_handler'],
+            'level': 'INFO'
+        }
+    }
+    logging.config.dictConfig(logging_config)
+
+# --- Initialize Logging and Typer App ---
+logger = logging.getLogger(__name__)
 
 
 def _update_env_file(env_vars: Dict[str, str]):
@@ -115,9 +206,6 @@ def _validate_agent_name_cli(agent_name: str):
         raise typer.Exit(code=1)
 
 
-def setup_cli_logging():
-    """Configures a simple logger for CLI command feedback."""
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 
 def _get_sync_db_engine():
@@ -166,8 +254,6 @@ def run_workflow_cli(
         ),
 ):
     """Triggers a workflow run by calling the local API endpoint."""
-    setup_cli_logging()
-
     # Read server host and port from config file
     config = configparser.ConfigParser()
     config.read(_CONFIG_FILE)
@@ -233,7 +319,6 @@ def reset_db(
     Connects to the database and drops all known application tables
     and the Alembic versioning table to ensure a clean slate.
     """
-    setup_cli_logging()
     typer.secho("--- DANGEROUS: Database Reset ---", fg=typer.colors.RED, bold=True)
 
     if not force:
@@ -284,7 +369,6 @@ def makemigrations(
         message: str = typer.Option(..., "-m", "--message", help="A descriptive message for the new migration."),
 ):
     """Wraps Alembic's 'revision --autogenerate' command."""
-    setup_cli_logging()
     if not _is_db_configured():
         typer.secho("No explicit database configured. Using default SQLite for migrations.", fg=typer.colors.YELLOW)
 
@@ -315,7 +399,6 @@ def migrate(
         revision: str = typer.Argument("head", help="The revision to migrate to (e.g., 'head' for latest).")
 ):
     """Wraps Alembic's 'upgrade' command."""
-    setup_cli_logging()
     if not _is_db_configured():
         typer.secho("No explicit database configured. Using default SQLite for migrations.", fg=typer.colors.YELLOW)
 
@@ -331,7 +414,6 @@ def sync_db_revision(
         revision: str = typer.Argument("head", help="The revision to stamp the database with.")
 ):
     """Wraps Alembic's 'stamp' command. Use with extreme caution!"""
-    setup_cli_logging()
     if not _is_db_configured():
         typer.secho("No explicit database configured. Using default SQLite for sync.", fg=typer.colors.YELLOW)
 
@@ -350,100 +432,145 @@ def sync_db_revision(
 
 @app.command(help="Configure system settings, databases, and secrets.")
 def configure():
-    setup_cli_logging()
+    """
+    An intelligent configuration wizard that prevents duplicate entries,
+    promotes reuse, and helps clean up unused database connections.
+    """
     typer.secho("--- RAGnetic System Configuration ---", bold=True)
     config = configparser.ConfigParser()
     config.read(_CONFIG_FILE)
 
+    # --- SERVER SETTINGS ---
     if typer.confirm("\nDo you want to configure SERVER settings (host, port, etc.)?", default=True):
         if 'SERVER' not in config: config.add_section('SERVER')
         host = typer.prompt("Enter server host", default=config.get('SERVER', 'host', fallback='127.0.0.1'))
         port = typer.prompt("Enter server port", default=config.get('SERVER', 'port', fallback='8000'))
+        config.set('SERVER', 'host', host)
+        config.set('SERVER', 'port', str(port))
 
-        current_ws_mode = config.get('SERVER', 'websocket_mode', fallback='memory')
-        ws_mode = typer.prompt("Enter WebSocket mode (memory, redis)", default=current_ws_mode)
+        ws_mode = typer.prompt("Enter WebSocket mode (memory, redis)",
+                               default=config.get('SERVER', 'websocket_mode', fallback='memory'))
         while ws_mode not in ['memory', 'redis']:
             typer.secho("Invalid selection. Please choose 'memory' or 'redis'.", fg=typer.colors.RED)
-            ws_mode = typer.prompt("Enter WebSocket mode (memory, redis)", default=current_ws_mode)
+            ws_mode = typer.prompt("Enter WebSocket mode (memory, redis)",
+                                   default=config.get('SERVER', 'websocket_mode', fallback='memory'))
         config.set('SERVER', 'websocket_mode', ws_mode)
 
-        if typer.confirm("Configure CORS allowed origins?", default=True):
+        if typer.confirm("Configure CORS allowed origins?", default=False):
             current_origins = os.environ.get("CORS_ALLOWED_ORIGINS",
                                              config.get('SERVER', 'cors_allowed_origins', fallback='*'))
-            origins_str = typer.prompt("Enter comma-separated origins (e.g., http://localhost:3000,https://my-app.com)",
-                                       default=current_origins)
+            origins_str = typer.prompt("Enter comma-separated origins", default=current_origins)
             if typer.confirm("Save CORS settings to the local .env file (recommended)?", default=True):
                 _update_env_file({"CORS_ALLOWED_ORIGINS": origins_str})
-                if config.has_option('SERVER', 'cors_allowed_origins'):
-                    config.remove_option('SERVER', 'cors_allowed_origins')
+                if config.has_option('SERVER', 'cors_allowed_origins'): config.remove_option('SERVER',
+                                                                                             'cors_allowed_origins')
                 typer.secho("CORS settings saved to .env file.", fg=typer.colors.GREEN)
             else:
                 config.set('SERVER', 'cors_allowed_origins', origins_str)
-
-        config.set('SERVER', 'host', host)
-        config.set('SERVER', 'port', str(port))
         typer.secho("Server settings updated.", fg=typer.colors.GREEN)
 
-    if typer.confirm("\nDo you want to configure SYSTEM database connections?", default=False):
+    # --- DATABASE CONNECTIONS ---
+    if typer.confirm("\nDo you want to configure SYSTEM database connections?", default=True):
         if 'DATABASE_CONNECTIONS' not in config: config.add_section('DATABASE_CONNECTIONS')
         DIALECT_MAP = {"postgresql": "postgresql+psycopg2", "mysql": "mysql+mysqlconnector", "sqlite": "sqlite"}
+
         while True:
+            existing_conns = [c.strip() for c in config.get('DATABASE_CONNECTIONS', 'names', fallback='').split(',') if
+                              c.strip()]
+            if existing_conns:
+                typer.echo(f"Existing connections: {', '.join(existing_conns)}")
+
             if not typer.confirm("Add or update a database connection?", default=True):
                 break
+
             conn_name = typer.prompt("Enter a unique name for this connection (e.g., 'prod_db')")
+
+            existing_match = next((c for c in existing_conns if c.lower() == conn_name.lower()), None)
+            if existing_match and not typer.confirm(f"Connection '{existing_match}' already exists. Overwrite it?",
+                                                    default=False):
+                continue
+
             typer.secho(f"\n--- Configuring '{conn_name}' ---", bold=True)
-            db_type = typer.prompt(f"Database type? Choose from: {list(DIALECT_MAP.keys())}", default="postgresql")
+            db_type = typer.prompt(f"Database type? Choose from: {list(DIALECT_MAP.keys())}", default="sqlite")
             while db_type not in DIALECT_MAP:
                 typer.secho("Invalid selection.", fg=typer.colors.RED)
-                db_type = typer.prompt(f"Database type? Choose from: {list(DIALECT_MAP.keys())}", default="postgresql")
-            dialect = DIALECT_MAP[db_type]
+                db_type = typer.prompt(f"Database type? Choose from: {list(DIALECT_MAP.keys())}", default="sqlite")
+
             section_name = f"DATABASE_{conn_name}"
             if db_type == "sqlite":
-                db_path = typer.prompt("Enter the path for the SQLite file (e.g., memory/ragnetic.db)")
-                config[section_name] = {'dialect': dialect, 'database_path': db_path}
+                db_path = typer.prompt("Enter path for the SQLite file", default="memory/ragnetic.db")
+                config[section_name] = {'dialect': DIALECT_MAP[db_type], 'database_path': db_path}
             else:
                 username = typer.prompt("Username")
                 host = typer.prompt("Host", default="localhost")
                 port = typer.prompt("Port", default="5432" if db_type == "postgresql" else "3306")
                 database = typer.prompt("Database Name")
                 password = typer.prompt(f"Enter password for user '{username}'", hide_input=True)
-                config[section_name] = {'dialect': dialect, 'username': username, 'host': host, 'port': port,
-                                        'database': database}
-                if password and typer.confirm(f"Save password for '{conn_name}' to the local .env file?", default=True):
-                    password_env_var = f"{conn_name.upper()}_PASSWORD"
-                    _update_env_file({password_env_var: password})
-                    typer.secho(f"Password saved to the .env file.", fg=typer.colors.GREEN)
-                else:
-                    typer.secho("Password not provided. It will be prompted for at runtime.", fg=typer.colors.YELLOW)
-            existing_conns = {c.strip() for c in config.get('DATABASE_CONNECTIONS', 'names', fallback='').split(',') if
-                              c.strip()}
-            existing_conns.add(conn_name)
-            config.set('DATABASE_CONNECTIONS', 'names', ','.join(sorted(list(existing_conns))))
+                config[section_name] = {'dialect': DIALECT_MAP[db_type], 'username': username, 'host': host,
+                                        'port': port, 'database': database}
+                if password:
+                    _update_env_file({f"{conn_name.upper()}_PASSWORD": password})
+                    typer.secho("Password saved to the .env file.", fg=typer.colors.GREEN)
+
+            if not existing_match:
+                existing_conns.append(conn_name)
+                config.set('DATABASE_CONNECTIONS', 'names', ','.join(sorted(existing_conns)))
             typer.secho(f"\nConnection '{conn_name}' configured successfully.", fg=typer.colors.GREEN)
 
-    if typer.confirm("\nDo you want to configure MEMORY (chat history) storage?", default=False):
-        if 'MEMORY_STORAGE' not in config: config.add_section('MEMORY_STORAGE')
-        mem_type = typer.prompt("Enter memory storage type (sqlite, db)",
-                                default=config.get('MEMORY_STORAGE', 'type', fallback='sqlite'))
-        config.set('MEMORY_STORAGE', 'type', mem_type)
-        if mem_type in ['db', 'sqlite'] and typer.confirm("Use a named connection for SQLite?",
-                                                          default=False if mem_type == 'sqlite' else True):
-            conn_name = typer.prompt("Enter the database connection name to use",
-                                     default=config.get('MEMORY_STORAGE', 'connection_name', fallback=""))
-            config.set('MEMORY_STORAGE', 'connection_name', conn_name)
+        if typer.confirm("\nDo you want to clean up unused database connections?", default=True):
+            current_conns = [c.strip() for c in config.get('DATABASE_CONNECTIONS', 'names', fallback='').split(',') if
+                             c.strip()]
+            conns_to_keep = []
+            for conn in current_conns:
+                if typer.confirm(f"Keep connection '{conn}'?", default=True):
+                    conns_to_keep.append(conn)
+                else:
+                    if config.has_section(f"DATABASE_{conn}"):
+                        config.remove_section(f"DATABASE_{conn}")
+                        typer.secho(f"Removed connection '{conn}'.", fg=typer.colors.YELLOW)
+            config.set('DATABASE_CONNECTIONS', 'names', ','.join(sorted(conns_to_keep)))
 
-    if typer.confirm("\nDo you want to configure LOG storage?", default=False):
-        if 'LOG_STORAGE' not in config: config.add_section('LOG_STORAGE')
-        log_type = typer.prompt("Enter log storage type (file, db)",
-                                default=config.get('LOG_STORAGE', 'type', fallback='file'))
-        config.set('LOG_STORAGE', 'type', log_type)
-        if log_type == 'db':
-            conn_name = typer.prompt("Enter the database connection name to use",
-                                     default=config.get('LOG_STORAGE', 'connection_name', fallback=""))
-            table_name = typer.prompt("Enter the table name for logs",
-                                      default=config.get('LOG_STORAGE', 'log_table_name', fallback='ragnetic_logs'))
-            config.set('LOG_STORAGE', 'connection_name', conn_name)
-            config.set('LOG_STORAGE', 'log_table_name', table_name)
+    # --- STORAGE CONFIGURATION (MEMORY & LOGS) ---
+    all_connections = [c.strip() for c in config.get('DATABASE_CONNECTIONS', 'names', fallback='').split(',') if
+                       c.strip()]
+
+    def configure_storage(storage_name: str, section_name: str, valid_types: List[str]):
+        if not typer.confirm(f"\nDo you want to configure {storage_name} storage?", default=True):
+            return
+        if section_name not in config: config.add_section(section_name)
+
+        storage_type = typer.prompt(f"Enter {storage_name} storage type ({', '.join(valid_types)})",
+                                    default=config.get(section_name, 'type', fallback=valid_types[0]))
+        config.set(section_name, 'type', storage_type)
+
+        if storage_type == 'file':
+            if config.has_option(section_name, 'connection_name'):
+                config.remove_option(section_name, 'connection_name')
+            if config.has_option(section_name, 'log_table_name'):
+                config.remove_option(section_name, 'log_table_name')
+
+        elif storage_type in ['db', 'sqlite'] and all_connections:
+            typer.echo("Available database connections:")
+            for i, name in enumerate(all_connections, 1):
+                typer.echo(f"  [{i}] {name}")
+
+            choice = typer.prompt("Choose a connection to use", type=int, default=1)
+            if 1 <= choice <= len(all_connections):
+                chosen_conn = all_connections[choice - 1]
+                config.set(section_name, 'connection_name', chosen_conn)
+                typer.secho(f"{storage_name} storage set to use '{chosen_conn}'.", fg=typer.colors.CYAN)
+            else:
+                typer.secho("Invalid choice.", fg=typer.colors.RED)
+        elif storage_type == 'db':
+            typer.secho("No database connections configured yet. Please add one first.", fg=typer.colors.YELLOW)
+
+    configure_storage("MEMORY (chat history)", "MEMORY_STORAGE", ["sqlite", "db"])
+    configure_storage("LOG", "LOG_STORAGE", ["file", "db"])
+
+    if config.has_section('LOG_STORAGE') and config.get('LOG_STORAGE', 'type') == 'db':
+        table_name = typer.prompt("Enter the table name for logs",
+                                  default=config.get('LOG_STORAGE', 'log_table_name', fallback='ragnetic_logs'))
+        config.set('LOG_STORAGE', 'log_table_name', table_name)
 
     with open(_CONFIG_FILE, 'w') as configfile:
         config.write(configfile)
@@ -452,7 +579,6 @@ def configure():
 
 @app.command(name="show-config", help="Displays the current system configurations.")
 def show_config():
-    setup_cli_logging()
     typer.secho("--- Current RAGnetic Configuration ---", bold=True)
     if not os.path.exists(_CONFIG_FILE):
         typer.secho(f"Configuration file not found at: {_CONFIG_FILE}", fg=typer.colors.RED)
@@ -468,7 +594,6 @@ def show_config():
 
 @app.command(name="check-system-db", help="Verifies and inspects connections to configured system databases.")
 def check_system_db():
-    setup_cli_logging()
     typer.secho("--- Checking System Database Connections ---", bold=True)
     log_config = get_log_storage_config()
     memory_config = get_memory_storage_config()
@@ -544,7 +669,6 @@ def check_system_db():
 
 @app.command(help="Initialize a new RAGnetic project.")
 def init():
-    setup_cli_logging()
     typer.secho("Initializing new RAGnetic project...", bold=True)
     paths_to_create = {
         "DATA_DIR", "AGENTS_DIR", "VECTORSTORE_DIR", "MEMORY_DIR",
@@ -587,7 +711,6 @@ def init():
 
 @app.command(name="set-server-key", help="Generate and set a secret key for the server API.")
 def set_server_key():
-    setup_cli_logging()
     new_key = secrets.token_hex(32)
     _update_env_file({"RAGNETIC_API_KEYS": new_key})
     typer.secho("Successfully set a new server API key in the .env file.", fg=typer.colors.GREEN)
@@ -596,7 +719,6 @@ def set_server_key():
 
 @app.command(name="set-api-key", help="Set and save API keys to the secure .env file.")
 def set_api():
-    setup_cli_logging()
     typer.secho("--- External Service API Key Configuration ---", bold=True)
     typer.secho("This wizard saves keys securely to the project's local .env file.", fg=typer.colors.CYAN)
     while True:
@@ -631,7 +753,6 @@ def set_api():
 
 @auth_app.command("gdrive", help="Authenticate with Google Drive securely.")
 def auth_gdrive():
-    setup_cli_logging()
     typer.secho("--- Google Drive Authentication Setup ---", bold=True)
     json_path_str = typer.prompt("Path to your service account JSON key file")
     json_path = Path(json_path_str)
@@ -689,7 +810,7 @@ def start_server(
             "--pattern=*.py",  # For any Python file change
             "--recursive",  # Include subdirectories
             "--",  # Separator for the command to run
-            "celery", "-A", "app.workflows.tasks", "worker", "--loglevel=info"
+            "celery", "-A", "app.workflows.tasks", "worker",
         ]
 
         uvicorn_process = subprocess.Popen(uvicorn_cmd)
@@ -728,7 +849,6 @@ def start_server(
 
 @app.command(help="Lists all configured agents.")
 def list_agents():
-    setup_cli_logging()
     if not os.path.exists(_AGENTS_DIR):
         logging.error(f"Error: Directory '{_AGENTS_DIR}' not found. Have you run 'ragnetic init'?")
         raise typer.Exit(code=1)
@@ -747,7 +867,6 @@ def deploy_agent_by_name(
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation and overwrite existing data."),
 ):
     _validate_agent_name_cli(agent_name)
-    setup_cli_logging()
     logger = logging.getLogger(__name__)
     try:
         config_path = _AGENTS_DIR / f"{agent_name}.yaml"
@@ -791,7 +910,6 @@ def inspect_agent(
         num_docs: int = typer.Option(5, "--num-docs", help="Number of sample documents to retrieve and display."),
 ):
     _validate_agent_name_cli(agent_name)
-    setup_cli_logging()
     errors = 0
     typer.echo(f"Inspecting configuration for agent: '{agent_name}'")
 
@@ -923,7 +1041,6 @@ def reset_agent(
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
 ):
     _validate_agent_name_cli(agent_name)
-    setup_cli_logging()
     vectorstore_path = _VECTORSTORE_DIR / agent_name
     memory_pattern = _MEMORY_DIR / f"{agent_name}_*.db"
     typer.secho(f"Warning: This will reset agent '{agent_name}' by deleting its generated data:",
@@ -949,7 +1066,6 @@ def delete_agent(
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
 ):
     _validate_agent_name_cli(agent_name)
-    setup_cli_logging()
     vectorstore_path = _VECTORSTORE_DIR / agent_name
     memory_pattern = _MEMORY_DIR / f"{agent_name}_*.db"
     config_path = _AGENTS_DIR / f"{agent_name}.yaml"
@@ -970,7 +1086,6 @@ def delete_agent(
 
 @app.command(help="Runs the entire test suite using pytest.")
 def test():
-    setup_cli_logging()
     typer.echo("Running the RAGnetic test suite...")
     result_code = pytest.main(["-v", "tests/"])
     if result_code == 0:
@@ -987,7 +1102,6 @@ def generate_test_command(
         num_questions: int = typer.Option(50, "--num-questions", "-n", help="Number of questions to generate."),
 ):
     _validate_agent_name_cli(agent_name)
-    setup_cli_logging()
     logger = logging.getLogger(__name__)
     logger.info(f"--- Generating Test Set for Agent: '{agent_name}' ---")
     try:
@@ -1010,7 +1124,6 @@ def benchmark_command(
                                                              help="Explicitly show/hide detailed results in console."),
 ):
     _validate_agent_name_cli(agent_name)
-    setup_cli_logging()
     logger = logging.getLogger(__name__)
     logger.info(f"--- Running Benchmark for Agent: '{agent_name}' ---")
 
@@ -1065,7 +1178,6 @@ def inspect_run(
                                      help="Show detailed JSON inputs and outputs for each step."),
 ):
     """Fetches and displays the details for a single agent run and all of its steps."""
-    setup_cli_logging()
     if not _is_db_configured():
         typer.secho("Audit trails require a database. Please configure one using 'ragnetic configure'.",
                     fg=typer.colors.RED)
@@ -1140,7 +1252,6 @@ def list_runs(
         limit: int = typer.Option(20, "--limit", "-n", help="Number of recent runs to display."),
 ):
     """Connects to the database and lists the most recent agent runs."""
-    setup_cli_logging()
     if not _is_db_configured():
         typer.secho("Audit trails require a database. Please configure one using 'ragnetic configure'.",
                     fg=typer.colors.RED)
@@ -1232,7 +1343,6 @@ def list_workflow_runs(
         limit: int = typer.Option(20, "--limit", "-n", help="Number of recent workflow runs to display."),
 ):
     """Connects to the database and lists the most recent workflow runs."""
-    setup_cli_logging()
     if not _is_db_configured():
         typer.secho("Auditing requires a database. Please configure one using 'ragnetic configure'.",
                     fg=typer.colors.RED)
@@ -1297,6 +1407,7 @@ def inspect_workflow_run(
 ):
     """Fetches and displays the details for a single workflow run."""
     setup_cli_logging()
+
     if not _is_db_configured():
         typer.secho("Auditing requires a database. Please configure one using 'ragnetic configure'.",
                     fg=typer.colors.RED)
@@ -1350,11 +1461,12 @@ def inspect_workflow_run(
             typer.secho("\n--- Paused State ---", bold=True, fg=typer.colors.YELLOW)
             typer.echo(json.dumps(run.last_execution_state, indent=2))
 
-
     except Exception as e:
         typer.secho(f"An error occurred while inspecting the workflow run: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
 
+
 if __name__ == "__main__":
+    setup_cli_logging()
     app()
