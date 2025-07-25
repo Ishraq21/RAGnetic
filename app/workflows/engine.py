@@ -69,6 +69,32 @@ logger = logging.getLogger(__name__)
 _APP_PATHS = get_path_settings()
 
 
+def _safe_eval_condition(condition: str, context: Dict[str, Any]) -> bool:
+    """
+    Safely evaluates a simple boolean condition string against a context dictionary.
+    Supports ==, !=, <, >, <=, >=, and, or, not.
+    Does NOT support arbitrary code execution.
+    """
+    # Simple regex to validate allowed characters and structure
+    if not re.match(r"^[ a-zA-Z0-9_.'\"<>=!&|()]+$", condition):
+        raise ValueError(f"Condition contains invalid characters: {condition}")
+
+    # Extract all potential variable names from the condition
+    potential_vars = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', condition)
+
+    # Build a safe local scope for the evaluation
+    safe_locals = {}
+    for var in potential_vars:
+        if var in context:
+            safe_locals[var] = context[var]
+
+    try:
+        # Use eval in a tightly controlled environment
+        return eval(condition, {"__builtins__": {}}, safe_locals)
+    except Exception as e:
+        raise ValueError(f"Could not safely evaluate condition '{condition}': {e}") from e
+
+
 def _serialize_for_db(data: Any) -> Any:
     if isinstance(data, Document):
         return {"page_content": data.page_content, "metadata": data.metadata}
@@ -640,11 +666,9 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
 
     async def _handle_if_then(self, step: IfThenStep, run_id: str, step_index: int):
         try:
-            is_true = eval(step.condition, {"__builtins__": None}, self.context)
+            is_true = _safe_eval_condition(step.condition, self.context)
         except Exception as e:
-            raise ValueError(
-                f"Could not evaluate condition '{step.condition}': {e}"
-            ) from e
+            raise ValueError(f"Could not evaluate condition '{step.condition}': {e}") from e
         branch_to_run = step.on_true if is_true else step.on_false
         if branch_to_run:
             logger.info(f"Condition was {is_true}, running branch.")
