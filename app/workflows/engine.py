@@ -1,4 +1,20 @@
-# app/workflows/engine.py
+# --- IMPORTANT NOTE ON SKILLS ---
+# While this engine contains underlying code for managing and executing 'Skills'
+# (formal capabilities defined in separate YAML files), these are currently
+# considered **BETA features** and are not the primary recommended way for end-users
+# to extend agent capabilities.
+#
+# The design currently prioritizes the agent's intrinsic LLM intelligence
+# (driven by its robust system prompt and universal policies) to perform
+# diverse tasks and process data directly within 'agent_call' workflow steps.
+#
+# Developers may choose to leverage explicit 'Skills' for highly specialized,
+# deterministic, or complex integrations that go beyond basic LLM reasoning,
+# but the default expectation is that capabilities are derived from the LLM's
+# understanding of tasks and its available 'Tools'.
+# Users are generally encouraged to rely on defining clear tasks within workflows,
+# rather than creating separate skill definitions. Skills are still work in progress.
+# -------------------------------
 
 import logging
 import json
@@ -6,18 +22,14 @@ import os
 import uuid
 import yaml
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence
 import asyncio
 import re
 
-from pydantic.v1 import BaseModel, Field as PydanticField, ValidationError
-from langchain.chat_models import init_chat_model
+from pydantic.v1 import ValidationError
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, BaseMessage, ToolMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_ollama import ChatOllama
 from sqlalchemy import select, update, insert
-from langchain_core.runnables import Runnable
 from langchain_core.exceptions import OutputParserException
 
 # ADDED IMPORTS FOR GENERIC RETRY LOGIC
@@ -25,7 +37,7 @@ import httpx
 import openai
 
 from app.agents.config_manager import load_agent_config
-from app.core.config import get_api_key, get_path_settings, get_llm_model
+from app.core.config import get_path_settings, get_llm_model
 from app.db.models import human_tasks_table, workflow_runs_table, workflows_table
 from app.schemas.agent import AgentConfig
 from app.schemas.workflow import (

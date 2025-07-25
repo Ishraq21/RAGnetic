@@ -1,4 +1,20 @@
-# app/schemas/workflow.py
+# --- IMPORTANT NOTE ON SKILLS ---
+# While this engine contains underlying code for managing and executing 'Skills'
+# (formal capabilities defined in separate YAML files), these are currently
+# considered **BETA features** and are not the primary recommended way for end-users
+# to extend agent capabilities.
+#
+# The design currently prioritizes the agent's intrinsic LLM intelligence
+# (driven by its robust system prompt and universal policies) to perform
+# diverse tasks and process data directly within 'agent_call' workflow steps.
+#
+# Developers may choose to leverage explicit 'Skills' for highly specialized,
+# deterministic, or complex integrations that go beyond basic LLM reasoning,
+# but the default expectation is that capabilities are derived from the LLM's
+# understanding of tasks and its available 'Tools'.
+# Users are generally encouraged to rely on defining clear tasks within workflows,
+# rather than creating separate skill definitions. Skills are still work in progress.
+# -------------------------------
 
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Any, Union, Annotated

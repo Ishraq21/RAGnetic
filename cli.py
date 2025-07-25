@@ -70,7 +70,7 @@ _RAGNETIC_DIR = _APP_PATHS["RAGNETIC_DIR"]
 _TEMP_CLONES_DIR = _APP_PATHS["TEMP_CLONES_DIR"]
 _BENCHMARK_DIR = _APP_PATHS["BENCHMARK_DIR"]
 _WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
-_SKILLS_DIR = _APP_PATHS["SKILLS_DIR"]
+# _SKILLS_DIR = _APP_PATHS["SKILLS_DIR"]
 
 # --- Load Environment Variables ---
 load_dotenv(dotenv_path=_PROJECT_ROOT / ".env")
@@ -672,7 +672,7 @@ def init():
     typer.secho("Initializing new RAGnetic project...", bold=True)
     paths_to_create = {
         "DATA_DIR", "AGENTS_DIR", "VECTORSTORE_DIR", "MEMORY_DIR",
-        "LOGS_DIR", "TEMP_CLONES_DIR", "RAGNETIC_DIR", "BENCHMARK_DIR", "WORKFLOWS_DIR", "SKILLS_DIR"
+        "LOGS_DIR", "TEMP_CLONES_DIR", "RAGNETIC_DIR", "BENCHMARK_DIR", "WORKFLOWS_DIR"
     }
     for key, path in _APP_PATHS.items():
         if key in paths_to_create and not os.path.exists(path):
