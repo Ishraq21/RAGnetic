@@ -26,9 +26,17 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
 # Database & Models
-from app.db.models import chat_sessions_table, chat_messages_table, users_table, agent_runs, agent_run_steps, workflows_table
+from app.db.models import (chat_sessions_table,
+                           chat_messages_table,
+                           users_table,
+                           agent_runs,
+                           agent_run_steps,
+                           workflows_table,
+                           crontab_schedule_table,
+                           periodic_task_table, periodic_task_changed_table)
+
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, insert, update, text, delete
+from sqlalchemy import select, desc, insert, update, text, delete, func
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 
 # Core Components
@@ -56,7 +64,6 @@ from app.tools.search_engine_tool import SearchTool
 
 # System
 from app.watcher import start_watcher
-from app.workflows.scheduler import start_scheduler_process
 from sqlalchemy import create_engine as create_sync_engine
 import alembic.config
 from alembic.runtime.migration import MigrationContext
@@ -68,10 +75,8 @@ from app.api.audit import router as audit_api_router
 from app.api.query import router as query_api_router
 from app.api.evaluation import router as evaluation_api_router
 from app.api.metrics import router as metrics_api_router
-from app.api.schedules import router as schedules_api_router
 from app.api.webhooks import setup_dynamic_webhooks
 from app.api import workflows
-from app.db.models import schedules_table
 import re
 
 
@@ -159,7 +164,6 @@ else:
     manager = MemoryConnectionManager()
 
 _watcher_process: Optional[Process] = None
-_scheduler_process: Optional[Process] = None
 
 
 def _parse_schedule_time(time_str: str) -> Dict[str, int]:
@@ -189,9 +193,9 @@ def _parse_schedule_time(time_str: str) -> Dict[str, int]:
 
 def _sync_workflows_from_files():
     """
-    Scans the workflows directory, syncs YAML definitions with the database,
-    and automatically manages associated schedules based on the 'trigger' section.
-    This version correctly handles both frequency/time and direct cron configurations.
+    Scans the workflows directory and syncs all definitions with the database.
+    - Updates the main `workflows_table` for all workflows (enabling webhooks).
+    - Updates the Celery Beat tables for scheduled workflows.
     """
     if not is_db_configured():
         logger.warning("Skipping workflow sync: No database is configured.")
@@ -201,95 +205,114 @@ def _sync_workflows_from_files():
     if not workflows_dir or not workflows_dir.is_dir():
         return
 
-    logger.info("Starting sync of workflow and schedule files with the database...")
+    logger.info("Starting sync of workflow definitions and schedules with the database...")
 
     conn_name = (get_memory_storage_config().get("connection_name") or
                  get_log_storage_config().get("connection_name"))
-    if not conn_name:
-        logger.error("Could not determine DB connection name for workflow sync.")
-        return
-
     sync_conn_str = get_db_connection(conn_name).replace('+aiosqlite', '').replace('+asyncpg', '')
     engine = create_sync_engine(sync_conn_str)
 
     with engine.connect() as conn:
-        synced_workflow_names = set()
+        made_schedule_changes = False
+        all_workflow_names_in_yaml = set()
+
+        # Get all existing periodic tasks to compare against
+        existing_periodic_tasks = {row.name: row for row in conn.execute(select(periodic_task_table))}
+
         for filepath in workflows_dir.glob("*.yaml"):
             try:
                 with open(filepath, 'r') as f:
                     payload = yaml.safe_load(f)
                     wf_in = WorkflowCreate(**payload)
-                    synced_workflow_names.add(wf_in.name)
+                    all_workflow_names_in_yaml.add(wf_in.name)
 
+                # --- PART 1: Sync Core Workflow Definition (for Webhooks, etc.) ---
                 existing_workflow = conn.execute(
                     select(workflows_table).where(workflows_table.c.name == wf_in.name)).first()
-                wf_values = {"agent_name": wf_in.agent_name, "description": wf_in.description, "definition": payload,
-                             "updated_at": datetime.utcnow()}
+
+                wf_values = {
+                    "agent_name": wf_in.agent_name,
+                    "description": wf_in.description,
+                    "definition": payload,  # Store the raw YAML/JSON payload
+                    "updated_at": datetime.utcnow()
+                }
+
                 if existing_workflow:
                     stmt = update(workflows_table).where(workflows_table.c.id == existing_workflow.id).values(
                         **wf_values)
                 else:
                     stmt = insert(workflows_table).values(name=wf_in.name, **wf_values)
                 conn.execute(stmt)
+                # --- End Part 1 ---
 
+                # --- PART 2: Sync Schedule to Celery Beat DB ---
                 trigger = payload.get("trigger", {})
                 schedule_info = trigger.get("schedule")
-                is_scheduled = trigger.get("type") == "schedule" and isinstance(schedule_info, dict)
+                task_name = f"workflow:{wf_in.name}"
 
-                existing_schedule = conn.execute(
-                    select(schedules_table).where(schedules_table.c.workflow_name == wf_in.name)).first()
+                if trigger.get("type") == "schedule" and isinstance(schedule_info, dict):
+                    # Upsert the crontab definition
+                    cron_filters = [getattr(crontab_schedule_table.c, k) == v for k, v in schedule_info.items()]
+                    existing_cron = conn.execute(select(crontab_schedule_table).where(*cron_filters)).first()
+                    crontab_id = existing_cron.id if existing_cron else \
+                    conn.execute(insert(crontab_schedule_table).values(**schedule_info)).inserted_primary_key[0]
 
-                if is_scheduled:
-                    cron_config = {}
-                    # Handle frequency/time format
-                    if "frequency" in schedule_info:
-                        cron_config = _parse_schedule_time(schedule_info.get("time", ""))
-                        if schedule_info.get("frequency") == "weekly":
-                            days = schedule_info.get("day_of_week", [])
-                            cron_config["day_of_week"] = ",".join(day[:3].lower() for day in days)
-                    # Handle direct cron format
+                    # Prepare the periodic task definition
+                    task_args = json.dumps([wf_in.name, payload.get("initial_input") or {}])
+                    task_values = {
+                        "task": "app.workflows.tasks.run_workflow_task",
+                        "crontab_id": crontab_id,
+                        "args": task_args,
+                        "enabled": True,
+                        "date_changed": func.now(),
+                    }
+
+                    if task_name in existing_periodic_tasks:
+                        stmt = update(periodic_task_table).where(periodic_task_table.c.name == task_name).values(
+                            **task_values)
                     else:
-                        cron_config = {k: v for k, v in schedule_info.items() if
-                                       k in ['year', 'month', 'day', 'week', 'day_of_week', 'hour', 'minute', 'second']}
+                        stmt = insert(periodic_task_table).values(name=task_name, **task_values)
 
-                    if not cron_config:
-                        logger.warning(
-                            f"Could not determine a valid cron configuration for workflow '{wf_in.name}'. Skipping schedule.")
-                        continue
-
-                    schedule_values = {"cron_schedule": cron_config, "is_enabled": True}
-
-                    if existing_schedule:
-                        update_stmt = update(schedules_table).where(
-                            schedules_table.c.id == existing_schedule.id).values(**schedule_values)
-                        conn.execute(update_stmt)
-                        logger.info(f"Updated schedule for workflow '{wf_in.name}' with rule: {cron_config}")
-                    else:
-                        insert_stmt = insert(schedules_table).values(name=f"schedule_for_{wf_in.name}",
-                                                                     workflow_name=wf_in.name, **schedule_values)
-                        conn.execute(insert_stmt)
-                        logger.info(f"Created new schedule for workflow '{wf_in.name}' with rule: {cron_config}")
-
-                elif existing_schedule and existing_schedule.is_enabled:
-                    # Disable schedule if trigger is removed from YAML
-                    disable_stmt = update(schedules_table).where(schedules_table.c.id == existing_schedule.id).values(
-                        is_enabled=False)
-                    conn.execute(disable_stmt)
-                    logger.info(f"Disabled schedule for '{wf_in.name}' (trigger removed from YAML).")
-
-                conn.commit()
+                    if conn.execute(stmt).rowcount > 0:
+                        made_schedule_changes = True
+                else:
+                    # If a schedule is NOT defined in YAML, ensure it's disabled in the DB
+                    if task_name in existing_periodic_tasks and existing_periodic_tasks[task_name].enabled:
+                        conn.execute(update(periodic_task_table).where(periodic_task_table.c.name == task_name).values(
+                            enabled=False, date_changed=func.now()))
+                        made_schedule_changes = True
+                        logger.info(f"Disabled schedule for '{wf_in.name}' (trigger removed from YAML).")
+                # --- End Part 2 ---
 
             except Exception as e:
                 conn.rollback()
                 logger.error(f"Failed to sync workflow file '{filepath.name}': {e}", exc_info=True)
+                # We need to restart the transaction after a rollback
+                conn.begin()
 
-        # Disable schedules for deleted workflow files
-        stale_schedules = conn.execute(
-            select(schedules_table).where(schedules_table.c.workflow_name.not_in(synced_workflow_names))).fetchall()
-        for stale in stale_schedules:
-            if stale.is_enabled:
-                conn.execute(update(schedules_table).where(schedules_table.c.id == stale.id).values(is_enabled=False))
-                logger.info(f"Disabled schedule for deleted workflow YAML: '{stale.workflow_name}'.")
+        # Final cleanup: disable any tasks for workflows that no longer have a YAML file
+        existing_task_names = set(existing_periodic_tasks.keys())
+        all_yaml_task_names = {f"workflow:{name}" for name in all_workflow_names_in_yaml}
+        tasks_to_disable = existing_task_names - all_yaml_task_names
+
+        if tasks_to_disable:
+            conn.execute(
+                update(periodic_task_table)
+                .where(periodic_task_table.c.name.in_(tasks_to_disable), periodic_task_table.c.enabled == True)
+                .values(enabled=False, date_changed=func.now())
+            )
+            made_schedule_changes = True
+            logger.info(f"Disabled schedules for deleted workflow YAMLs: {', '.join(tasks_to_disable)}")
+
+        if made_schedule_changes:
+            # Touch the `last_update` field to force Celery Beat to reload schedules
+            if conn.execute(select(periodic_task_changed_table).where(periodic_task_changed_table.c.id == 1)).first():
+                conn.execute(update(periodic_task_changed_table).where(periodic_task_changed_table.c.id == 1).values(
+                    last_update=func.now()))
+            else:
+                conn.execute(insert(periodic_task_changed_table).values(id=1, last_update=func.now()))
+            logger.info("Notified Celery Beat of schedule changes.")
+
         conn.commit()
 
     engine.dispose()
@@ -297,7 +320,7 @@ def _sync_workflows_from_files():
 
 @app.on_event("startup")
 async def startup_event():
-    global _watcher_process, _scheduler_process, log_listener
+    global _watcher_process, log_listener
 
     # --- Logging Setup ---
     # 1. Configure base handlers (console, file) using the simplified config
@@ -398,10 +421,7 @@ async def startup_event():
     _watcher_process.start()
     logger.info("Automated file watcher started.")
 
-    _scheduler_process = Process(target=start_scheduler_process, args=())
-    _scheduler_process.daemon = False
-    _scheduler_process.start()
-    logger.info("Automated workflow scheduler started.")
+
 
 
 @app.on_event("shutdown")
@@ -416,11 +436,6 @@ async def shutdown_event():
         _watcher_process.join(timeout=5)
         logger.info("File watcher process stopped.")
 
-    if _scheduler_process and _scheduler_process.is_alive():
-        _scheduler_process.terminate()
-        _scheduler_process.join(timeout=5)
-        logger.info("Workflow scheduler process stopped.")
-
     if log_listener:
         log_listener.stop()
         logger.info("Logging queue listener stopped.")
@@ -433,7 +448,6 @@ app.include_router(query_api_router)
 app.include_router(evaluation_api_router)
 app.include_router(metrics_api_router)
 app.include_router(workflows.router, prefix="/api/v1")
-app.include_router(schedules_api_router, prefix="/api/v1")
 
 
 class RenameRequest(BaseModel):

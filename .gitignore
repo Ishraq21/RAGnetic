@@ -45,3 +45,10 @@ venv/
 .pytest_cache/
 .coverage
 htmlcov/
+
+
+# Local Database Files
+schedule.db
+dump.rdb
+/memory/ragnetic.db
+celerybeat-schedule

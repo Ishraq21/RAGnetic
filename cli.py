@@ -19,7 +19,9 @@ from dotenv import load_dotenv
 import alembic.config
 import alembic.command
 from alembic.runtime.migration import MigrationContext
+import redis
 import subprocess
+import time
 
 # IMPORTS for inspect_agent dynamic vector store loading
 from langchain_community.vectorstores import FAISS, Chroma
@@ -776,14 +778,14 @@ def auth_gdrive():
         raise typer.Exit(code=1)
 
 
-@app.command(help="Starts the RAGnetic server and background worker.")
+@app.command(help="Starts the RAGnetic server, worker, and scheduler.")
 def start_server(
         host: str = typer.Option(None, help="Server host. Overrides config."),
         port: int = typer.Option(None, help="Server port. Overrides config."),
         reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
 ):
     """
-    Starts the RAGnetic server (Uvicorn) and the Celery background worker.
+    Starts the RAGnetic server (Uvicorn), the Celery worker, and the Celery Beat scheduler.
     """
     config = configparser.ConfigParser()
     config.read(_CONFIG_FILE)
@@ -797,42 +799,91 @@ def start_server(
         typer.secho("SECURITY WARNING: Server is allowing requests from all origins ('*').", fg=typer.colors.YELLOW,
                     bold=True)
 
+    redis_process = None
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    try:
+        # Try to connect to an existing Redis instance
+        r = redis.from_url(redis_url)
+        r.ping()
+        typer.secho("Redis is already running.", fg=typer.colors.GREEN)
+    except redis.exceptions.ConnectionError:
+        typer.secho("Redis not found. Attempting to start Redis server...", fg=typer.colors.YELLOW)
+        try:
+            # If connection fails, try to start a local Redis server
+            redis_process = subprocess.Popen(["redis-server"])
+            typer.secho("Redis server started successfully.", fg=typer.colors.GREEN)
+            # Give Redis a moment to initialize
+            time.sleep(2)
+        except FileNotFoundError:
+            typer.secho("ERROR: 'redis-server' command not found.", fg=typer.colors.RED, bold=True)
+            typer.secho("Please install Redis (e.g., 'brew install redis') or start it manually.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+    def get_beat_db_uri():
+        conn_name = (get_memory_storage_config().get("connection_name") or
+                     get_log_storage_config().get("connection_name"))
+        if not conn_name:
+            raise RuntimeError("Database connection for Celery Beat could not be determined.")
+        conn_str = get_db_connection(conn_name).replace('+aiosqlite', '').replace('+asyncpg', '')
+        return conn_str
+
+    beat_db_uri = get_beat_db_uri()
+
+    beat_env = os.environ.copy()
+    beat_env["CELERY_BEAT_DBURI"] = beat_db_uri
+
     if reload:
-        # For development, use reloaders for both processes
         typer.secho("Starting server and worker in --reload mode...", fg=typer.colors.YELLOW, bold=True)
+        typer.secho("Note: Celery Beat does not support auto-reloading. Restart the server to apply schedule changes from YAML files.", fg=typer.colors.CYAN)
 
         uvicorn_cmd = ["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port), "--reload"]
-
-        # Use 'watchmedo' (from watchdog) to auto-restart the Celery worker on file changes
-        celery_cmd = [
-            "watchmedo", "auto-restart",
-            "--directory=./app",  # Watch the 'app' directory
-            "--pattern=*.py",  # For any Python file change
-            "--recursive",  # Include subdirectories
-            "--",  # Separator for the command to run
-            "celery", "-A", "app.workflows.tasks", "worker",
+        celery_worker_cmd = [
+            "watchmedo", "auto-restart", "--directory=./app", "--pattern=*.py",
+            "--recursive", "--", "celery", "-A", "app.workflows.tasks", "worker", "--loglevel=info"
+        ]
+        # We start Beat without a reloader, as it's not well-supported.
+        celery_beat_cmd = [
+            "celery", "-A", "app.workflows.tasks", "beat",
+            "-S", "sqlalchemy_celery_beat.schedulers:DatabaseScheduler",
+            "--loglevel=info"
         ]
 
         uvicorn_process = subprocess.Popen(uvicorn_cmd)
-        celery_process = subprocess.Popen(celery_cmd)
+        worker_process = subprocess.Popen(celery_worker_cmd)
+        beat_process = subprocess.Popen(celery_beat_cmd)
 
         try:
             uvicorn_process.wait()
         except KeyboardInterrupt:
-            typer.echo("\nShutting down...")
+            typer.echo("\nShutting down processes...")
         finally:
-            celery_process.terminate()
-            celery_process.wait()
+            beat_process.terminate()
+            worker_process.terminate()
+            beat_process.wait()
+            worker_process.wait()
 
     else:
         # For production, run them as standard background/foreground processes
         worker_process = None
+        beat_process = None
         try:
             typer.secho("Starting Celery worker...", fg=typer.colors.BLUE, bold=True)
             worker_process = subprocess.Popen(["celery", "-A", "app.workflows.tasks", "worker", "--loglevel=info"])
 
+            typer.secho("Starting Celery Beat scheduler...", fg=typer.colors.BLUE, bold=True)
+            beat_cmd = [
+                "celery",
+                "-A", "app.workflows.tasks",
+                "beat",
+                "-S", "sqlalchemy_celery_beat.schedulers:DatabaseScheduler",
+                "--loglevel=info"
+            ]
+            # The `env` argument ensures only the beat process gets this variable
+            beat_process = subprocess.Popen(beat_cmd, env=beat_env)
+
             typer.secho(f"Starting Uvicorn server on http://{final_host}:{final_port}...", fg=typer.colors.BLUE,
                         bold=True)
+            # This runs in the foreground and blocks until you press Ctrl+C
             subprocess.run(["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port)], check=True)
 
         except KeyboardInterrupt:
@@ -840,12 +891,20 @@ def start_server(
         except Exception as e:
             typer.secho(f"An error occurred: {e}", fg=typer.colors.RED)
         finally:
+            # Terminate processes in reverse order of startup
+            if beat_process:
+                beat_process.terminate()
+                beat_process.wait()
             if worker_process:
                 worker_process.terminate()
                 worker_process.wait()
 
-    typer.secho("Shutdown complete.", fg=typer.colors.GREEN)
+            if redis_process:
+                typer.secho("Stopping Redis server...", fg=typer.colors.YELLOW)
+                redis_process.terminate()
+                redis_process.wait()
 
+    typer.secho("Shutdown complete.", fg=typer.colors.GREEN)
 
 @app.command(help="Lists all configured agents.")
 def list_agents():

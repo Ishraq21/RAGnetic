@@ -185,6 +185,7 @@ workflows_table = Table(
     Column("agent_name", String(255), nullable=True),
     Column("description", Text, nullable=True),
     Column("definition", JSON, nullable=False),
+    Column("last_run_at", DateTime, nullable=True),
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
     Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
 )
@@ -216,19 +217,48 @@ human_tasks_table = Table(
     Column("resolution_data", JSON, nullable=True), # The data submitted by the human
 )
 
-schedules_table = Table(
-    "schedules",
-    metadata,
-    Column("id", Integer, primary_key=True),
-    Column("name", String, nullable=False, unique=True),
-    Column("workflow_name", String, nullable=False),
-    Column("cron_schedule", JSON, nullable=False),
-    Column("initial_input", JSON, nullable=True),
-    Column("is_enabled", Boolean, default=True),
-    Column("created_at", DateTime, default=datetime.utcnow),
-    Column("updated_at", DateTime, default=datetime.utcnow, onupdate=datetime.utcnow),
+crontab_schedule_table = Table(
+    "crontab_schedule", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("minute", String(64), default="*"),
+    Column("hour", String(64), default="*"),
+    Column("day_of_week", String(64), default="*"),
+    Column("day_of_month", String(64), default="*"),
+    Column("month_of_year", String(64), default="*"),
 )
 
+interval_schedule_table = Table(
+    "interval_schedule", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("every", Integer, nullable=False),
+    Column("period", String(24)),
+)
+
+periodic_task_table = Table(
+    "periodic_task", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String(255), unique=True),
+    Column("task", String(255)),
+    Column("interval_id", Integer, ForeignKey("interval_schedule.id")),
+    Column("crontab_id", Integer, ForeignKey("crontab_schedule.id")),
+    Column("args", Text, default="[]"),
+    Column("kwargs", Text, default="{}"),
+    Column("queue", String(255)),
+    Column("exchange", String(255)),
+    Column("routing_key", String(255)),
+    Column("expires", DateTime),
+    Column("enabled", Boolean, default=True),
+    Column("last_run_at", DateTime),
+    Column("total_run_count", Integer, default=0),
+    Column("date_changed", DateTime),
+    Column("description", Text),
+)
+
+periodic_task_changed_table = Table(
+    "periodic_task_changed", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("last_update", DateTime, nullable=False),
+)
 
 
 # --- Indexes for Performance ---
