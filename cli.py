@@ -123,6 +123,14 @@ class TyperLogger(logging.Handler):
             self.handleError(record)
 
 
+
+def _get_server_url() -> str:
+    config = configparser.ConfigParser()
+    config.read(_APP_PATHS["CONFIG_FILE_PATH"])
+    host = config.get('SERVER', 'host', fallback='127.0.0.1')
+    port = config.get('SERVER', 'port', fallback='8000')
+    return f"http://{host}:{port}/api/v1"
+
 def setup_cli_logging():
     """Configures logging for clear, colored CLI command feedback."""
 
@@ -1524,6 +1532,57 @@ def inspect_workflow_run(
         typer.secho(f"An error occurred while inspecting the workflow run: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
+@app.command(name="delete-workflow", help="Permanently deletes a workflow definition from the database and its YAML file.")
+def delete_workflow(
+    workflow_name: str = typer.Argument(..., help="The name of the workflow to permanently delete."),
+    force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
+):
+    """
+    Deletes a workflow definition from the database and its corresponding YAML file.
+    """
+    typer.secho(f"--- DANGEROUS: Deleting Workflow '{workflow_name}' ---", fg=typer.colors.RED, bold=True)
+
+    if not force:
+        typer.secho("This will permanently delete the workflow definition from the database and its YAML file.", fg=typer.colors.YELLOW)
+        if not typer.confirm("Are you absolutely sure you want to proceed?", default=False):
+            typer.echo("Operation cancelled.")
+            raise typer.Exit()
+
+    server_url = _get_server_url()
+    api_url = f"{server_url}/workflows/{workflow_name}"
+    workflow_file_path = _APP_PATHS["WORKFLOWS_DIR"] / f"{workflow_name}.yaml"
+    response = None
+
+    try:
+        # 1. Delete from database via API
+        typer.echo(f"Attempting to delete workflow '{workflow_name}' from database via API: {api_url}...")
+        response = requests.delete(api_url, timeout=10)
+        response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+
+        typer.secho(f"Workflow '{workflow_name}' successfully deleted from database.", fg=typer.colors.GREEN)
+
+        # 2. Delete the corresponding YAML file
+        if workflow_file_path.exists():
+            typer.echo(f"Attempting to delete workflow YAML file: {workflow_file_path}...")
+            os.remove(workflow_file_path)
+            typer.secho(f"Workflow YAML file '{workflow_file_path.name}' deleted successfully.", fg=typer.colors.GREEN)
+        else:
+            typer.secho(f"Workflow YAML file '{workflow_file_path.name}' not found on disk, skipping file deletion.", fg=typer.colors.YELLOW)
+
+        typer.secho(f"\nWorkflow '{workflow_name}' officially deleted.", fg=typer.colors.GREEN, bold=True)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error deleting workflow '{workflow_name}' from API. Please ensure the server is running and the workflow exists.", fg=typer.colors.RED)
+        typer.echo(f"Detailed error: {e}")
+        if response is not None and response.text: # Check if response object exists and has text
+             typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+    except OSError as e:
+        typer.secho(f"Error deleting workflow YAML file '{workflow_file_path.name}': {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.secho(f"An unexpected error occurred during workflow deletion: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
