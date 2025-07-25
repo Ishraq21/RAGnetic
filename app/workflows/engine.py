@@ -25,6 +25,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 import asyncio
 import re
+from app.tools.email_tool import EmailTool
+from types import SimpleNamespace
+import ast
 
 from pydantic.v1 import ValidationError
 from langchain_core.documents import Document
@@ -69,30 +72,53 @@ logger = logging.getLogger(__name__)
 _APP_PATHS = get_path_settings()
 
 
+def _to_namespace(obj):
+    """
+    Recursively convert dicts/lists into SimpleNamespace (allowing dot access),
+    and leave other types alone.
+    """
+    if isinstance(obj, dict):
+        return SimpleNamespace(**{k: _to_namespace(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return [_to_namespace(v) for v in obj]
+    return obj
+
 def _safe_eval_condition(condition: str, context: Dict[str, Any]) -> bool:
     """
-    Safely evaluates a simple boolean condition string against a context dictionary.
-    Supports ==, !=, <, >, <=, >=, and, or, not.
-    Does NOT support arbitrary code execution.
+    Safely evaluate simple boolean expressions like "foo.is_urgent == True".
+    Automatically parses JSON strings and wraps dicts in namespaces.
     """
-    # Simple regex to validate allowed characters and structure
+    # only allow alphanum, dot, quotes, operators, spaces, parens
     if not re.match(r"^[ a-zA-Z0-9_.'\"<>=!&|()]+$", condition):
         raise ValueError(f"Condition contains invalid characters: {condition}")
 
-    # Extract all potential variable names from the condition
-    potential_vars = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', condition)
+    # extract variable names
+    names = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', condition)
+    safe_locals: Dict[str, Any] = {}
 
-    # Build a safe local scope for the evaluation
-    safe_locals = {}
-    for var in potential_vars:
-        if var in context:
-            safe_locals[var] = context[var]
+    for name in names:
+        raw = context.get(name, None)
+
+        # if it's a string that looks like JSON, try parsing
+        if isinstance(raw, str):
+            s = raw.strip()
+            if s.startswith('{') and s.endswith('}'):
+                try:
+                    raw = json.loads(s)
+                except json.JSONDecodeError:
+                    pass
+
+        # wrap dict/list into namespace for attribute access
+        if isinstance(raw, (dict, list)):
+            raw = _to_namespace(raw)
+
+        safe_locals[name] = raw
 
     try:
-        # Use eval in a tightly controlled environment
-        return eval(condition, {"__builtins__": {}}, safe_locals)
+        return bool(eval(condition, {"__builtins__": {}}, safe_locals))
     except Exception as e:
         raise ValueError(f"Could not safely evaluate condition '{condition}': {e}") from e
+
 
 
 def _serialize_for_db(data: Any) -> Any:
@@ -319,6 +345,8 @@ class WorkflowEngine:
             tool = CodeParserTool()
         elif tool_name == "yaml_parser_tool":
             tool = YAMLParserTool()
+        elif tool_name == "email_tool":
+            tool = EmailTool()
         elif tool_name == "notebook_parser_tool":
             tool = NotebookParserTool()
 
@@ -579,10 +607,36 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
 
         if plan.action == "finish":
             logger.info("Agent signaled finish.")
-            self.context[step.name] = plan.action_input.get(
-                "final_answer", "Completed"
-            )
-            return  # Exit the async function for this step if agent finished.
+            ai_input = plan.action_input  # this is already a dict
+
+            # 1) If the model returned our fields directly (category, is_urgent, summary),
+            #    just store the dict.
+            if isinstance(ai_input, dict) and "is_urgent" in ai_input:
+                self.context[step.name] = ai_input
+                return
+
+            # 2) Otherwise, fall back to a final_answer string
+            final = ai_input.get("final_answer", "")
+
+            parsed = None
+            if isinstance(final, dict):
+                parsed = final
+            elif isinstance(final, str):
+                # try JSON
+                try:
+                    parsed = json.loads(final)
+                except json.JSONDecodeError:
+                    # try Python literal_eval (handles single‐quoted dicts)
+                    try:
+                        tmp = ast.literal_eval(final)
+                        if isinstance(tmp, dict):
+                            parsed = tmp
+                    except Exception:
+                        parsed = None
+
+            # 3) store either the dict or the raw string
+            self.context[step.name] = parsed if isinstance(parsed, dict) else final
+            return
         else:
             try:
                 if plan.action in self.skills:
@@ -637,20 +691,45 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
 
     async def _handle_tool_call(self, step: ToolCallStep, run_id: str, step_index: int):
         logger.info(
-            f"  - Tool step '{step.name}' calling '{step.tool_name}' with input: {step.tool_input}"
+            f"  - Tool step '{step.name}' calling '{step.tool_name}' with original input: {step.tool_input}"
         )
         tool_instance = self._get_tool(step.tool_name)
+
+        # Prepare context for formatting with dot notation support for direct access via eval
+        # This will contain top-level keys like 'trigger', 'analyze_inquiry'
+        format_eval_locals = {}
+        for key, value in self.context.items():
+            format_eval_locals[key] = _to_namespace(value)
+
+        # Format tool_input using f-string evaluation to resolve nested variables
+        formatted_tool_input = {}
+        for key, value in step.tool_input.items():
+            if isinstance(value, str):
+                try:
+                    # Construct an f-string expression that uses variables from format_eval_locals
+                    # Example: f"{trigger.body.customer_name}"
+                    # This is generally safe if format_eval_locals contains only trusted SimpleNamespace objects
+                    formatted_tool_input[key] = eval(f"f'''{value}'''", {"__builtins__": {}}, format_eval_locals)
+                except Exception as e:
+                    logger.warning(f"Failed to format tool input '{key}' using f-string evaluation: {e}. Using raw string.")
+                    formatted_tool_input[key] = value
+            else:
+                formatted_tool_input[key] = value
+
+        # THIS IS THE NEW LOG LINE TO VERIFY FORMATTING
+        logger.info(f"  - Tool step '{step.name}' sending formatted input: {formatted_tool_input}")
+
         try:
             if asyncio.iscoroutinefunction(tool_instance.run):
                 try:
-                    result = await tool_instance.run(**step.tool_input)
+                    result = await tool_instance.run(**formatted_tool_input)
                 except TypeError:
-                    result = await tool_instance.run(step.tool_input)
+                    result = await tool_instance.run(formatted_tool_input)
             else:
                 try:
-                    result = tool_instance.run(**step.tool_input)
+                    result = tool_instance.run(**formatted_tool_input)
                 except TypeError:
-                    result = tool_instance.run(step.tool_input)
+                    result = tool_instance.run(formatted_tool_input)
 
             if isinstance(result, list) and result and isinstance(result[0], Document):
                 logger.debug(
