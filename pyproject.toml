@@ -18,6 +18,7 @@ dependencies     = [
   "apscheduler",
   "arxiv",
   "beautifulsoup4",
+  "certifi",
   "faiss-cpu",
   "fastapi",
   'datasets',

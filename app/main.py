@@ -48,6 +48,7 @@ from app.core.security import get_http_api_key, get_websocket_api_key
 from app.schemas.agent import AgentConfig
 from app.core.serialization import _serialize_for_db
 from app.schemas.workflow import WorkflowCreate
+from app.workflows.sync import sync_workflows_from_files, is_db_configured_sync
 
 # Agents & Pipelines
 from app.agents.config_manager import get_agent_configs, load_agent_config
@@ -90,6 +91,7 @@ load_dotenv()
 _APP_PATHS = get_path_settings()
 _PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
 _DATA_DIR = _APP_PATHS["DATA_DIR"]
+_WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
 
 config = _get_config_parser()
 WEBSOCKET_MODE = config.get('SERVER', 'websocket_mode', fallback='memory')
@@ -191,133 +193,6 @@ def _parse_schedule_time(time_str: str) -> Dict[str, int]:
         return {}
 
 
-def _sync_workflows_from_files():
-    """
-    Scans the workflows directory and syncs all definitions with the database.
-    - Updates the main `workflows_table` for all workflows (enabling webhooks).
-    - Updates the Celery Beat tables for scheduled workflows.
-    """
-    if not is_db_configured():
-        logger.warning("Skipping workflow sync: No database is configured.")
-        return
-
-    workflows_dir = _APP_PATHS.get("WORKFLOWS_DIR")
-    if not workflows_dir or not workflows_dir.is_dir():
-        return
-
-    logger.info("Starting sync of workflow definitions and schedules with the database...")
-
-    conn_name = (get_memory_storage_config().get("connection_name") or
-                 get_log_storage_config().get("connection_name"))
-    sync_conn_str = get_db_connection(conn_name).replace('+aiosqlite', '').replace('+asyncpg', '')
-    engine = create_sync_engine(sync_conn_str)
-
-    with engine.connect() as conn:
-        made_schedule_changes = False
-        all_workflow_names_in_yaml = set()
-
-        # Get all existing periodic tasks to compare against
-        existing_periodic_tasks = {row.name: row for row in conn.execute(select(periodic_task_table))}
-
-        for filepath in workflows_dir.glob("*.yaml"):
-            try:
-                with open(filepath, 'r') as f:
-                    payload = yaml.safe_load(f)
-                    wf_in = WorkflowCreate(**payload)
-                    all_workflow_names_in_yaml.add(wf_in.name)
-
-                # --- PART 1: Sync Core Workflow Definition (for Webhooks, etc.) ---
-                existing_workflow = conn.execute(
-                    select(workflows_table).where(workflows_table.c.name == wf_in.name)).first()
-
-                wf_values = {
-                    "agent_name": wf_in.agent_name,
-                    "description": wf_in.description,
-                    "definition": payload,  # Store the raw YAML/JSON payload
-                    "updated_at": datetime.utcnow()
-                }
-
-                if existing_workflow:
-                    stmt = update(workflows_table).where(workflows_table.c.id == existing_workflow.id).values(
-                        **wf_values)
-                else:
-                    stmt = insert(workflows_table).values(name=wf_in.name, **wf_values)
-                conn.execute(stmt)
-                # --- End Part 1 ---
-
-                # --- PART 2: Sync Schedule to Celery Beat DB ---
-                trigger = payload.get("trigger", {})
-                schedule_info = trigger.get("schedule")
-                task_name = f"workflow:{wf_in.name}"
-
-                if trigger.get("type") == "schedule" and isinstance(schedule_info, dict):
-                    # Upsert the crontab definition
-                    cron_filters = [getattr(crontab_schedule_table.c, k) == v for k, v in schedule_info.items()]
-                    existing_cron = conn.execute(select(crontab_schedule_table).where(*cron_filters)).first()
-                    crontab_id = existing_cron.id if existing_cron else \
-                    conn.execute(insert(crontab_schedule_table).values(**schedule_info)).inserted_primary_key[0]
-
-                    # Prepare the periodic task definition
-                    task_args = json.dumps([wf_in.name, payload.get("initial_input") or {}])
-                    task_values = {
-                        "task": "app.workflows.tasks.run_workflow_task",
-                        "crontab_id": crontab_id,
-                        "args": task_args,
-                        "enabled": True,
-                        "date_changed": func.now(),
-                    }
-
-                    if task_name in existing_periodic_tasks:
-                        stmt = update(periodic_task_table).where(periodic_task_table.c.name == task_name).values(
-                            **task_values)
-                    else:
-                        stmt = insert(periodic_task_table).values(name=task_name, **task_values)
-
-                    if conn.execute(stmt).rowcount > 0:
-                        made_schedule_changes = True
-                else:
-                    # If a schedule is NOT defined in YAML, ensure it's disabled in the DB
-                    if task_name in existing_periodic_tasks and existing_periodic_tasks[task_name].enabled:
-                        conn.execute(update(periodic_task_table).where(periodic_task_table.c.name == task_name).values(
-                            enabled=False, date_changed=func.now()))
-                        made_schedule_changes = True
-                        logger.info(f"Disabled schedule for '{wf_in.name}' (trigger removed from YAML).")
-                # --- End Part 2 ---
-
-            except Exception as e:
-                conn.rollback()
-                logger.error(f"Failed to sync workflow file '{filepath.name}': {e}", exc_info=True)
-                # We need to restart the transaction after a rollback
-                conn.begin()
-
-        # Final cleanup: disable any tasks for workflows that no longer have a YAML file
-        existing_task_names = set(existing_periodic_tasks.keys())
-        all_yaml_task_names = {f"workflow:{name}" for name in all_workflow_names_in_yaml}
-        tasks_to_disable = existing_task_names - all_yaml_task_names
-
-        if tasks_to_disable:
-            conn.execute(
-                update(periodic_task_table)
-                .where(periodic_task_table.c.name.in_(tasks_to_disable), periodic_task_table.c.enabled == True)
-                .values(enabled=False, date_changed=func.now())
-            )
-            made_schedule_changes = True
-            logger.info(f"Disabled schedules for deleted workflow YAMLs: {', '.join(tasks_to_disable)}")
-
-        if made_schedule_changes:
-            # Touch the `last_update` field to force Celery Beat to reload schedules
-            if conn.execute(select(periodic_task_changed_table).where(periodic_task_changed_table.c.id == 1)).first():
-                conn.execute(update(periodic_task_changed_table).where(periodic_task_changed_table.c.id == 1).values(
-                    last_update=func.now()))
-            else:
-                conn.execute(insert(periodic_task_changed_table).values(id=1, last_update=func.now()))
-            logger.info("Notified Celery Beat of schedule changes.")
-
-        conn.commit()
-
-    engine.dispose()
-    logger.info("Workflow and schedule sync complete.")
-
 @app.on_event("startup")
 async def startup_event():
     global _watcher_process, log_listener
@@ -361,7 +236,7 @@ async def startup_event():
                 f"CRITICAL: Could not connect to Redis at {REDIS_URL}. Please ensure it is running. Error: {e}")
             raise RuntimeError("Failed to connect to Redis") from e
 
-    if is_db_configured():
+    if is_db_configured_sync():
         db_config = get_db_connection_config()
         if not db_config:
             raise RuntimeError("Database is configured but connection details could not be loaded.")
@@ -394,7 +269,7 @@ async def startup_event():
                     logger.info("Database schema is up-to-date.")
             engine.dispose()
 
-            _sync_workflows_from_files()
+            sync_workflows_from_files()
             setup_dynamic_webhooks(app)
             for route in app.router.routes:
                 if "Webhooks" in getattr(route, "tags", []):
@@ -416,10 +291,19 @@ async def startup_event():
         logger.error(f"'{_DATA_DIR}' not found. Please run 'ragnetic init'.")
         return
 
-    _watcher_process = Process(target=start_watcher, args=(_DATA_DIR,))
-    _watcher_process.daemon = False
+    # Ensure WORKFLOWS_DIR is also present.
+    if not os.path.exists(_WORKFLOWS_DIR):
+        logger.warning(f"'{_WORKFLOWS_DIR}' not found. Workflow auto-sync may not work correctly.")
+
+    # --- Start the file watcher process ---
+    # The watcher process will run in the background.
+    # It now monitors a list of directories.
+    monitored_dirs = [str(_DATA_DIR), str(_WORKFLOWS_DIR)] # List of directories to monitor
+
+    _watcher_process = Process(target=start_watcher, args=(monitored_dirs,)) # Pass the list of directories
+    _watcher_process.daemon = False # Ensure it exits with parent
     _watcher_process.start()
-    logger.info("Automated file watcher started.")
+    logger.info(f"Automated file watcher started for directories: {', '.join(monitored_dirs)}.")
 
 
 
@@ -452,12 +336,6 @@ app.include_router(workflows.router, prefix="/api/v1")
 
 class RenameRequest(BaseModel):
     new_name: str
-
-
-def is_db_configured() -> bool:
-    mem_config = get_memory_storage_config()
-    log_config = get_log_storage_config()
-    return (mem_config.get("type") in ["db", "sqlite"]) or (log_config.get("type") == "db")
 
 
 async def _get_or_create_user(db: AsyncSession, user_id: str) -> int:
@@ -731,7 +609,7 @@ async def home(request: Request):
 
 @app.get("/health", tags=["System"])
 async def health_check():
-    if not is_db_configured():
+    if not is_db_configured_sync():
         return JSONResponse({"status": "ok", "db_check": "skipped (no database configured)"})
     db_config = get_db_connection_config()
     if not db_config:
@@ -762,7 +640,7 @@ async def health_check():
 @app.get("/history/{thread_id}", tags=["Memory"])
 async def get_history(thread_id: str, agent_name: str, user_id: str, api_key: str = Depends(get_http_api_key),
                       db: AsyncSession = Depends(get_db)):
-    if not is_db_configured():
+    if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Chat history not supported without a database.")
     safe_agent_name = sanitize_for_path(agent_name)
     safe_user_id = sanitize_for_path(user_id)
@@ -792,7 +670,7 @@ async def get_history(thread_id: str, agent_name: str, user_id: str, api_key: st
 @app.get("/sessions", tags=["Memory"])
 async def list_sessions(agent_name: str, user_id: str, api_key: str = Depends(get_http_api_key),
                         db: AsyncSession = Depends(get_db)):
-    if not is_db_configured():
+    if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Chat history not supported without a database.")
     safe_agent_name = sanitize_for_path(agent_name)
     safe_user_id = sanitize_for_path(user_id)
@@ -816,7 +694,7 @@ async def list_sessions(agent_name: str, user_id: str, api_key: str = Depends(ge
 @app.put("/sessions/{thread_id}/rename", tags=["Memory"], status_code=status.HTTP_200_OK)
 async def rename_session(thread_id: str, request: RenameRequest, agent_name: str, user_id: str,
                          api_key: str = Depends(get_http_api_key), db: AsyncSession = Depends(get_db)):
-    if not is_db_configured():
+    if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Functionality not supported without a database.")
     safe_thread_id = sanitize_for_path(thread_id)
     safe_agent_name = sanitize_for_path(agent_name)
@@ -848,7 +726,7 @@ async def rename_session(thread_id: str, request: RenameRequest, agent_name: str
 @app.delete("/sessions/{thread_id}", tags=["Memory"], status_code=status.HTTP_200_OK)
 async def delete_session(thread_id: str, agent_name: str, user_id: str, api_key: str = Depends(get_http_api_key),
                          db: AsyncSession = Depends(get_db)):
-    if not is_db_configured():
+    if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Functionality not supported without a database.")
     safe_thread_id = sanitize_for_path(thread_id)
     safe_agent_name = sanitize_for_path(agent_name)

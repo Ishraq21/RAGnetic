@@ -15,6 +15,8 @@ from app.core.config import get_db_connection, get_memory_storage_config, get_lo
 from app.workflows.engine import WorkflowEngine
 from app.schemas.workflow import WorkflowCreate, WorkflowUpdate, Workflow
 from app.workflows.tasks import run_workflow_task
+from app.workflows.sync import sync_workflows_from_files
+
 
 logger = logging.getLogger("app.api.workflows")
 router = APIRouter()
@@ -208,3 +210,19 @@ async def resume_workflow(run_id: str, request: WorkflowResumeRequest):
     except Exception:
         logger.exception("Error resuming workflow.")
         raise HTTPException(status_code=500, detail="Error resuming workflow.")
+
+
+@router.post("/workflows/sync", status_code=status.HTTP_200_OK)
+def sync_all_workflows():
+    """
+    Triggers an immediate synchronization of all workflow definitions from YAML files
+    to the database. Useful for applying changes without a server restart.
+    NOTE: Changes to webhook paths may still require a full server restart to apply.
+    """
+    try:
+        sync_workflows_from_files()
+        return {"message": "Workflow definitions synced successfully from files to database."}
+    except Exception as e:
+        logger.error(f"Failed to sync workflows: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to sync workflows: {e}")
+
