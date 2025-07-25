@@ -64,6 +64,12 @@ class HumanInTheLoopStep(BaseStep):
     user_id: Optional[str] = Field(None, description="The ID of the user to assign the task to. Optional.")
     data: Optional[Dict[str, Any]] = Field(None, description="Additional data to present to the user. Optional.")
 
+class WorkflowTrigger(BaseModel):
+    type: str = Field(..., description="The type of trigger (e.g., 'api_webhook', 'webhook', 'schedule').")
+    path: Optional[str] = Field(None, description="The API path for 'api_webhook' triggers (e.g., '/webhooks/v1/my-hook'). Not used for 'webhook' (generic dispatcher) or 'schedule' triggers.")
+    # schedule: Optional[Dict[str, Any]] = Field(None, description="Schedule configuration for 'schedule' triggers.")
+
+
 # This tells Pydantic to use the 'type' field to decide which model to use for validation.
 WorkflowStep = Annotated[
     Union[AgentCallStep, ToolCallStep, IfThenStep, LoopStep, HumanInTheLoopStep],
@@ -76,20 +82,22 @@ class WorkflowBase(BaseModel):
     agent_name: Optional[str] = Field(None, description="The default agent to use for this workflow. Optional.")
     description: Optional[str] = Field(None, description="A description of what the workflow does.")
     steps: List[WorkflowStep] = Field(..., description="An ordered list of steps to execute.")
-    trigger: Optional[Dict[str, Any]] = Field(default=None, description="The trigger that starts the workflow, e.g., a schedule.")
+    trigger: Optional[WorkflowTrigger] = Field(default=None, description="The trigger that starts the workflow.")
 
 
 class WorkflowCreate(BaseModel):
     name: str
     description: Optional[str] = None
     agent_name: Optional[str] = None
-    trigger: Optional[Dict[str, Any]] = None
+    trigger: Optional[WorkflowTrigger] = None
     steps: List[Dict[str, Any]]
+
 class WorkflowUpdate(BaseModel):
     name: Optional[str] = None
     agent_name: Optional[str] = None
     description: Optional[str] = None
     steps: Optional[List[WorkflowStep]] = None
+    trigger: Optional[WorkflowTrigger] = None
 
 class Workflow(WorkflowBase):
     id: int
