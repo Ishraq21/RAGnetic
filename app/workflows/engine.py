@@ -307,7 +307,7 @@ class WorkflowEngine:
     def _load_skills(self):
         skills_dir = _APP_PATHS.get("SKILLS_DIR")
         if not skills_dir or not os.path.isdir(skills_dir):
-            logger.warning(
+            logger.debug(
                 f"Skills directory not found at {skills_dir}. No skills loaded."
             )
             return
