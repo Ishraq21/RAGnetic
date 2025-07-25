@@ -69,7 +69,8 @@ dependencies     = [
   "RestrictedPython",
   "python-hcl2",
   "sql-metadata",
-  "lark"
+  "lark",
+  " sqlalchemy-celery-beat",
 ]
 scripts = { "ragnetic" = "cli:app" }
 

@@ -36,7 +36,6 @@ MODEL_PROVIDER_MAPPING = {
 _llm_cache: Dict[str, Any] = {}
 
 
-# --- FIX: New function to intelligently find the project root ---
 @lru_cache(maxsize=1)
 def find_project_root() -> Path:
     """Searches upward from the current directory for the '.ragnetic' folder."""
