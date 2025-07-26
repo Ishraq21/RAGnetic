@@ -10,6 +10,8 @@ from typing import Any, Dict, Type
 
 from pydantic.v1 import BaseModel, Field
 
+from app.core.config import get_smtp_settings  # Import the new function
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,18 +32,21 @@ class EmailTool:
     args_schema: Type[BaseModel] = EmailToolInput
 
     def __init__(self):
-        # Load configuration securely from environment variables
-        self.smtp_host = os.environ.get("SMTP_HOST")
-        self.smtp_port = int(os.environ.get("SMTP_PORT", 465))
-        self.smtp_username = os.environ.get("SMTP_USERNAME")
-        self.smtp_password = os.environ.get("SMTP_PASSWORD")
+        # Use the new centralized function to load SMTP settings
+        self.smtp_settings = get_smtp_settings()
 
-        missing = [k for k in ("SMTP_HOST","SMTP_PORT","SMTP_USERNAME","SMTP_PASSWORD")
-                   if not os.environ.get(k)]
-        if missing:
+        missing_settings = [k for k in ("host", "port", "username", "password")
+                            if self.smtp_settings.get(k) is None]
+        if missing_settings:
             raise ValueError(
-                f"SMTP configuration is incomplete. Missing: {', '.join(missing)}"
+                f"SMTP configuration is incomplete. Missing: {', '.join(missing_settings)}. "
+                "Please configure using 'ragnetic configure'."
             )
+
+        self.smtp_host = self.smtp_settings['host']
+        self.smtp_port = self.smtp_settings['port']
+        self.smtp_username = self.smtp_settings['username']
+        self.smtp_password = self.smtp_settings['password']
 
     def run(self, to_email: str, subject: str, body: str, **kwargs: Any) -> Dict[str, str]:
         logger.info(f"Preparing to send email to: {to_email} with subject: '{subject}'")

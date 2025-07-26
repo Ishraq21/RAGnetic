@@ -264,6 +264,53 @@ def get_llm_model(
     raise ValueError(f"Unsupported or unknown LLM model prefix for: {model_name}")
 
 
+def get_smtp_settings() -> Dict[str, Any]:
+    """
+    Retrieves SMTP settings, prioritizing environment variables.
+    Expected env vars: SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD
+    Fallback to config.ini [SMTP_SETTINGS] section.
+    """
+    settings = {}
+    config = _get_config_parser()
+
+    # Prioritize environment variables
+    settings['host'] = os.environ.get("SMTP_HOST")
+    settings['port'] = os.environ.get("SMTP_PORT")
+    settings['username'] = os.environ.get("SMTP_USERNAME")
+    settings['password'] = os.environ.get("SMTP_PASSWORD") # Sensitive, usually only in env
+
+    # Fallback to config.ini if not in env
+    if not settings['host'] and config.has_option('SMTP_SETTINGS', 'host'):
+        settings['host'] = config.get('SMTP_SETTINGS', 'host')
+    if not settings['port'] and config.has_option('SMTP_SETTINGS', 'port'):
+        settings['port'] = config.getint('SMTP_SETTINGS', 'port')
+    if not settings['username'] and config.has_option('SMTP_SETTINGS', 'username'):
+        settings['username'] = config.get('SMTP_SETTINGS', 'username')
+    # Password should ideally NOT be in config.ini for production, only via env var or prompt
+    # For dev/testing, we might allow it, but warn.
+    if not settings['password'] and config.has_option('SMTP_SETTINGS', 'password'):
+        logger.warning("SMTP password found in config.ini. Consider using environment variable SMTP_PASSWORD for production.")
+        settings['password'] = config.get('SMTP_SETTINGS', 'password')
+
+    # Convert port to int if it came from env and is a string
+    if isinstance(settings.get('port'), str):
+        try:
+            settings['port'] = int(settings['port'])
+        except ValueError:
+            logger.error(f"Invalid SMTP_PORT value: {settings['port']}. Must be an integer.")
+            settings['port'] = None # Invalidate if conversion fails
+
+    # Check for completeness
+    required_fields = ['host', 'port', 'username', 'password']
+    missing_fields = [f for f in required_fields if settings.get(f) is None]
+
+    if missing_fields:
+        logger.warning(f"Incomplete SMTP settings. Missing: {', '.join(missing_fields)}. Email tool may not function.")
+        return {} # Return empty dict if incomplete
+
+    return settings
+
+
 def get_cors_settings() -> List[str]:
     """Retrieves CORS origins, prioritizing environment variables."""
     origins_str = os.environ.get("CORS_ALLOWED_ORIGINS")
