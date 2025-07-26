@@ -616,7 +616,7 @@ async def health_check():
         return JSONResponse({"status": "ok", "db_check": "skipped (no database configured)"})
     db_config = get_db_connection_config()
     if not db_config:
-        raise HTTPException(status_code=500, detail="DB configured but connection details not found.")
+        raise HTTPException(status_code=500, detail="Database connection details missing or invalid in configuration.")
     try:
         sync_dialect = db_config.get('dialect', '').replace('+aiosqlite', '')
         if 'sqlite' in sync_dialect:
@@ -666,8 +666,8 @@ async def get_history(thread_id: str, agent_name: str, user_id: str, api_key: st
         history = [{"type": row.sender, "content": row.content} for row in messages_result]
         return JSONResponse(content=history)
     except Exception as e:
-        logger.error(f"Error loading chat history for thread {safe_thread_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not load chat history.")
+        logger.error(f"An unexpected error occurred while loading chat history for thread {safe_thread_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred while loading chat history. Please check server logs for details.")
 
 
 @app.get("/sessions", tags=["Memory"])
@@ -690,8 +690,8 @@ async def list_sessions(agent_name: str, user_id: str, api_key: str = Depends(ge
         sessions = [{"thread_id": row.thread_id, "topic_name": row.topic_name or "New Chat"} for row in sessions_result]
         return JSONResponse(content=sessions)
     except Exception as e:
-        logger.error(f"Error loading chat sessions for agent {safe_agent_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not load chat sessions.")
+        logger.error(f"An unexpected error occurred while loading chat sessions for agent {safe_agent_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred while loading chat sessions. Please check server logs for details.")
 
 
 @app.put("/sessions/{thread_id}/rename", tags=["Memory"], status_code=status.HTTP_200_OK)
@@ -722,8 +722,8 @@ async def rename_session(thread_id: str, request: RenameRequest, agent_name: str
         return JSONResponse({"status": "ok", "message": "Chat session renamed successfully."})
     except SQLAlchemyError as e:
         await db.rollback()
-        logger.error(f"Database error renaming session {safe_thread_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Database error while renaming session.")
+        logger.error(f"A database error occurred while renaming session {safe_thread_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="A database error occurred while renaming the session. Please try again or create a GitHub issue.")
 
 
 @app.delete("/sessions/{thread_id}", tags=["Memory"], status_code=status.HTTP_200_OK)
@@ -752,5 +752,5 @@ async def delete_session(thread_id: str, agent_name: str, user_id: str, api_key:
         return JSONResponse({"status": "ok", "message": "Chat session deleted successfully."})
     except SQLAlchemyError as e:
         await db.rollback()
-        logger.error(f"Database error deleting session {safe_thread_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Database error while deleting session.")
+        logger.error(f"A database error occurred while deleting session {safe_thread_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="A database error occurred while deleting the session. Please try again or create a GitHub issue.")
