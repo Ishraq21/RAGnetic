@@ -412,11 +412,45 @@ def migrate(
     if not _is_db_configured():
         typer.secho("No explicit database configured. Using default SQLite for migrations.", fg=typer.colors.YELLOW)
 
-    typer.echo(f"Applying database migrations to revision: {revision}...")
+    typer.echo(f"Preparing to apply database migrations to revision: {revision}...")
+
+    # Add a status check before attempting to upgrade
+    try:
+        engine = _get_sync_db_engine() # Re-using existing helper for sync engine
+        with engine.connect() as connection:
+            alembic_cfg = alembic.config.Config(str(_PROJECT_ROOT / "alembic.ini"))
+            script = alembic.script.ScriptDirectory.from_config(alembic_cfg)
+            migration_context = MigrationContext.configure(connection)
+            current_rev = migration_context.get_current_revision()
+            head_rev = script.get_current_head()
+
+            typer.echo(f"  - Current DB Revision: {current_rev or 'None (empty database)'}")
+            typer.echo(f"  - Latest Code Revision: {head_rev}")
+
+            if revision == "head" and current_rev == head_rev:
+                typer.secho("Database is already up-to-date. No migrations to apply.", fg=typer.colors.GREEN)
+                return # Exit if already up-to-date and targeting head
+            elif revision != "head" and current_rev == revision:
+                typer.secho(f"Database is already at revision '{revision}'. No migrations to apply.", fg=typer.colors.GREEN)
+                return # Exit if already at target revision
+            elif not current_rev:
+                 typer.secho("Database is empty. Applying initial migrations.", fg=typer.colors.YELLOW)
+            else:
+                 typer.secho(f"Database needs migration. Upgrading from {current_rev} to {revision}.", fg=typer.colors.YELLOW)
+
+    except Exception as e:
+        typer.secho(f"Error checking database migration status: {e}", fg=typer.colors.RED)
+        typer.secho("Proceeding with migration attempt anyway, but consider investigating this error.", fg=typer.colors.YELLOW)
+        # Don't exit here, still try to migrate if status check failed.
+
     alembic_cfg = alembic.config.Config(str(_PROJECT_ROOT / "alembic.ini"))
     alembic_cfg.set_main_option("loglevel", "INFO")
-    alembic.command.upgrade(alembic_cfg, revision)
-    typer.secho("Database migration complete.", fg=typer.colors.GREEN)
+    try:
+        alembic.command.upgrade(alembic_cfg, revision)
+        typer.secho("Database migration complete.", fg=typer.colors.GREEN)
+    except Exception as e:
+        typer.secho(f"An error occurred during migration: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command(name="sync", help="Manually stamps the database with a specific migration revision.")
