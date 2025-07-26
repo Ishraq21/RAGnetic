@@ -1,151 +1,353 @@
+# app/api/security.py
+
 import logging
-from typing import Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, status
-from sqlalchemy import create_engine, select, insert
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import SQLAlchemyError
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError, NoResultFound
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 
-# Import new tables
-from app.db.models import (
-    users_table, organizations_table, roles_table, user_organizations_table
-)
-from app.core.config import get_db_connection, get_memory_storage_config, get_log_storage_config
-from app.core.security import get_http_api_key
 
-logger = logging.getLogger(__name__)
+from app.db import get_db
+from app.db import dao as db_dao # Alias to avoid name collision with security.py in future
+# from app.core.security import get_http_api_key # REMOVE THIS IMPORT - no longer directly used in routes
+from app.schemas.security import UserCreate, UserUpdate, User, RoleCreate, Role, Token, TokenData
+from app.core.security import PermissionChecker, get_http_api_key # Keep get_http_api_key for general auth, but use PermissionChecker for RBAC
+logger = logging.getLogger("ragnetic")
 
-router = APIRouter()
+router = APIRouter(prefix="/api/v1/security", tags=["Security API"])
 
+# --- User Management Endpoints ---
 
-# Helper function to get a synchronous database session
-def get_sync_db_session():
-    """Helper to get a synchronous SQLAlchemy session for the security APIs."""
-    mem_cfg = get_memory_storage_config()
-    log_cfg = get_log_storage_config()
-    conn_name = mem_cfg.get("connection_name") if mem_cfg.get("type") in ["db", "sqlite"] else log_cfg.get(
-        "connection_name")
-
-    if not conn_name:
-        raise RuntimeError("No database connection is configured.")
-
-    conn_str = get_db_connection(conn_name)
-    sync_conn_str = conn_str.replace('+aiosqlite', '').replace('+asyncpg', '')
-    engine = create_engine(sync_conn_str)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    try:
-        yield session
-    finally:
-        session.close()
-
-
-# Pydantic models for request body validation
-class OrganizationCreate(BaseModel):
-    name: str
-
-
-class UserCreate(BaseModel):
-    user_id: str
-    organization_name: str
-    role_name: str
-    email: Optional[str] = None
-
-
-@router.post("/organizations", status_code=status.HTTP_201_CREATED)
-async def create_organization(
-        org: OrganizationCreate,
-        api_key: str = Depends(get_http_api_key),
-        db: Any = Depends(get_sync_db_session)
-):
-    """Creates a new organization."""
-    try:
-        stmt = insert(organizations_table).values(name=org.name)
-        result = db.execute(stmt)
-        db.commit()
-        return {"message": f"Organization '{org.name}' created successfully."}
-    except SQLAlchemyError as e:
-        db.rollback()
-        logger.error(f"Error creating organization: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error occurred.")
-
-
-@router.post("/users", status_code=status.HTTP_201_CREATED)
+@router.post("/users", response_model=User, status_code=status.HTTP_201_CREATED)
 async def create_user(
-        user_data: UserCreate,
-        api_key: str = Depends(get_http_api_key),
-        db: Any = Depends(get_sync_db_session)
+    user_in: UserCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:create_user"])) # Requires specific permission
 ):
     """
-    Creates a new user and links them to an organization with a specific role.
-    Assumes organizations and roles exist.
+    Creates a new user account.
+    Requires: 'security:create_user' permission.
     """
     try:
-        # Find organization and role IDs
-        org_id = db.execute(select(organizations_table.c.id).where(
-            organizations_table.c.name == user_data.organization_name)).scalar_one_or_none()
-        role_id = db.execute(
-            select(roles_table.c.id).where(roles_table.c.name == user_data.role_name)).scalar_one_or_none()
+        new_user_data = await db_dao.create_user(db, user_in)
+        if not new_user_data:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create user.")
+        return User(**new_user_data)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to create user {user_in.username}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while creating the user.")
 
-        if not org_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found.")
-        if not role_id:
+@router.get("/users", response_model=List[User])
+async def get_all_users(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:read_users"])) # Requires specific permission
+):
+    """
+    Retrieves a paginated list of all users.
+    Requires: 'security:read_users' permission.
+    """
+    try:
+        users_data = await db_dao.get_all_users(db, skip=skip, limit=limit)
+        return [User(**user_data) for user_data in users_data]
+    except Exception as e:
+        logger.error(f"Failed to retrieve all users: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while retrieving users.")
+
+@router.get("/users/{user_id}", response_model=User)
+async def get_user_by_id(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:read_users"])) # Requires specific permission
+):
+    """
+    Retrieves a single user by their ID.
+    Requires: 'security:read_users' permission.
+    """
+    try:
+        user_data = await db_dao.get_user_by_id(db, user_id)
+        if not user_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+        return User(**user_data)
+    except Exception as e:
+        logger.error(f"Failed to retrieve user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while retrieving the user.")
+
+@router.put("/users/{user_id}", response_model=User)
+async def update_user(
+    user_id: int,
+    user_update: UserUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:update_users"])) # Requires specific permission
+):
+    """
+    Updates an existing user's details.
+    Requires: 'security:update_users' permission.
+    """
+    try:
+        updated_user_data = await db_dao.update_user(db, user_id, user_update)
+        if not updated_user_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+        return User(**updated_user_data)
+    except ValueError as e: # Catching specific ValueErrors from DAO for duplicates/not found
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        else: # Duplicate username/email
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while updating the user.")
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:delete_users"])) # Requires specific permission
+):
+    """
+    Deletes a user account.
+    Requires: 'security:delete_users' permission.
+    """
+    try:
+        deleted = await db_dao.delete_user(db, user_id)
+        if not deleted:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+        return # 204 No Content
+    except Exception as e:
+        logger.error(f"Failed to delete user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while deleting the user.")
+
+# --- Role Management Endpoints ---
+
+@router.post("/roles", response_model=Role, status_code=status.HTTP_201_CREATED)
+async def create_role(
+    role_in: RoleCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:create_role"]))
+):
+    """
+    Creates a new role.
+    Requires: 'security:create_role' permission.
+    """
+    try:
+        new_role_data = await db_dao.create_role(db, role_in)
+        return Role(**new_role_data)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to create role {role_in.name}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while creating the role.")
+
+@router.get("/roles", response_model=List[Role])
+async def get_all_roles(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:read_roles"])) # Requires specific permission
+):
+    """
+    Retrieves a paginated list of all roles.
+    Requires: 'security:read_roles' permission.
+    """
+    try:
+        roles_data = await db_dao.get_all_roles(db, skip=skip, limit=limit)
+        return [Role(**role_data) for role_data in roles_data]
+    except Exception as e:
+        logger.error(f"Failed to retrieve all roles: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while retrieving roles.")
+
+@router.get("/roles/{role_name}", response_model=Role)
+async def get_role_by_name(
+    role_name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:read_roles"])) # Requires specific permission
+):
+    """
+    Retrieves a single role by its name.
+    Requires: 'security:read_roles' permission.
+    """
+    try:
+        role_data = await db_dao.get_role_by_name(db, role_name)
+        if not role_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found.")
+        return Role(**role_data)
+    except Exception as e:
+        logger.error(f"Failed to retrieve role {role_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while retrieving the role.")
+
+@router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_role(
+    role_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:delete_roles"])) # Requires specific permission
+):
+    """
+    Deletes a role.
+    Requires: 'security:delete_roles' permission.
+    """
+    try:
+        deleted = await db_dao.delete_role(db, role_id)
+        if not deleted:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found.")
+        return # 204 No Content
+    except Exception as e:
+        logger.error(f"Failed to delete role {role_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while deleting the role.")
+
+# --- User API Key Endpoints ---
+
+@router.post("/users/{user_id}/api-keys", response_model=Token, status_code=status.HTTP_201_CREATED)
+async def create_user_api_key(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:manage_api_keys"])) # Requires specific permission
+):
+    """
+    Generates a new API key for a specific user.
+    Requires: 'security:manage_api_keys' permission.
+    """
+    try:
+        # Verify user exists first
+        user_exists = await db_dao.get_user_by_id(db, user_id)
+        if not user_exists:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+        new_api_key = await db_dao.create_user_api_key(db, user_id)
+        return Token(access_token=new_api_key, token_type="bearer")
+    except ValueError as e: # Catch specific errors from DAO like unique key constraint
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to create API key for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while creating the API key.")
+
+@router.delete("/api-keys/{api_key_str}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_user_api_key(
+    api_key_str: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:manage_api_keys"])) # Requires specific permission
+):
+    """
+    Revokes a specific user API key.
+    Requires: 'security:manage_api_keys' permission.
+    """
+    try:
+        revoked = await db_dao.revoke_user_api_key(db, api_key_str)
+        if not revoked:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found or already revoked.")
+        return # 204 No Content
+    except Exception as e:
+        logger.error(f"Failed to revoke API key {api_key_str}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while revoking the API key.")
+
+# --- User-Role Assignment Endpoints ---
+
+class UserRoleAssignment(BaseModel):
+    role_name: str
+    organization_name: Optional[str] = "default" # Default to "default" organization
+
+@router.post("/users/{user_id}/roles", status_code=status.HTTP_200_OK)
+async def assign_role_to_user(
+    user_id: int,
+    assignment: UserRoleAssignment,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:manage_user_roles"])) # Requires specific permission
+):
+    """
+    Assigns a role to a user.
+    Requires: 'security:manage_user_roles' permission.
+    """
+    try:
+        assigned = await db_dao.assign_role_to_user(db, user_id, assignment.role_name, assignment.organization_name)
+        if not assigned:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Role '{assignment.role_name}' is already assigned to user {user_id} in organization '{assignment.organization_name}'.")
+        return {"message": f"Role '{assignment.role_name}' assigned to user {user_id}."}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to assign role '{assignment.role_name}' to user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while assigning the role.")
+
+@router.delete("/users/{user_id}/roles", status_code=status.HTTP_200_OK)
+async def remove_role_from_user(
+    user_id: int,
+    assignment: UserRoleAssignment, # Re-use UserRoleAssignment for consistency
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:manage_user_roles"])) # Requires specific permission
+):
+    """
+    Removes a role from a user.
+    Requires: 'security:manage_user_roles' permission.
+    """
+    try:
+        removed = await db_dao.remove_role_from_user(db, user_id, assignment.role_name, assignment.organization_name)
+        if not removed:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Role '{assignment.role_name}' not found for user {user_id} in organization '{assignment.organization_name}'.")
+        return {"message": f"Role '{assignment.role_name}' removed from user {user_id}."}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to remove role '{assignment.role_name}' from user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while removing the role.")
+
+# --- Role-Permission Assignment Endpoints ---
+
+class RolePermissionAssignment(BaseModel):
+    permission: str
+
+@router.post("/roles/{role_id}/permissions", status_code=status.HTTP_200_OK)
+async def assign_permission_to_role(
+    role_id: int,
+    assignment: RolePermissionAssignment,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:manage_role_permissions"])) # Requires specific permission
+):
+    """
+    Assigns a permission to a role.
+    Requires: 'security:manage_role_permissions' permission.
+    """
+    try:
+        # Verify role exists first
+        role_exists = await db_dao.get_role_by_id(db, role_id) # Need get_role_by_id in DAO
+        if not role_exists:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found.")
 
-        # Create user record
-        user_stmt = insert(users_table).values(user_id=user_data.user_id, email=user_data.email).returning(
-            users_table.c.id)
-        new_user_id = db.execute(user_stmt).scalar_one()
+        assigned = await db_dao.assign_permission_to_role(db, role_id, assignment.permission)
+        if not assigned:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Permission '{assignment.permission}' is already assigned to role {role_id}.")
+        return {"message": f"Permission '{assignment.permission}' assigned to role {role_id}."}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to assign permission '{assignment.permission}' to role {role_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while assigning the permission.")
 
-        # Link user to organization and role
-        link_stmt = insert(user_organizations_table).values(
-            user_id=new_user_id,
-            organization_id=org_id,
-            role_id=role_id
-        )
-        db.execute(link_stmt)
-        db.commit()
-
-        return {
-            "message": f"User '{user_data.user_id}' created and linked to organization '{user_data.organization_name}'."}
-
-    except SQLAlchemyError as e:
-        db.rollback()
-        logger.error(f"Error creating user: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error occurred.")
-
-
-@router.get("/organizations/{organization_name}/users", status_code=status.HTTP_200_OK)
-async def list_organization_users(
-        organization_name: str,
-        api_key: str = Depends(get_http_api_key),
-        db: Any = Depends(get_sync_db_session)
+@router.delete("/roles/{role_id}/permissions", status_code=status.HTTP_200_OK)
+async def remove_permission_from_role(
+    role_id: int,
+    assignment: RolePermissionAssignment,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(PermissionChecker(["security:manage_role_permissions"])) # Requires specific permission
 ):
-    """Lists all users belonging to a specific organization."""
+    """
+    Removes a permission from a role.
+    Requires: 'security:manage_role_permissions' permission.
+    """
     try:
-        org_id = db.execute(select(organizations_table.c.id).where(
-            organizations_table.c.name == organization_name)).scalar_one_or_none()
-        if not org_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found.")
+        # Verify role exists first
+        role_exists = await db_dao.get_role_by_id(db, role_id) # Need get_role_by_id in DAO
+        if not role_exists:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found.")
 
-        stmt = select(
-            users_table.c.user_id, users_table.c.email, roles_table.c.name.label("role")
-        ).join(
-            user_organizations_table, users_table.c.id == user_organizations_table.c.user_id
-        ).join(
-            roles_table, user_organizations_table.c.role_id == roles_table.c.id
-        ).where(
-            user_organizations_table.c.organization_id == org_id
-        )
-
-        users = db.execute(stmt).fetchall()
-
-        user_list = [
-            {"user_id": user.user_id, "email": user.email, "role": user.role}
-            for user in users
-        ]
-        return {"organization": organization_name, "users": user_list}
-
-    except SQLAlchemyError as e:
-        logger.error(f"Error listing users for organization '{organization_name}': {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error occurred.")
+        removed = await db_dao.remove_permission_from_role(db, role_id, assignment.permission)
+        if not removed:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Permission '{assignment.permission}' not found for role {role_id}.")
+        return {"message": f"Permission '{assignment.permission}' removed from role {role_id}."}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to remove permission '{assignment.permission}' from role {role_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while removing the permission.")

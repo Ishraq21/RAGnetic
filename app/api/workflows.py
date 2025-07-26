@@ -16,7 +16,8 @@ from app.workflows.engine import WorkflowEngine
 from app.schemas.workflow import WorkflowCreate, WorkflowUpdate, Workflow
 from app.workflows.tasks import run_workflow_task
 from app.workflows.sync import sync_workflows_from_files
-
+from app.core.security import get_http_api_key, PermissionChecker  # Import PermissionChecker
+from app.schemas.security import User  # Import User schema
 
 logger = logging.getLogger("app.api.workflows")
 router = APIRouter()
@@ -43,13 +44,16 @@ class WorkflowResumeRequest(WorkflowUpdate):
 
 @router.post("/workflows/{workflow_name}/trigger", status_code=status.HTTP_202_ACCEPTED)
 async def trigger_workflow(
-    workflow_name: str,
-    initial_input: Optional[Dict[str, Any]] = None,
-    db: AsyncSession = Depends(get_db)
+        workflow_name: str,
+        initial_input: Optional[Dict[str, Any]] = None,
+        # Users need 'workflow:trigger' permission to trigger workflows
+        current_user: User = Depends(PermissionChecker(["workflow:trigger"])),
+        db: AsyncSession = Depends(get_db)
 ):
     """
     Triggers execution of a workflow by dispatching it to a background worker.
     This endpoint is called by webhooks, manual triggers, and the Celery Beat scheduler.
+    Requires: 'workflow:trigger' permission.
     """
     # First, validate that the workflow exists in the DB.
     workflow_row = await db.execute(
@@ -59,15 +63,23 @@ async def trigger_workflow(
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found.")
 
     # Dispatch the task to the Celery worker.
-    logger.info(f"Dispatching workflow '{workflow_name}' to background worker.")
-    run_workflow_task.delay(workflow_name=workflow_name, initial_input=initial_input)
+    logger.info(f"User '{current_user.username}' dispatching workflow '{workflow_name}' to background worker.")
+    run_workflow_task.delay(workflow_name=workflow_name, initial_input=initial_input,
+                            user_id=current_user.id)  # Pass user_id
 
     return {"message": f"Workflow '{workflow_name}' has been successfully dispatched for execution."}
 
 
 @router.post("/workflows", status_code=status.HTTP_201_CREATED, response_model=Workflow)
-async def create_workflow(request: Request):
-    """Creates a new workflow definition (JSON or YAML) in the database."""
+async def create_workflow(
+        request: Request,
+        # Users need 'workflow:create' permission to create workflows
+        current_user: User = Depends(PermissionChecker(["workflow:create"]))
+):
+    """
+    Creates a new workflow definition (JSON or YAML) in the database.
+    Requires: 'workflow:create' permission.
+    """
     content_type = request.headers.get("content-type", "").lower()
     try:
         if "yaml" in content_type or "yml" in content_type:
@@ -102,14 +114,22 @@ async def create_workflow(request: Request):
             select(workflows_table).where(workflows_table.c.id == res.inserted_primary_key[0])
         ).mappings().first()
 
+    logger.info(f"User '{current_user.username}' created workflow '{wf_in.name}'.")
     data = dict(row["definition"])
     data["id"] = row["id"]
     return Workflow.model_validate(data)
 
 
 @router.get("/workflows/{workflow_name}", response_model=Workflow)
-def get_workflow(workflow_name: str):
-    """Retrieves a workflow definition by name."""
+def get_workflow(
+        workflow_name: str,
+        # Users need 'workflow:read' permission to read workflow definitions
+        current_user: User = Depends(PermissionChecker(["workflow:read"]))
+):
+    """
+    Retrieves a workflow definition by name.
+    Requires: 'workflow:read' permission.
+    """
     engine = get_sync_db_engine()
     with engine.connect() as conn:
         row = conn.execute(
@@ -124,8 +144,16 @@ def get_workflow(workflow_name: str):
 
 
 @router.put("/workflows/{workflow_name}", response_model=Workflow)
-async def update_workflow(workflow_name: str, request: Request):
-    """Updates an existing workflow definition (JSON or YAML)."""
+async def update_workflow(
+        workflow_name: str,
+        request: Request,
+        # Users need 'workflow:update' permission to update workflows
+        current_user: User = Depends(PermissionChecker(["workflow:update"]))
+):
+    """
+    Updates an existing workflow definition (JSON or YAML).
+    Requires: 'workflow:update' permission.
+    """
     content_type = request.headers.get("content-type", "").lower()
     try:
         if "yaml" in content_type or "yml" in content_type:
@@ -148,7 +176,8 @@ async def update_workflow(workflow_name: str, request: Request):
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found.")
 
         if "steps" in upd:
-            existing_definition = json.loads(existing["definition"]) if isinstance(existing["definition"], str) else existing["definition"]
+            existing_definition = json.loads(existing["definition"]) if isinstance(existing["definition"], str) else \
+            existing["definition"]
             full = {**existing_definition, **upd}
             upd["definition"] = full
 
@@ -159,12 +188,20 @@ async def update_workflow(workflow_name: str, request: Request):
         )
         conn.commit()
 
+    logger.info(f"User '{current_user.username}' updated workflow '{workflow_name}'.")
     return get_workflow(upd.get("name", workflow_name))
 
 
 @router.delete("/workflows/{workflow_name}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_workflow(workflow_name: str):
-    """Deletes a workflow definition."""
+def delete_workflow(
+        workflow_name: str,
+        # Users need 'workflow:delete' permission to delete workflows
+        current_user: User = Depends(PermissionChecker(["workflow:delete"]))
+):
+    """
+    Deletes a workflow definition.
+    Requires: 'workflow:delete' permission.
+    """
     engine = get_sync_db_engine()
     with engine.connect() as conn:
         res = conn.execute(
@@ -174,10 +211,20 @@ def delete_workflow(workflow_name: str):
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found.")
 
+    logger.info(f"User '{current_user.username}' deleted workflow '{workflow_name}'.")
+
 
 @router.post("/workflows/{run_id}/resume", status_code=status.HTTP_202_ACCEPTED)
-async def resume_workflow(run_id: str, request: WorkflowResumeRequest):
-    """Resumes a paused workflow run, supplying any human input."""
+async def resume_workflow(
+        run_id: str,
+        request: WorkflowResumeRequest,
+        # Users need 'workflow:resume' permission to resume workflows
+        current_user: User = Depends(PermissionChecker(["workflow:resume"])),
+):
+    """
+    Resumes a paused workflow run, supplying any human input.
+    Requires: 'workflow:resume' permission.
+    """
     engine = get_sync_db_engine()
     with engine.connect() as conn:
         row = conn.execute(
@@ -204,8 +251,10 @@ async def resume_workflow(run_id: str, request: WorkflowResumeRequest):
         conn.commit()
 
     try:
+        logger.info(f"User '{current_user.username}' resuming workflow '{row['workflow_name']}' (Run ID: {run_id}).")
         engine = WorkflowEngine(get_sync_db_engine())
-        engine.run_workflow(workflow_name=row["workflow_name"], resume_run_id=run_id)
+        engine.run_workflow(workflow_name=row["workflow_name"], resume_run_id=run_id,
+                            user_id=current_user.id)  # Pass user_id
         return {"message": f"Workflow run '{run_id}' resumed successfully."}
     except Exception:
         logger.exception("Error resuming workflow.")
@@ -213,14 +262,19 @@ async def resume_workflow(run_id: str, request: WorkflowResumeRequest):
 
 
 @router.post("/workflows/sync", status_code=status.HTTP_200_OK)
-def sync_all_workflows():
+def sync_all_workflows(
+        # Only users with 'workflow:sync' permission can trigger workflow sync
+        current_user: User = Depends(PermissionChecker(["workflow:sync"]))
+):
     """
     Triggers an immediate synchronization of all workflow definitions from YAML files
     to the database. Useful for applying changes without a server restart.
     NOTE: Changes to webhook paths may still require a full server restart to apply.
+    Requires: 'workflow:sync' permission.
     """
     try:
         sync_workflows_from_files()
+        logger.info(f"User '{current_user.username}' triggered workflow synchronization.")
         return {"message": "Workflow definitions synced successfully from files to database."}
     except Exception as e:
         logger.error(f"Failed to sync workflows: {e}", exc_info=True)

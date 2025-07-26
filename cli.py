@@ -131,6 +131,16 @@ def _get_server_url() -> str:
     port = config.get('SERVER', 'port', fallback='8000')
     return f"http://{host}:{port}/api/v1"
 
+
+def _get_api_key_for_cli() -> str:
+    """Retrieves the RAGNETIC_API_KEYS from environment variables for CLI calls."""
+    api_keys = get_server_api_keys()
+    if not api_keys:
+        typer.secho("Error: No server API key configured. Please run 'ragnetic set-server-key'.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    return api_keys[0] # Use the first configured key
+
+
 def setup_cli_logging():
     """Configures logging for clear, colored CLI command feedback."""
 
@@ -255,6 +265,13 @@ app.add_typer(eval_app)
 run_app = typer.Typer(name="run", help="Commands for running workflows and other processes.")
 app.add_typer(run_app)
 
+# New Typer apps for security management
+user_app = typer.Typer(name="user", help="Manage user accounts.")
+app.add_typer(user_app)
+
+role_app = typer.Typer(name="role", help="Manage user roles and permissions.")
+app.add_typer(role_app)
+
 
 @run_app.command(name="workflow", help="Triggers a workflow to run via the API.")
 def run_workflow_cli(
@@ -271,7 +288,13 @@ def run_workflow_cli(
     port = config.get('SERVER', 'port', fallback='8000')
 
     url = f"http://{host}:{port}/api/v1/workflows/{workflow_name}/trigger"
-    headers = {"Content-Type": "application/json"}
+    # Get the server API key to authenticate CLI calls
+    server_api_keys = get_server_api_keys()
+    if not server_api_keys:
+        typer.secho("Error: No server API key configured. Please run 'ragnetic set-server-key'.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    api_key = server_api_keys[0]  # Use the first configured key
+    headers = {"Content-Type": "application/json", "x-api-key": api_key}
 
     initial_input = {}
     if initial_input_json:
@@ -280,7 +303,7 @@ def run_workflow_cli(
         except json.JSONDecodeError:
             typer.secho("Error: Invalid JSON input.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
-
+    response = None  # Initialize response
     try:
         typer.secho(f"Attempting to trigger workflow '{workflow_name}' via API...", fg=typer.colors.CYAN)
         response = requests.post(url, headers=headers, json=initial_input, timeout=10)
@@ -299,6 +322,8 @@ def run_workflow_cli(
         typer.secho(f"Error: Could not connect to the RAGnetic server at {url}", fg=typer.colors.RED)
         typer.echo(f"Please ensure the server is running with 'ragnetic start-server'.")
         typer.echo(f"Detailed error: {e}")
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
         raise typer.Exit(code=1)
 
 MODEL_PROVIDERS = {
@@ -1583,14 +1608,16 @@ def delete_workflow(
             raise typer.Exit()
 
     server_url = _get_server_url()
-    api_url = f"{server_url}/workflows/{workflow_name}"
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key}
+    api_url = f"{server_url}/workflows/{workflow_name}"  # Correctly define api_url here
     workflow_file_path = _APP_PATHS["WORKFLOWS_DIR"] / f"{workflow_name}.yaml"
     response = None
 
     try:
         # 1. Delete from database via API
         typer.echo(f"Attempting to delete workflow '{workflow_name}' from database via API: {api_url}...")
-        response = requests.delete(api_url, timeout=10)
+        response = requests.delete(api_url, headers=headers, timeout=10) # Pass headers
         response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
 
         typer.secho(f"Workflow '{workflow_name}' successfully deleted from database.", fg=typer.colors.GREEN)
@@ -1617,6 +1644,436 @@ def delete_workflow(
     except Exception as e:
         typer.secho(f"An unexpected error occurred during workflow deletion: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+
+# --- User Management Commands ---
+
+@user_app.command("create", help="Create a new user account.")
+def create_user(
+        username: str = typer.Argument(..., help="Username for the new user."),
+        password: str = typer.Option(..., prompt=True, hide_input=True, confirmation_prompt=True,
+                                     help="Password for the new user."),
+        email: Optional[str] = typer.Option(None, help="Email for the new user."),
+        is_superuser: bool = typer.Option(False, "--superuser", "-s", help="Grant superuser privileges to this user."),
+        roles: Optional[List[str]] = typer.Option(None, "--role", "-r",
+                                                  help="Role(s) to assign to the user (e.g., --role admin --role developer)."),
+):
+    """Creates a new user account via the API."""
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+    url = f"{server_url}/security/users"
+
+    user_data = {
+        "username": username,
+        "password": password,
+        "email": email,
+        "is_superuser": is_superuser,
+        "is_active": True,  # Always active on creation via CLI
+        "roles": roles if roles else []
+    }
+
+    response = None
+
+    try:
+        typer.secho(f"Attempting to create user '{username}'...", fg=typer.colors.CYAN)
+        response = requests.post(url, headers=headers, json=user_data, timeout=10)
+        response.raise_for_status()
+
+        created_user = response.json()
+        typer.secho(f"User '{created_user['username']}' (ID: {created_user['id']}) created successfully.",
+                    fg=typer.colors.GREEN)
+        if created_user.get('roles'):
+            typer.echo(f"  Assigned roles: {', '.join([r['name'] for r in created_user['roles']])}")
+        if created_user.get('is_superuser'):
+            typer.echo("  (This user is a Superuser)")
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error creating user: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+@user_app.command("list", help="List all user accounts.")
+def list_users():
+    """Lists all user accounts via the API."""
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key}
+    url = f"{server_url}/security/users"
+    response = None  # Initialize response
+
+    try:
+        typer.secho("Fetching user list...", fg=typer.colors.CYAN)
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        users_data = response.json()
+        if not users_data:
+            typer.secho("No users found.", fg=typer.colors.YELLOW)
+            return
+
+        typer.secho("\n--- User Accounts ---", bold=True)
+        header = ["ID", "Username", "Email", "Active", "Superuser", "Roles"]
+
+        # Prepare rows for width calculation (using raw string values)
+        raw_rows_for_width_calc = []
+        for user in users_data:
+            roles_str = ", ".join([role['name'] for role in user.get('roles', [])]) or "None"
+            raw_rows_for_width_calc.append([
+                str(user['id']),
+                user['username'],
+                user.get('email', 'N/A'),
+                "Yes" if user['is_active'] else "No",
+                "Yes" if user['is_superuser'] else "No",
+                roles_str
+            ])
+
+        # Calculate column widths based on raw strings
+        col_widths = [max(len(str(item)) for item in col) for col in zip(*([header] + raw_rows_for_width_calc))]
+
+        typer.echo(" | ".join(f"{h:<{w}}" for h, w in zip(header, col_widths)))
+        typer.echo("-|-".join("-" * w for w in col_widths))
+
+        # Prepare rows for display (with styling)
+        display_rows = []
+        for user in users_data:
+            roles_str = ", ".join([role['name'] for role in user.get('roles', [])]) or "None"
+            display_rows.append([
+                str(user['id']),
+                user['username'],
+                user.get('email', 'N/A'),
+                typer.style("Yes", fg=typer.colors.GREEN) if user['is_active'] else typer.style("No",
+                                                                                                fg=typer.colors.RED),
+                typer.style("Yes", fg=typer.colors.GREEN) if user['is_superuser'] else "No",
+                roles_str
+            ])
+
+        for row_idx, row in enumerate(display_rows):
+            # When joining, convert each item to string explicitly to handle StyledText objects
+            # and ensure proper alignment by manually padding based on calculated width
+            formatted_cells = []
+            for col_idx, item in enumerate(row):
+                # Calculate effective length by stripping ANSI escape codes for styled text
+                raw_item_len = len(str(raw_rows_for_width_calc[row_idx][col_idx]))
+                padding = col_widths[col_idx] - raw_item_len
+                formatted_cells.append(f"{item}{' ' * padding}")
+            typer.echo(" | ".join(formatted_cells))
+
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error listing users: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+@user_app.command("update", help="Update an existing user account.")
+def update_user(
+        user_id: int = typer.Argument(..., help="ID of the user to update."),
+        username: Optional[str] = typer.Option(None, help="New username for the user."),
+        password: Optional[str] = typer.Option(None, prompt=False, hide_input=True, confirmation_prompt=True,
+                                               help="New password for the user."),
+        email: Optional[str] = typer.Option(None, help="New email for the user."),
+        is_active: Optional[bool] = typer.Option(None, "--active/--inactive", help="Set user active/inactive."),
+        is_superuser: Optional[bool] = typer.Option(None, "--superuser/--no-superuser",
+                                                    help="Grant/revoke superuser privileges."),
+        roles: Optional[List[str]] = typer.Option(None, "--role", "-r",
+                                                  help="Role(s) to assign to the user (e.g., --role admin --role developer). Overwrites existing roles if provided."),
+):
+    """Updates an existing user account via the API."""
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+    url = f"{server_url}/security/users/{user_id}"
+
+    update_data = {}
+    if username is not None: update_data["username"] = username
+    if password is not None: update_data["password"] = password
+    if email is not None: update_data["email"] = email
+    if is_active is not None: update_data["is_active"] = is_active
+    if is_superuser is not None: update_data["is_superuser"] = is_superuser
+    if roles is not None: update_data["roles"] = roles
+    response = None  # Initialize response
+
+    if not update_data:
+        typer.secho("No update parameters provided.", fg=typer.colors.YELLOW)
+        raise typer.Exit()
+
+    try:
+        typer.secho(f"Attempting to update user ID {user_id}...", fg=typer.colors.CYAN)
+        response = requests.put(url, headers=headers, json=update_data, timeout=10)
+        response.raise_for_status()
+
+        updated_user = response.json()
+        typer.secho(f"User '{updated_user['username']}' (ID: {updated_user['id']}) updated successfully.",
+                    fg=typer.colors.GREEN)
+        typer.echo(f"  Active: {updated_user['is_active']}")
+        typer.echo(f"  Superuser: {updated_user['is_superuser']}")
+        typer.echo(f"  Roles: {', '.join([r['name'] for r in updated_user.get('roles', [])]) or 'None'}")
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error updating user: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+@user_app.command("delete", help="Delete a user account.")
+def delete_user(
+        user_id: int = typer.Argument(..., help="ID of the user to delete."),
+        force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
+):
+    """Deletes a user account via the API."""
+    if not force:
+        typer.secho(f"DANGER: This will permanently delete user ID {user_id}.", fg=typer.colors.RED)
+        typer.confirm("Are you absolutely sure you want to proceed?", abort=True)
+
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key}
+    url = f"{server_url}/security/users/{user_id}"
+    response = None  # Initialize response
+
+    try:
+        typer.secho(f"Attempting to delete user ID {user_id}...", fg=typer.colors.CYAN)
+        response = requests.delete(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        typer.secho(f"User ID {user_id} deleted successfully.", fg=typer.colors.GREEN)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error deleting user: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+@user_app.command("generate-key", help="Generate a new API key for a user.")
+def generate_user_api_key(
+        user_id: int = typer.Argument(..., help="ID of the user to generate an API key for."),
+):
+    """Generates a new API key for a user via the API."""
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key}
+    url = f"{server_url}/security/users/{user_id}/api-keys"
+    response = None  # Initialize response
+
+    try:
+        typer.secho(f"Attempting to generate API key for user ID {user_id}...", fg=typer.colors.CYAN)
+        response = requests.post(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        new_key_data = response.json()
+        typer.secho(f"New API key generated for user ID {user_id}:", fg=typer.colors.GREEN)
+        typer.echo(typer.style(new_key_data['access_token'], bold=True))
+        typer.secho("Store this key securely! It will not be shown again.", fg=typer.colors.YELLOW)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error generating API key: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+@user_app.command("revoke-key", help="Revoke a user's API key.")
+def revoke_user_api_key(
+        api_key_str: str = typer.Argument(..., help="The API key string to revoke."),
+        force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
+):
+    """Revokes a user's API key via the API."""
+    if not force:
+        typer.secho(f"DANGER: This will permanently revoke the API key.", fg=typer.colors.RED)
+        typer.confirm("Are you sure you want to proceed?", abort=True)
+
+    server_url = _get_server_url()
+    master_api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": master_api_key}
+    url = f"{server_url}/security/api-keys/{api_key_str}"  # Note: /api-keys/{api_key_str}
+    response = None  # Initialize response
+
+    try:
+        typer.secho(f"Attempting to revoke API key '{api_key_str[:8]}...'...", fg=typer.colors.CYAN)
+        response = requests.delete(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        typer.secho(f"API key '{api_key_str[:8]}...' revoked successfully.", fg=typer.colors.GREEN)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error revoking API key: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+# --- Role Management Commands ---
+
+@role_app.command("create", help="Create a new role.")
+def create_role(
+        name: str = typer.Argument(..., help="Name for the new role."),
+        description: Optional[str] = typer.Option(None, help="Description for the new role."),
+):
+    """Creates a new role via the API."""
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+    url = f"{server_url}/security/roles"
+
+    role_data = {
+        "name": name,
+        "description": description
+    }
+
+    response = None  # Initialize response
+
+    try:
+        typer.secho(f"Attempting to create role '{name}'...", fg=typer.colors.CYAN)
+        response = requests.post(url, headers=headers, json=role_data, timeout=10)
+        response.raise_for_status()
+
+        created_role = response.json()
+        typer.secho(f"Role '{created_role['name']}' (ID: {created_role['id']}) created successfully.",
+                    fg=typer.colors.GREEN)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error creating role: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+@role_app.command("list", help="List all roles.")
+def list_roles():
+    """Lists all roles via the API."""
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key}
+    url = f"{server_url}/security/roles"
+    response = None  # Initialize response
+
+    try:
+        typer.secho("Fetching role list...", fg=typer.colors.CYAN)
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        roles_data = response.json()
+        if not roles_data:
+            typer.secho("No roles found.", fg=typer.colors.YELLOW)
+            return
+
+        typer.secho("\n--- Roles ---", bold=True)
+        header = ["ID", "Name", "Description", "Permissions"]
+        rows = []
+        for role in roles_data:
+            permissions_str = ", ".join(role.get('permissions', [])) or "None"
+            rows.append([
+                str(role['id']),
+                role['name'],
+                role.get('description', 'N/A'),
+                permissions_str
+            ])
+
+        # Simple table printing
+        col_widths = [max(len(str(item)) for item in col) for col in zip(*([header] + rows))]
+        typer.echo(" | ".join(f"{h:<{w}}" for h, w in zip(header, col_widths)))
+        typer.echo("-|-".join("-" * w for w in col_widths))
+        for row in rows:
+            typer.echo(" | ".join(f"{item:<{col_widths[i]}}" for i, item in enumerate(row)))
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error listing roles: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+@role_app.command("delete", help="Delete a role.")
+def delete_role(
+        role_id: int = typer.Argument(..., help="ID of the role to delete."),
+        force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
+):
+    """Deletes a role via the API."""
+    if not force:
+        typer.secho(f"DANGER: This will permanently delete role ID {role_id}.", fg=typer.colors.RED)
+        typer.confirm("Are you sure you want to proceed?", abort=True)
+
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key}
+    url = f"{server_url}/security/roles/{role_id}"
+    response = None  # Initialize response
+
+    try:
+        typer.secho(f"Attempting to delete role ID {role_id}...", fg=typer.colors.CYAN)
+        response = requests.delete(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        typer.secho(f"Role ID {role_id} deleted successfully.", fg=typer.colors.GREEN)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error deleting role: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+@role_app.command("assign-permission", help="Assign a permission to a role.")
+def assign_permission_to_role(
+        role_id: int = typer.Argument(..., help="ID of the role to assign permission to."),
+        permission: str = typer.Argument(..., help="The permission string to assign (e.g., 'agent:create')."),
+):
+    """Assigns a permission to a role via the API."""
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+    url = f"{server_url}/security/roles/{role_id}/permissions"
+
+    data = {"permission": permission}
+    response = None  # Initialize response
+
+    try:
+        typer.secho(f"Attempting to assign permission '{permission}' to role ID {role_id}...", fg=typer.colors.CYAN)
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+
+        typer.secho(f"Permission '{permission}' assigned to role ID {role_id} successfully.", fg=typer.colors.GREEN)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error assigning permission: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+@role_app.command("remove-permission", help="Remove a permission from a role.")
+def remove_permission_from_role(
+        role_id: int = typer.Argument(..., help="ID of the role to remove permission from."),
+        permission: str = typer.Argument(..., help="The permission string to remove."),
+):
+    """Removes a permission from a role via the API."""
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+    url = f"{server_url}/security/roles/{role_id}/permissions"
+
+    data = {"permission": permission}  # DELETE with body is non-standard but FastAPI allows it
+    response = None  # Initialize response
+
+    try:
+        typer.secho(f"Attempting to remove permission '{permission}' from role ID {role_id}...", fg=typer.colors.CYAN)
+        response = requests.delete(url, headers=headers, json=data, timeout=10)  # Pass json=data for DELETE with body
+        response.raise_for_status()
+
+        typer.secho(f"Permission '{permission}' removed from role ID {role_id} successfully.", fg=typer.colors.GREEN)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error removing permission: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
 
 
 if __name__ == "__main__":
