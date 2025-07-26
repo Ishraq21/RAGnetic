@@ -58,6 +58,8 @@ from app.db.models import metadata, agent_runs, chat_sessions_table, users_table
 from app.workflows.engine import WorkflowEngine
 from app.schemas.workflow import Workflow
 import subprocess
+from app.db import get_db
+from app.schemas.security import UserCreate, UserUpdate, RoleCreate, User, Role, Token, LoginRequest # Add LoginRequest
 
 # --- Centralized Path Configuration ---
 _APP_PATHS = get_path_settings()
@@ -73,6 +75,8 @@ _TEMP_CLONES_DIR = _APP_PATHS["TEMP_CLONES_DIR"]
 _BENCHMARK_DIR = _APP_PATHS["BENCHMARK_DIR"]
 _WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
 # _SKILLS_DIR = _APP_PATHS["SKILLS_DIR"]
+
+_CLI_CONFIG_FILE = _RAGNETIC_DIR / "cli_config.ini"
 
 # --- Load Environment Variables ---
 load_dotenv(dotenv_path=_PROJECT_ROOT / ".env")
@@ -132,13 +136,43 @@ def _get_server_url() -> str:
     return f"http://{host}:{port}/api/v1"
 
 
-def _get_api_key_for_cli() -> str:
-    """Retrieves the RAGNETIC_API_KEYS from environment variables for CLI calls."""
-    api_keys = get_server_api_keys()
-    if not api_keys:
-        typer.secho("Error: No server API key configured. Please run 'ragnetic set-server-key'.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    return api_keys[0] # Use the first configured key
+def _get_api_key_for_cli() -> Optional[str]:
+    """
+    Retrieves the API key for CLI calls.
+    Prioritizes the active key from cli_config.ini, then falls back to RAGNETIC_API_KEYS (master key).
+    """
+    cli_config = configparser.ConfigParser()
+    cli_config.read(_CLI_CONFIG_FILE)
+
+    # 1. Check for active user API key in cli_config.ini
+    if cli_config.has_section('CLI_AUTH') and cli_config.has_option('CLI_AUTH', 'active_api_key'):
+        active_key = cli_config.get('CLI_AUTH', 'active_api_key')
+        if active_key:
+            return active_key
+
+    # 2. Fallback to the global server API key from .env or main config
+    server_api_keys = get_server_api_keys()
+    if server_api_keys:
+        return server_api_keys[0] # Return the first configured master key
+
+    return None # No key found
+
+
+def _save_cli_config(section: str, key: str, value: str):
+    """Saves a key-value pair to the CLI-specific config file."""
+    cli_config = configparser.ConfigParser()
+    cli_config.read(_CLI_CONFIG_FILE)
+
+    if not cli_config.has_section(section):
+        cli_config.add_section(section)
+
+    cli_config.set(section, key, value)
+
+    # Ensure the directory exists before writing
+    _CLI_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(_CLI_CONFIG_FILE, 'w') as configfile:
+        cli_config.write(configfile)
 
 
 def setup_cli_logging():
@@ -255,9 +289,6 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
-
-auth_app = typer.Typer(name="auth", help="Manage authentication for external services like Google Drive.")
-app.add_typer(auth_app)
 
 eval_app = typer.Typer(name="evaluate", help="Commands for evaluating agent performance.")
 app.add_typer(eval_app)
@@ -820,7 +851,7 @@ def set_api():
     typer.echo("\nAPI key configuration complete.")
 
 
-@auth_app.command("gdrive", help="Authenticate with Google Drive securely.")
+@app.command("gdrive", help="Authenticate with Google Drive securely.")
 def auth_gdrive():
     typer.secho("--- Google Drive Authentication Setup ---", bold=True)
     json_path_str = typer.prompt("Path to your service account JSON key file")
@@ -1654,6 +1685,10 @@ def create_user(
         password: str = typer.Option(..., prompt=True, hide_input=True, confirmation_prompt=True,
                                      help="Password for the new user."),
         email: Optional[str] = typer.Option(None, help="Email for the new user."),
+
+        first_name: Optional[str] = typer.Option(None, "--first-name", "-f", help="First name of the user."),
+        last_name: Optional[str] = typer.Option(None, "--last-name", "-l", help="Last name of the user."),
+
         is_superuser: bool = typer.Option(False, "--superuser", "-s", help="Grant superuser privileges to this user."),
         roles: Optional[List[str]] = typer.Option(None, "--role", "-r",
                                                   help="Role(s) to assign to the user (e.g., --role admin --role developer)."),
@@ -1668,6 +1703,8 @@ def create_user(
         "username": username,
         "password": password,
         "email": email,
+        "first_name": first_name,
+        "last_name": last_name,
         "is_superuser": is_superuser,
         "is_active": True,  # Always active on creation via CLI
         "roles": roles if roles else []
@@ -1683,6 +1720,8 @@ def create_user(
         created_user = response.json()
         typer.secho(f"User '{created_user['username']}' (ID: {created_user['id']}) created successfully.",
                     fg=typer.colors.GREEN)
+        typer.echo(f"  Full Name: {created_user.get('first_name', '')} {created_user.get('last_name', '')}".strip()) # Display full name
+
         if created_user.get('roles'):
             typer.echo(f"  Assigned roles: {', '.join([r['name'] for r in created_user['roles']])}")
         if created_user.get('is_superuser'):
@@ -1715,20 +1754,23 @@ def list_users():
             return
 
         typer.secho("\n--- User Accounts ---", bold=True)
-        header = ["ID", "Username", "Email", "Active", "Superuser", "Roles"]
+        header = ["ID", "Username", "Full Name", "Email", "Active", "Superuser", "Roles"]
 
         # Prepare rows for width calculation (using raw string values)
         raw_rows_for_width_calc = []
         for user in users_data:
+            full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "N/A" # New: Full Name
             roles_str = ", ".join([role['name'] for role in user.get('roles', [])]) or "None"
             raw_rows_for_width_calc.append([
                 str(user['id']),
                 user['username'],
+                full_name, # New: Full Name
                 user.get('email', 'N/A'),
                 "Yes" if user['is_active'] else "No",
                 "Yes" if user['is_superuser'] else "No",
                 roles_str
             ])
+
 
         # Calculate column widths based on raw strings
         col_widths = [max(len(str(item)) for item in col) for col in zip(*([header] + raw_rows_for_width_calc))]
@@ -1739,16 +1781,18 @@ def list_users():
         # Prepare rows for display (with styling)
         display_rows = []
         for user in users_data:
+            full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "N/A" # New: Full Name
             roles_str = ", ".join([role['name'] for role in user.get('roles', [])]) or "None"
             display_rows.append([
                 str(user['id']),
                 user['username'],
+                full_name, # New: Full Name
                 user.get('email', 'N/A'),
-                typer.style("Yes", fg=typer.colors.GREEN) if user['is_active'] else typer.style("No",
-                                                                                                fg=typer.colors.RED),
+                typer.style("Yes", fg=typer.colors.GREEN) if user['is_active'] else typer.style("No", fg=typer.colors.RED),
                 typer.style("Yes", fg=typer.colors.GREEN) if user['is_superuser'] else "No",
                 roles_str
             ])
+
 
         for row_idx, row in enumerate(display_rows):
             # When joining, convert each item to string explicitly to handle StyledText objects
@@ -1769,6 +1813,8 @@ def list_users():
         raise typer.Exit(code=1)
 
 
+# cli.py (locate @user_app.command("update") and replace it)
+
 @user_app.command("update", help="Update an existing user account.")
 def update_user(
         user_id: int = typer.Argument(..., help="ID of the user to update."),
@@ -1776,6 +1822,10 @@ def update_user(
         password: Optional[str] = typer.Option(None, prompt=False, hide_input=True, confirmation_prompt=True,
                                                help="New password for the user."),
         email: Optional[str] = typer.Option(None, help="New email for the user."),
+        first_name: Optional[str] = typer.Option(None, "--first-name", "-f", help="New first name of the user."),
+        # New option
+        last_name: Optional[str] = typer.Option(None, "--last-name", "-l", help="New last name of the user."),
+        # New option
         is_active: Optional[bool] = typer.Option(None, "--active/--inactive", help="Set user active/inactive."),
         is_superuser: Optional[bool] = typer.Option(None, "--superuser/--no-superuser",
                                                     help="Grant/revoke superuser privileges."),
@@ -1784,7 +1834,7 @@ def update_user(
 ):
     """Updates an existing user account via the API."""
     server_url = _get_server_url()
-    api_key = _get_api_key_for_cli()
+    api_key = _get_api_key_for_cli()  # Use the new _get_api_key_for_cli
     headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
     url = f"{server_url}/security/users/{user_id}"
 
@@ -1792,14 +1842,16 @@ def update_user(
     if username is not None: update_data["username"] = username
     if password is not None: update_data["password"] = password
     if email is not None: update_data["email"] = email
+    if first_name is not None: update_data["first_name"] = first_name  # Pass new field
+    if last_name is not None: update_data["last_name"] = last_name  # Pass new field
     if is_active is not None: update_data["is_active"] = is_active
     if is_superuser is not None: update_data["is_superuser"] = is_superuser
     if roles is not None: update_data["roles"] = roles
-    response = None  # Initialize response
 
     if not update_data:
         typer.secho("No update parameters provided.", fg=typer.colors.YELLOW)
         raise typer.Exit()
+    response = None  # Initialize response
 
     try:
         typer.secho(f"Attempting to update user ID {user_id}...", fg=typer.colors.CYAN)
@@ -1809,6 +1861,8 @@ def update_user(
         updated_user = response.json()
         typer.secho(f"User '{updated_user['username']}' (ID: {updated_user['id']}) updated successfully.",
                     fg=typer.colors.GREEN)
+        typer.echo(
+            f"  Full Name: {updated_user.get('first_name', '')} {updated_user.get('last_name', '')}".strip())  # Display full name
         typer.echo(f"  Active: {updated_user['is_active']}")
         typer.echo(f"  Superuser: {updated_user['is_superuser']}")
         typer.echo(f"  Roles: {', '.join([r['name'] for r in updated_user.get('roles', [])]) or 'None'}")
@@ -1818,7 +1872,6 @@ def update_user(
         if response is not None and response.text:
             typer.echo(f"API Response: {response.text}")
         raise typer.Exit(code=1)
-
 
 @user_app.command("delete", help="Delete a user account.")
 def delete_user(
@@ -2074,6 +2127,109 @@ def remove_permission_from_role(
             typer.echo(f"API Response: {response.text}")
         raise typer.Exit(code=1)
 
+
+@app.command("login", help="Log in a user to activate their API key for CLI commands.")
+def login(
+        username: str = typer.Argument(..., help="Username of the user."),
+        password: str = typer.Option(..., prompt=True, hide_input=True, help="Password for the user."),
+):
+    """Logs in a user and saves their API key for subsequent CLI commands."""
+    server_url = _get_server_url()
+    url = f"{server_url}/security/login"
+    headers = {"Content-Type": "application/json"}
+    login_data = {"username": username, "password": password}
+    response = None
+
+    try:
+        typer.secho(f"Attempting to log in user '{username}'...", fg=typer.colors.CYAN)
+        response = requests.post(url, headers=headers, json=login_data, timeout=10)
+        response.raise_for_status()
+
+        token_data = response.json()
+        api_key_to_save = token_data.get("access_token")
+
+        if api_key_to_save:
+            _save_cli_config('CLI_AUTH', 'active_api_key', api_key_to_save)
+            _save_cli_config('CLI_AUTH', 'active_username', username)
+            typer.secho(
+                f"Successfully logged in as '{username}'. Your CLI commands will now use this user's permissions.",
+                fg=typer.colors.GREEN)
+        else:
+            typer.secho("Login failed: No access token received.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error during login: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+@app.command("logout", help="Clear the active API key, effectively logging out the CLI user.")
+def logout():
+    """Clears the active API key from the CLI config."""
+    cli_config = configparser.ConfigParser()
+    cli_config.read(_CLI_CONFIG_FILE)
+
+    if cli_config.has_section('CLI_AUTH'):
+        cli_config.remove_section('CLI_AUTH')
+        with open(_CLI_CONFIG_FILE, 'w') as configfile:
+            cli_config.write(configfile)
+        typer.secho("Successfully logged out. No active user key configured for CLI.", fg=typer.colors.GREEN)
+    else:
+        typer.secho("No active user session found to log out from.", fg=typer.colors.YELLOW)
+
+
+@app.command("whoami", help="Display the currently active CLI user and their permissions.")
+def whoami():
+    """Displays the currently active CLI user and their permissions by querying the /me endpoint."""
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()  # This will get the active key (user-specific or master)
+
+    if not api_key:
+        typer.secho("No active API key found. Please log in with 'ragnetic login' or set RAGNETIC_API_KEYS.",
+                    fg=typer.colors.YELLOW)
+        raise typer.Exit(code=1)
+
+    headers = {"X-API-Key": api_key}
+    url = f"{server_url}/security/me"
+    response = None
+
+    try:
+        typer.secho("Fetching current user details...", fg=typer.colors.CYAN)
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        user_info = response.json()
+
+        typer.secho("\n--- Current CLI User ---", bold=True)
+        typer.echo(f"  Username: {user_info.get('username', 'N/A')}")
+        typer.echo(f"  Email:    {user_info.get('email', 'N/A')}")
+        typer.echo(f"  First Name: {user_info.get('first_name', 'N/A')}")  # New: First Name
+        typer.echo(f"  Last Name: {user_info.get('last_name', 'N/A')}")  # New: Last Name
+        typer.echo(
+            f"  Active:   {typer.style('Yes', fg=typer.colors.GREEN) if user_info.get('is_active') else typer.style('No', fg=typer.colors.RED)}")
+        typer.echo(
+            f"  Superuser: {typer.style('Yes', fg=typer.colors.GREEN) if user_info.get('is_superuser') else 'No'}")
+
+        typer.secho("\n  Roles and Permissions:", bold=True)
+        roles = user_info.get('roles', [])
+        if roles:
+            for role in roles:
+                typer.echo(f"    - Role: {role.get('name')}")
+                permissions = role.get('permissions', [])
+                if permissions:
+                    typer.echo(f"      Permissions: {', '.join(permissions)}")
+                else:
+                    typer.echo(f"      Permissions: None")
+        else:
+            typer.echo("    No roles assigned.")
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error fetching user info: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

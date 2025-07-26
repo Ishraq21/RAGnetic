@@ -39,6 +39,8 @@ async def create_user(db: AsyncSession, user_in: UserCreate) -> Optional[Dict[st
         stmt = insert(users_table).values(
             user_id=user_in.username,  # Use username as user_id in DB
             email=user_in.email,
+            first_name=user_in.first_name,
+            last_name=user_in.last_name,
             hashed_password=hashed_pw,
             is_active=user_in.is_active,
             is_superuser=user_in.is_superuser,
@@ -48,6 +50,8 @@ async def create_user(db: AsyncSession, user_in: UserCreate) -> Optional[Dict[st
             users_table.c.id,
             users_table.c.user_id,  # Return user_id from DB
             users_table.c.email,
+            users_table.c.first_name,
+            users_table.c.last_name,
             users_table.c.hashed_password,  # Ensure hashed_password is returned
             users_table.c.is_active,
             users_table.c.is_superuser,
