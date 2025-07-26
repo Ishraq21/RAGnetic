@@ -58,6 +58,8 @@ users_table = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("user_id", String(255), nullable=False, unique=True, index=True),
     Column("email", String(255), nullable=True, unique=True),
+    Column("first_name", String(100), nullable=True), # New: First Name
+    Column("last_name", String(100), nullable=True),  # New: Last Name
     Column("hashed_password", String(255), nullable=False), # Store hashed passwords
     Column("is_active", Boolean, nullable=False, default=True), # User account status
     Column("is_superuser", Boolean, nullable=False, default=False), # For master admin accounts
@@ -269,3 +271,4 @@ Index("chat_messages_session_ts_idx", chat_messages_table.c.session_id, chat_mes
 Index("conv_metrics_session_ts_idx", conversation_metrics_table.c.session_id, conversation_metrics_table.c.timestamp)
 Index("workflow_runs_workflow_idx", workflow_runs_table.c.workflow_id)
 Index("workflow_runs_user_idx", workflow_runs_table.c.user_id)
+

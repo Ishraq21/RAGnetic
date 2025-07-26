@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional
 from datetime import datetime
 
+
 class RoleBase(BaseModel):
     """Base schema for a role."""
     name: str = Field(..., min_length=3, max_length=50, description="Unique name of the role (e.g., 'admin', 'developer').")
@@ -25,6 +26,8 @@ class UserBase(BaseModel):
     """Base schema for a user."""
     username: str = Field(..., min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_-]+$", description="Unique username for the user.")
     email: Optional[EmailStr] = Field(None, description="Optional email address for the user.")
+    first_name: Optional[str] = Field(None, max_length=100, description="User's first name.")
+    last_name: Optional[str] = Field(None, max_length=100, description="User's last name.")
     is_active: bool = Field(True, description="Indicates if the user account is active.")
     is_superuser: bool = Field(False, description="Indicates if the user has superuser privileges.")
 
@@ -37,6 +40,8 @@ class UserUpdate(UserBase):
     """Schema for updating an existing user's details."""
     username: Optional[str] = Field(None, min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_-]+$", description="New unique username for the user.")
     password: Optional[str] = Field(None, min_length=8, description="New password for the user.")
+    first_name: Optional[str] = Field(None, max_length=100, description="User's first name.")
+    last_name: Optional[str] = Field(None, max_length=100, description="User's last name.")
     roles: Optional[List[str]] = Field(None, description="List of role names to update for the user.")
 
 class User(UserBase):
@@ -61,3 +66,7 @@ class TokenData(BaseModel):
     user_id: Optional[int] = None
     roles: List[str] = []
 
+class LoginRequest(BaseModel):
+    """Schema for user login request."""
+    username: str = Field(..., description="The username of the user.")
+    password: str = Field(..., description="The password of the user.")
