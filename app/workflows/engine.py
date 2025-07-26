@@ -32,7 +32,7 @@ import ast
 from pydantic.v1 import ValidationError
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, BaseMessage, ToolMessage
-from sqlalchemy import select, update, insert
+from sqlalchemy import select, update, insert # Ensure 'insert' is imported
 from langchain_core.exceptions import OutputParserException
 
 # ADDED IMPORTS FOR GENERIC RETRY LOGIC
@@ -41,7 +41,7 @@ import openai
 
 from app.agents.config_manager import load_agent_config
 from app.core.config import get_path_settings, get_llm_model
-from app.db.models import human_tasks_table, workflow_runs_table, workflows_table
+from app.db.models import human_tasks_table, workflow_runs_table, workflows_table # Ensure workflow_runs_table is imported
 from app.schemas.agent import AgentConfig
 from app.schemas.workflow import (
     AgentCallStep,
@@ -194,8 +194,9 @@ class WorkflowEngine:
             workflow_name: str,
             initial_input: Optional[Dict[str, Any]] = None,
             resume_run_id: Optional[str] = None,
+            user_id: Optional[int] = None, # ADDED user_id
     ):
-        logger.info(f"Starting or resuming workflow run for: {workflow_name}")
+        logger.info(f"Starting or resuming workflow run for: {workflow_name} (User ID: {user_id or 'N/A'})") # Log user_id
         with self.db_engine.connect() as connection:
             row = connection.execute(
                 select(workflows_table).where(workflows_table.c.name == workflow_name)
@@ -269,6 +270,7 @@ class WorkflowEngine:
                             status="running",
                             initial_input=initial_input,
                             start_time=datetime.utcnow(),
+                            user_id=user_id, # ADDED user_id
                         )
                     )
                     connection.commit()
