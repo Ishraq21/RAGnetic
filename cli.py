@@ -672,6 +672,35 @@ def configure():
                                   default=config.get('LOG_STORAGE', 'log_table_name', fallback='ragnetic_logs'))
         config.set('LOG_STORAGE', 'log_table_name', table_name)
 
+    # --- SMTP SETTINGS (New Section) ---
+    if typer.confirm("\nDo you want to configure SMTP settings for the Email Tool?", default=True):
+        if 'SMTP_SETTINGS' not in config: config.add_section('SMTP_SETTINGS')
+
+        current_host = config.get('SMTP_SETTINGS', 'host', fallback=os.environ.get("SMTP_HOST", ""))
+        current_port = config.get('SMTP_SETTINGS', 'port', fallback=os.environ.get("SMTP_PORT", "465"))
+        current_username = config.get('SMTP_SETTINGS', 'username', fallback=os.environ.get("SMTP_USERNAME", ""))
+
+        smtp_host = typer.prompt("SMTP Host (e.g., smtp.gmail.com)",
+                                 default=current_host) or ""
+        smtp_port = typer.prompt("SMTP Port (e.g., 465 for SSL)", default=current_port) or ""
+        smtp_username = typer.prompt("SMTP Username (sender email address)", default=current_username) or "" # Ensure empty string if no input
+        smtp_password = typer.prompt("SMTP Password (or App Password)", hide_input=True, confirmation_prompt=False) or "" # Ensure empty string if no input
+
+        config.set('SMTP_SETTINGS', 'host', smtp_host)
+        config.set('SMTP_SETTINGS', 'port', str(smtp_port))
+        config.set('SMTP_SETTINGS', 'username', smtp_username)
+
+        # Always save password to .env for security, remove from config.ini if present
+        if smtp_password:
+            _update_env_file({"SMTP_PASSWORD": smtp_password})
+            typer.secho("SMTP password saved securely to the .env file.", fg=typer.colors.GREEN)
+            if config.has_option('SMTP_SETTINGS', 'password'):  # Remove if it was there
+                config.remove_option('SMTP_SETTINGS', 'password')
+        else:
+            typer.secho("No SMTP password provided. Email tool may not function without it.", fg=typer.colors.YELLOW)
+
+        typer.secho("SMTP settings updated.", fg=typer.colors.GREEN)
+
     with open(_CONFIG_FILE, 'w') as configfile:
         config.write(configfile)
     typer.secho("\nConfiguration saved successfully to .ragnetic/config.ini", fg=typer.colors.GREEN)
