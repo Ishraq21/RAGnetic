@@ -9,13 +9,15 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks, Query
 
 from app.core.config import get_path_settings, get_api_key
-from app.core.security import get_http_api_key
+from app.core.security import get_http_api_key, PermissionChecker, \
+    get_current_user_from_api_key  # Import PermissionChecker and get_current_user_from_api_key
 from app.schemas.agent import AgentConfig, AgentInspectionResponse, ValidationReport, DocumentMetadata, ConnectionCheck, \
     VectorStoreConfig
 from app.agents.config_manager import get_agent_configs, load_agent_config, save_agent_config
 from app.pipelines.embed import embed_agent_data
 from app.core.embed_config import get_embedding_model
 from app.schemas.agent import DataSource
+from app.schemas.security import User  # Import User schema
 import logging
 
 # IMPORTS for inspect_agent dynamic vector store loading
@@ -42,22 +44,32 @@ router = APIRouter(prefix="/api/v1/agents", tags=["Agents API"])
 
 
 @router.get("", response_model=List[AgentConfig])
-async def get_all_agents(api_key: str = Depends(get_http_api_key)):
+async def get_all_agents(
+        # Anyone can read agents, so basic authentication (API key exists) is enough
+        api_key: str = Depends(get_http_api_key)
+):
     """
     Retrieves the full configuration for all available agents.
+    Requires: Valid API Key.
     """
     try:
         agent_configs = get_agent_configs()
         return agent_configs
     except Exception as e:
         logger.error(f"API: Failed to get agent configs: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not load agent configurations.")
+        raise HTTPException(status_code=500,
+                            detail="An unexpected error occurred while fetching all agent configurations. Please check server logs.")
 
 
 @router.get("/{agent_name}", response_model=AgentConfig)
-async def get_agent_by_name(agent_name: str, api_key: str = Depends(get_http_api_key)):
+async def get_agent_by_name(
+        agent_name: str,
+        # Anyone can read agents, so basic authentication (API key exists) is enough
+        api_key: str = Depends(get_http_api_key)
+):
     """
     Retrieves the full configuration for a single agent.
+    Requires: Valid API Key.
     """
     try:
         agent_config = load_agent_config(agent_name)
@@ -66,14 +78,20 @@ async def get_agent_by_name(agent_name: str, api_key: str = Depends(get_http_api
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
     except Exception as e:
         logger.error(f"API: Failed to get agent config for '{agent_name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Could not load configuration for agent '{agent_name}'.")
+        raise HTTPException(status_code=500,
+                            detail=f"An unexpected server error occurred while loading configuration for agent '{agent_name}'. Please check server logs.")
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def create_new_agent(config: AgentConfig = Body(...), bg: BackgroundTasks = BackgroundTasks(),
-                           api_key: str = Depends(get_http_api_key)):
+async def create_new_agent(
+        config: AgentConfig = Body(...),
+        bg: BackgroundTasks = BackgroundTasks(),
+        # Only users with 'agent:create' permission can create agents
+        current_user: User = Depends(PermissionChecker(["agent:create"]))
+):
     """
     Creates a new agent from a configuration payload and starts the data embedding process.
+    Requires: 'agent:create' permission.
     """
     try:
         load_agent_config(config.name)
@@ -87,18 +105,25 @@ async def create_new_agent(config: AgentConfig = Body(...), bg: BackgroundTasks 
     try:
         save_agent_config(config)
         bg.add_task(embed_agent_data, config)
+        logger.info(f"User '{current_user.username}' created agent '{config.name}'.")
         return {"status": "Agent config saved; embedding started.", "agent": config.name}
     except Exception as e:
         logger.error(f"API: Error creating agent '{config.name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500,
+                            detail=f"An unexpected server error occurred during agent creation for '{config.name}'. Please check server logs.")
 
 
 @router.put("/{agent_name}")
-async def update_agent_by_name(agent_name: str, config: AgentConfig = Body(...),
-                               bg: BackgroundTasks = BackgroundTasks(),
-                               api_key: str = Depends(get_http_api_key)):
+async def update_agent_by_name(
+        agent_name: str,
+        config: AgentConfig = Body(...),
+        bg: BackgroundTasks = BackgroundTasks(),
+        # Only users with 'agent:update' permission can update agents
+        current_user: User = Depends(PermissionChecker(["agent:update"]))
+):
     """
     Updates an existing agent's configuration and triggers a re-embedding of its data.
+    Requires: 'agent:update' permission.
     """
     if agent_name != config.name:
         raise HTTPException(status_code=400, detail="Agent name in path does not match agent name in body.")
@@ -107,18 +132,25 @@ async def update_agent_by_name(agent_name: str, config: AgentConfig = Body(...),
 
         save_agent_config(config)
         bg.add_task(embed_agent_data, config)
+        logger.info(f"User '{current_user.username}' updated agent '{agent_name}'.")
         return {"status": "Agent config updated; re-embedding started.", "agent": config.name}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
     except Exception as e:
         logger.error(f"API: Error updating agent '{agent_name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500,
+                            detail=f"An unexpected server error occurred during agent update for '{agent_name}'. Please check server logs.")
 
 
 @router.delete("/{agent_name}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_agent_by_name(agent_name: str, api_key: str = Depends(get_http_api_key)):
+async def delete_agent_by_name(
+        agent_name: str,
+        # Only users with 'agent:delete' permission can delete agents
+        current_user: User = Depends(PermissionChecker(["agent:delete"]))
+):
     """
     Deletes an agent, its configuration, and all associated data.
+    Requires: 'agent:delete' permission.
     """
     try:
         load_agent_config(agent_name)  # Ensure the agent exists
@@ -131,12 +163,14 @@ async def delete_agent_by_name(agent_name: str, api_key: str = Depends(get_http_
         if os.path.exists(vectorstore_path):
             shutil.rmtree(vectorstore_path)
 
+        logger.info(f"User '{current_user.username}' deleted agent '{agent_name}'.")
         return
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
     except Exception as e:
         logger.error(f"API: Error deleting agent '{agent_name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500,
+                            detail=f"An unexpected server error occurred during agent deletion for '{agent_name}'. Please check server logs.")
 
 
 @router.get("/{agent_name}/inspection", response_model=AgentInspectionResponse,
@@ -146,15 +180,20 @@ async def inspect_agent_api(
         show_documents_metadata: bool = Query(False, description="Display detailed metadata for ingested documents."),
         check_connections: bool = Query(False, description="Verify connectivity for each configured external source."),
         num_docs: int = Query(5, ge=1, description="Number of sample documents to retrieve."),
-        api_key: str = Depends(get_http_api_key)
+        # Users need 'agent:read' permission to inspect agents
+        current_user: User = Depends(PermissionChecker(["agent:read"]))
 ) -> AgentInspectionResponse:
+    """
+    Inspects an agent's configuration, deployment status, and optionally its data sources.
+    Requires: 'agent:read' permission.
+    """
     # --- load config ---
     try:
         cfg = load_agent_config(agent_name)
     except FileNotFoundError:
         raise HTTPException(404, f"Agent '{agent_name}' not found.")
     except Exception as e:
-        logger.error(f"Load config failed for {agent_name}", exc_info=True)
+        logger.error(f"API: Failed to load agent config for '{agent_name}': {e}", exc_info=True)
         raise HTTPException(500, "Error loading agent configuration.")
 
     # --- base status flags ---
@@ -234,10 +273,12 @@ async def inspect_agent_api(
                 ]
         except Exception as e:
             if vector_store_status.status == "PENDING":
-                vector_store_status = ConnectionCheck(status="FAIL", message="Failed to connect or retrieve documents.",
-                                                      detail=str(e))
-                validation_errors.append(f"Document inspection failed: {e}")
-            logger.error(f"API: Error during document inspection: {e}", exc_info=True)
+                vector_store_status = ConnectionCheck(status="FAIL",
+                                                      message="Failed to connect or retrieve documents from vector store.",
+                                                      detail="Check server logs for details.")
+                validation_errors.append("Document inspection failed. Check server logs for details.")
+            logger.error(f"API: An unexpected error occurred during document inspection for '{agent_name}': {e}",
+                         exc_info=True)
 
     # --- source connectivity ---
     if check_connections:
@@ -266,8 +307,8 @@ async def inspect_agent_api(
                     status_message = "SKIP"
             except Exception as e:
                 status_message = "FAIL"
-                status_detail = str(e)
-                validation_errors.append(f"Connection check for {source.type} failed: {e}")
+                status_detail = "An unexpected error occurred during connection check."
+                validation_errors.append(f"Connection check for {source.type} failed. Check server logs for details.")
 
             sources_status[info_key] = ConnectionCheck(status=status_message, message=status_detail)
 
@@ -287,3 +328,4 @@ async def inspect_agent_api(
         document_metadata=document_metadata,
         validation_report=validation_report
     )
+

@@ -49,6 +49,7 @@ from app.schemas.agent import AgentConfig
 from app.core.serialization import _serialize_for_db
 from app.schemas.workflow import WorkflowCreate
 from app.workflows.sync import sync_workflows_from_files, is_db_configured_sync
+from app.api.security import router as security_api_router
 
 # Agents & Pipelines
 from app.agents.config_manager import get_agent_configs, load_agent_config
@@ -333,6 +334,7 @@ app.include_router(audit_api_router)
 app.include_router(query_api_router)
 app.include_router(evaluation_api_router)
 app.include_router(metrics_api_router)
+app.include_router(security_api_router)
 app.include_router(workflows.router, prefix="/api/v1")
 app.include_router(webhooks.router, prefix="/webhooks/v1")
 

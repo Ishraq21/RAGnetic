@@ -8,8 +8,9 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.db import get_db
-from app.core.security import get_http_api_key
+from app.core.security import get_http_api_key, PermissionChecker # Import PermissionChecker
 from app.db.models import agent_runs, agent_run_steps, chat_sessions_table, users_table
+from app.schemas.security import User # Import User schema
 
 
 # --- Pydantic Models for API Responses ---
@@ -59,11 +60,13 @@ async def list_agent_runs(
         agent_name: Optional[str] = Query(None, description="Filter runs by a specific agent name."),
         limit: int = Query(20, ge=1, le=100, description="Number of recent runs to display."),
         offset: int = Query(0, ge=0, description="Number of runs to skip for pagination."),
-        api_key: str = Depends(get_http_api_key),
+        # Users need 'audit:read_agent_runs' permission to list agent runs
+        current_user: User = Depends(PermissionChecker(["audit:read_agent_runs"])),
         db: AsyncSession = Depends(get_db)
 ):
     """
     Retrieves a list of recent agent runs, with optional filtering.
+    Requires: 'audit:read_agent_runs' permission.
     """
     try:
         stmt = (
@@ -94,11 +97,13 @@ async def list_agent_runs(
 @router.get("/runs/{run_id}", response_model=AgentRunDetailModel)
 async def get_run_details(
         run_id: str,
-        api_key: str = Depends(get_http_api_key),
+        # Users need 'audit:read_agent_run_details' permission to view agent run details
+        current_user: User = Depends(PermissionChecker(["audit:read_agent_run_details"])),
         db: AsyncSession = Depends(get_db)
 ):
     """
     Fetches and displays the details for a single agent run and all of its steps.
+    Requires: 'audit:read_agent_run_details' permission.
     """
     try:
         # 1. Fetch the main run details
@@ -140,3 +145,4 @@ async def get_run_details(
     except Exception as e:
         logging.error(f"API: Error inspecting run '{run_id}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An error occurred while inspecting run '{run_id}'.")
+

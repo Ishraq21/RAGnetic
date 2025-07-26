@@ -58,6 +58,9 @@ users_table = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("user_id", String(255), nullable=False, unique=True, index=True),
     Column("email", String(255), nullable=True, unique=True),
+    Column("hashed_password", String(255), nullable=False), # Store hashed passwords
+    Column("is_active", Boolean, nullable=False, default=True), # User account status
+    Column("is_superuser", Boolean, nullable=False, default=False), # For master admin accounts
     # Use a Python-level default instead of a server-level default
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
     Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),

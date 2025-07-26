@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from uuid import uuid4
 
 from app.db import get_db
-from app.core.security import get_http_api_key
+from app.core.security import get_http_api_key, PermissionChecker # Import PermissionChecker
 from app.core.validation import sanitize_for_path
 from app.db.models import agent_runs, chat_sessions_table, chat_messages_table, users_table
 from app.agents.config_manager import load_agent_config
@@ -20,7 +20,8 @@ from app.tools.arxiv_tool import get_arxiv_tool
 from app.tools.search_engine_tool import SearchTool
 from langchain_core.messages import HumanMessage, AIMessage
 from app.core.serialization import _serialize_for_db
-from app.db.dao import save_conversation_metrics  # <-- ADD THIS LINE
+from app.db.dao import save_conversation_metrics
+from app.schemas.security import User # Import User schema
 
 logger = logging.getLogger("ragnetic")
 
@@ -29,7 +30,9 @@ router = APIRouter(prefix="/api/v1/agents", tags=["Query API"])
 
 class QueryRequest(BaseModel):
     query: str = Field(..., description="The user's query to the agent.")
-    user_id: Optional[str] = Field(None, description="A unique identifier for the user.")
+    # user_id and thread_id will now be primarily derived from authenticated user/session
+    # but kept as optional for backward compatibility or specific use cases.
+    user_id: Optional[str] = Field(None, description="A unique identifier for the user (will be overridden by authenticated user_id if available).")
     thread_id: Optional[str] = Field(None, description="A unique identifier for the conversation thread.")
 
 
@@ -43,7 +46,8 @@ class QueryResponse(BaseModel):
 async def query_agent(
         agent_name: str,
         request: QueryRequest = Body(...),
-        api_key: str = Depends(get_http_api_key),
+        # Require 'agent:query' permission to query an agent
+        current_user: User = Depends(PermissionChecker(["agent:query"])),
         db: AsyncSession = Depends(get_db),
 ):
     # Load agent configuration
@@ -52,26 +56,21 @@ async def query_agent(
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
     except Exception as e:
-        logger.error(f"Failed to load agent config '{agent_name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Agent configuration error.")
+        logger.error(f"An unexpected error occurred while loading agent config '{agent_name}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An unexpected server error occurred while loading agent configuration for '{agent_name}'. Please check server logs.")
 
     # Prepare IDs
-    safe_user_id = sanitize_for_path(request.user_id) if request.user_id else f"api-user-{uuid4().hex[:8]}"
+    # Use the authenticated user's user_id. The request.user_id is now secondary/legacy.
+    safe_user_id = sanitize_for_path(current_user.username) # Use username from authenticated user
     safe_thread_id = (
         sanitize_for_path(request.thread_id) if request.thread_id else f"api-thread-{uuid4().hex[:8]}"
     )
     request_id = str(uuid4())
 
-    # Ensure user record
-    user_db_id = (await db.execute(
-        select(users_table.c.id).where(users_table.c.user_id == safe_user_id)
-    )).scalar_one_or_none()
-    if not user_db_id:
-        user_db_id = (await db.execute(
-            insert(users_table)
-            .values(user_id=safe_user_id)
-            .returning(users_table.c.id)
-        )).scalar_one()
+    # Ensure user record exists based on authenticated user's ID
+    # This part can be simplified since current_user is already from DB.
+    # We need the DB ID (int) of the user, not just the user_id (string)
+    user_db_id = current_user.id # Use the ID of the authenticated user
 
     # Ensure session record
     session_id = (await db.execute(
@@ -197,5 +196,7 @@ async def query_agent(
         )
     )
     await db.commit()
+    logger.info(f"User '{current_user.username}' queried agent '{agent_name}' (Run ID: {request_id}).")
 
     return QueryResponse(response=ai_content, run_id=request_id, final_state=serialized)
+
