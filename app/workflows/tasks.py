@@ -6,6 +6,7 @@ import redis
 from app.core.config import get_db_connection, get_memory_storage_config, get_log_storage_config
 from app.db import get_sync_db_engine
 from app.workflows.engine import WorkflowEngine
+from typing import Optional # Import Optional
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 task_logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ celery_app.conf.update(
 
 
 @celery_app.task(name="app.workflows.tasks.run_workflow_task")
-def run_workflow_task(workflow_name: str, initial_input: dict = None):
+def run_workflow_task(workflow_name: str, initial_input: dict = None, user_id: Optional[int] = None): # ADDED user_id
     """
     Celery task to run a workflow, using a Redis lock to ensure single execution.
     """
@@ -44,11 +45,11 @@ def run_workflow_task(workflow_name: str, initial_input: dict = None):
         task_logger.warning(f"Workflow run for '{workflow_name}' skipped due to active Redis lock.")
         return
 
-    task_logger.info(f"Worker starting workflow run for: '{workflow_name}'")
+    task_logger.info(f"Worker starting workflow run for: '{workflow_name}' (User ID: {user_id or 'N/A'})") # Log user_id
     try:
         db_engine = get_sync_db_engine()
         engine = WorkflowEngine(db_engine)
-        engine.run_workflow(workflow_name, initial_input)
+        engine.run_workflow(workflow_name, initial_input, user_id=user_id) # PASS user_id to engine
         task_logger.info(f"Successfully completed workflow: '{workflow_name}'")
     except Exception as e:
         task_logger.error(f"Error running workflow '{workflow_name}': {e}", exc_info=True)
