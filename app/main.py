@@ -16,9 +16,8 @@ from multiprocessing import Process
 from pathlib import Path
 from datetime import datetime
 from pydantic import BaseModel
-import yaml
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends, status
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Depends, status
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -26,37 +25,32 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
+from app.api.webhooks import setup_dynamic_webhooks
 # Database & Models
 from app.db.models import (chat_sessions_table,
                            chat_messages_table,
                            users_table,
                            agent_runs,
-                           agent_run_steps,
-                           workflows_table,
-                           crontab_schedule_table,
-                           periodic_task_table, periodic_task_changed_table)
+                           agent_run_steps)
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, insert, update, text, delete, func
+from sqlalchemy import select, desc, insert, update, text, delete
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 
 # Core Components
-from app.core.config import get_path_settings, get_server_api_keys, get_log_storage_config, \
+from app.core.config import get_path_settings, get_log_storage_config, \
     get_memory_storage_config, get_db_connection_config, get_db_connection, get_cors_settings, _get_config_parser
 from app.db import initialize_db_connections, get_db
 from app.core.validation import sanitize_for_path
 from app.core.security import get_http_api_key, get_websocket_api_key
-from app.schemas.agent import AgentConfig
+from app.agents.config_manager import get_agent_configs, load_agent_config
 from app.core.serialization import _serialize_for_db
-from app.schemas.workflow import WorkflowCreate
 from app.workflows.sync import sync_workflows_from_files, is_db_configured_sync
 from app.api.security import router as security_api_router
 
 # Agents & Pipelines
-from app.agents.config_manager import get_agent_configs, load_agent_config
-from app.pipelines.embed import embed_agent_data
 from app.agents.agent_graph import get_agent_workflow, AgentState
-from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from app.core.structured_logging import get_logging_config, DatabaseLogHandler, ragnetic_logs_table
 
 # Tools
@@ -78,17 +72,13 @@ from app.api.audit import router as audit_api_router
 from app.api.query import router as query_api_router
 from app.api.evaluation import router as evaluation_api_router
 from app.api.metrics import router as metrics_api_router
-from app.api.webhooks import setup_dynamic_webhooks
 from app.api import workflows
 from app.api import webhooks
-
-import re
 
 
 # Get the main application logger after configuration is applied
 logger = logging.getLogger("ragnetic")
 load_dotenv()
-
 
 
 # --- Global Settings & App Initialization ---
@@ -172,58 +162,24 @@ else:
 _watcher_process: Optional[Process] = None
 
 
-def _parse_schedule_time(time_str: str) -> Dict[str, int]:
-    """Parses time strings like '9:00am' or '16:30' into hour and minute."""
-    if not isinstance(time_str, str):
-        return {}
-
-    time_str = time_str.lower()
-    is_pm = 'pm' in time_str
-
-    # Remove am/pm for parsing and split
-    time_part = re.sub(r'[ap]m', '', time_str).strip()
-
-    try:
-        hour, minute = map(int, time_part.split(':'))
-
-        if is_pm and hour < 12:
-            hour += 12
-        elif not is_pm and hour == 12:  # Handle '12:00am' case
-            hour = 0
-
-        return {"hour": hour, "minute": minute}
-    except (ValueError, TypeError):
-        logger.warning(f"Could not parse time string '{time_str}' in schedule. Skipping.")
-        return {}
-
-
 @app.on_event("startup")
 async def startup_event():
     global _watcher_process, log_listener
 
     # --- Logging Setup ---
-    # 1. Configure base handlers (console, file) using the simplified config
     logging.config.dictConfig(get_logging_config())
 
-    # 2. Check if DB logging is enabled in your config.ini
     log_storage_cfg = get_log_storage_config()
     if log_storage_cfg.get("type") == "db":
-        # 3. Set up the queue-based DB logging manually
         log_queue = Queue(-1)
-
         db_handler = DatabaseLogHandler(
             connection_name=log_storage_cfg.get("connection_name"),
             table=ragnetic_logs_table
         )
-
-        # This handler is what your loggers will use. It just puts records on the queue.
         queue_handler = QueueHandler(log_queue)
-
-        # This listener pulls records from the queue and sends them to the db_handler.
         log_listener = QueueListener(log_queue, db_handler)
         log_listener.start()
 
-        # 4. Manually add the queue_handler to the loggers that need to write to the DB.
         db_logger_names = ["ragnetic", "app.workflows", "ragnetic.metrics"]
         for name in db_logger_names:
             logging.getLogger(name).addHandler(queue_handler)
@@ -279,7 +235,6 @@ async def startup_event():
                 if "Webhooks" in getattr(route, "tags", []):
                     logger.info(f"Registered webhook: {route.path} → {route.methods}")
 
-
             conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
                 "connection_name")
             if not conn_name:
@@ -295,26 +250,19 @@ async def startup_event():
         logger.error(f"'{_DATA_DIR}' not found. Please run 'ragnetic init'.")
         return
 
-    # Ensure WORKFLOWS_DIR is also present.
     if not os.path.exists(_WORKFLOWS_DIR):
         logger.warning(f"'{_WORKFLOWS_DIR}' not found. Workflow auto-sync may not work correctly.")
 
-    # --- Start the file watcher process ---
-    # The watcher process will run in the background.
-    # It now monitors a list of directories.
-    monitored_dirs = [str(_DATA_DIR), str(_WORKFLOWS_DIR)] # List of directories to monitor
-
-    _watcher_process = Process(target=start_watcher, args=(monitored_dirs,)) # Pass the list of directories
-    _watcher_process.daemon = False # Ensure it exits with parent
+    monitored_dirs = [str(_DATA_DIR), str(_WORKFLOWS_DIR)]
+    _watcher_process = Process(target=start_watcher, args=(monitored_dirs,))
+    _watcher_process.daemon = False
     _watcher_process.start()
     logger.info(f"Automated file watcher started for directories: {', '.join(monitored_dirs)}.")
 
 
-
-
 @app.on_event("shutdown")
 async def shutdown_event():
-    global _watcher_process, _scheduler_process, log_listener
+    global _watcher_process, log_listener
     if isinstance(manager, RedisConnectionManager) and manager.connection:
         await manager.connection.close()
         logger.info("Redis connection closed.")
@@ -344,39 +292,41 @@ class RenameRequest(BaseModel):
     new_name: str
 
 
-async def _get_or_create_user(db: AsyncSession, user_id: str):
-    # Try to find existing user
-    stmt = select(users_table.c.id).where(users_table.c.user_id == user_id)
+async def _get_or_create_user(db: AsyncSession, user_id_string: str) -> int:
+    """
+    Retrieves a user's database ID based on a unique user_id string (e.g., username),
+    or creates a new user if not found. Returns the integer user DB ID.
+    """
+    stmt = select(users_table.c.id).where(users_table.c.user_id == user_id_string)
     existing_user_id = (await db.execute(stmt)).scalar_one_or_none()
 
     if existing_user_id:
         return existing_user_id
     else:
-        # Create new user if not found
         insert_stmt = insert(users_table).values(
-            user_id=user_id,
+            user_id=user_id_string,
             is_active=True,
             is_superuser=False,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
-            hashed_password="",
+            hashed_password="", # No password for auto-created users
         ).returning(users_table.c.id)
         user_db_id = (await db.execute(insert_stmt)).scalar_one()
-        # Note: The commit is handled by the overall session context in FastAPI,
-        # or you might see a db.commit() nearby if it's explicitly done there.
-        # No explicit db.commit() needed right here if session is managed externally.
+        await db.commit() # Commit the new user creation
+        logger.info(f"Created new user with DB ID: {user_db_id} (user_id_string: {user_id_string})")
         return user_db_id
 
 
-async def _get_or_create_session(db: AsyncSession, thread_id: Optional[str], agent_name: str, user_db_id: int):
-    session_topic = "New Chat"  # Default topic for new sessions
-
-    # If a thread_id is provided from the frontend, attempt to find an existing session.
-    if thread_id:
+async def _get_or_create_session(db: AsyncSession, thread_id_from_frontend: Optional[str], agent_name: str, user_db_id: int) -> Tuple[int, Optional[str], str]:
+    """
+    Retrieves an existing chat session or creates a new one.
+    Returns (session_db_id, topic_name, canonical_thread_id).
+    """
+    if thread_id_from_frontend:
         stmt = select(
             chat_sessions_table.c.id, chat_sessions_table.c.topic_name, chat_sessions_table.c.thread_id
         ).where(
-            (chat_sessions_table.c.thread_id == thread_id) &
+            (chat_sessions_table.c.thread_id == thread_id_from_frontend) &
             (chat_sessions_table.c.agent_name == agent_name) &
             (chat_sessions_table.c.user_id == user_db_id)
         )
@@ -385,28 +335,25 @@ async def _get_or_create_session(db: AsyncSession, thread_id: Optional[str], age
         if existing_session:
             return existing_session.id, existing_session.topic_name, existing_session.thread_id
 
-    # If no thread_id provided, or existing session not found for the given criteria,
-    # then create a NEW session with a fresh, unique thread_id generated by the backend.
-    new_thread_id = str(uuid.uuid4()) # Generate a new UUID for the thread_id
+    new_thread_id = str(uuid.uuid4())
 
     insert_stmt = insert(chat_sessions_table).values(
-        thread_id=new_thread_id,  # Use the newly generated unique ID
+        thread_id=new_thread_id,
         agent_name=agent_name,
         user_id=user_db_id,
-        topic_name=None,
+        topic_name=None, # Topic will be updated on first message
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     ).returning(chat_sessions_table.c.id, chat_sessions_table.c.topic_name, chat_sessions_table.c.thread_id)
 
     try:
         new_session = (await db.execute(insert_stmt)).one()
-        await db.commit() # Commit the new session
+        await db.commit()
         logger.info(f"Created new chat session: ID={new_session.id}, Thread={new_session.thread_id}, Agent={agent_name}, User_DB_ID={user_db_id}")
         return new_session.id, new_session.topic_name, new_session.thread_id
     except IntegrityError as e:
         await db.rollback()
         logger.error(f"IntegrityError creating session for thread '{new_thread_id}': {e}", exc_info=True)
-        # This should ideally not happen with uuid4(), but handle potential collision or other unique constraint violation
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Could not create unique session. Please try again.")
     except Exception as e:
         await db.rollback()
@@ -429,21 +376,26 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
     await ws.accept()
     canonical_thread_id: str = "uninitialized_thread"
     pubsub_task = None
-    channel: str = f"chat:{canonical_thread_id}"  # Initial channel using default, will be updated.
+    channel: str = f"chat:{canonical_thread_id}"
 
     try:
         message_data = await ws.receive_json()
         if not (message_data.get("type") == "query" and "payload" in message_data):
-            await ws.close(code=1003, reason="Protocol violation")
+            await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Protocol violation: Expected initial query payload.")
             return
 
         payload = message_data["payload"]
         agent_name = payload.get("agent", "unknown_agent")
-        user_id = sanitize_for_path(payload.get("user_id")) or f"user-{uuid4().hex[:8]}"
 
-        thread_id_from_frontend = sanitize_for_path(payload.get("thread_id")) # This is the thread_id potentially passed from frontend
+        # Frontend now sends loggedInDbUserId (int) directly as user_id in the payload
+        user_db_id = payload.get("user_id")
+        if not isinstance(user_db_id, int):
+            logger.error(f"WebSocket received non-integer user_id: {user_db_id}. Closing connection.")
+            await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Invalid 'user_id' type. Expected integer.")
+            return
 
-        user_db_id = await _get_or_create_user(db, user_id)
+        thread_id_from_frontend = sanitize_for_path(payload.get("thread_id"))
+
         session_id, session_topic, returned_thread_id = await _get_or_create_session(db, thread_id_from_frontend, agent_name, user_db_id)
 
         canonical_thread_id = returned_thread_id
@@ -453,9 +405,10 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
         if isinstance(manager, RedisConnectionManager):
             if pubsub_task and not pubsub_task.done():
                 pubsub_task.cancel()
-                await asyncio.sleep(0.01)  # Small yield for task cancellation
+                await asyncio.sleep(0.01)
             pubsub_task = asyncio.create_task(redis_listen(ws, channel))
-        is_first_message_in_session = session_topic is None
+
+        is_first_message_in_session = (session_topic is None)
 
         agent_config = load_agent_config(agent_name)
         all_tools = []
@@ -472,6 +425,11 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
 
         while True:
             query = message_data.get("payload", {}).get("query")
+            if not query:
+                logger.warning(f"[{canonical_thread_id}] Received empty query, skipping processing.")
+                message_data = await ws.receive_json() # Wait for next message
+                continue
+
             request_id = str(uuid4())
             logger.info(f"[{canonical_thread_id}] Processing request {request_id} for query: '{query[:50]}...'")
 
@@ -507,15 +465,19 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
                 initial_state,
                 {"configurable": {"thread_id": canonical_thread_id}},
                 langgraph_agent,
-                canonical_thread_id, # Broadcast channel for streaming tokens
+                canonical_thread_id,
                 run_db_id,
                 db
             )
 
             done_message = {
-                "done": True, "error": final_state.get("error", False) if final_state else True,
-                "errorMessage": final_state.get("errorMessage") if final_state else "Agent returned no output.",
-                "request_id": request_id, "user_id": user_id, "thread_id": canonical_thread_id,
+                "done": True,
+                "error": final_state.get("error", False),
+                "errorMessage": final_state.get("errorMessage") if final_state and final_state.get("error") else None,
+                "request_id": request_id,
+                "user_id": user_db_id,
+                "thread_id": canonical_thread_id,
+                "topic_name": session_topic
             }
             await manager.broadcast(channel, json.dumps(done_message))
 
@@ -533,17 +495,20 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
 
             message_data = await ws.receive_json()
 
-            await ws.send_text(json.dumps({
-                "done": True,
-                "user_id": user_db_id,  # This is the backend user ID
-                "thread_id": canonical_thread_id,  # Send the backend-managed thread_id
-                "topic_name": session_topic
-            }))
-
     except WebSocketDisconnect:
         logger.info(f"[{canonical_thread_id}] Client disconnected.")
     except Exception as e:
         logger.error(f"[{canonical_thread_id}] Unhandled WebSocket Error: {e}", exc_info=True)
+        try:
+            await ws.send_text(json.dumps({
+                "done": True,
+                "error": True,
+                "errorMessage": f"An unexpected server error occurred: {e}. Please try again.",
+                "user_id": user_db_id if 'user_db_id' in locals() else None,
+                "thread_id": canonical_thread_id,
+            }))
+        except Exception as send_error:
+            logger.error(f"Failed to send error message to client: {send_error}")
     finally:
         if pubsub_task and not pubsub_task.done():
             pubsub_task.cancel()
@@ -555,7 +520,6 @@ async def redis_listen(ws: WebSocket, channel: str):
         return
 
     while True:
-        # ensure we have a live pubsub
         try:
             if manager.pubsub is None:
                 await manager.connect()
@@ -571,7 +535,7 @@ async def redis_listen(ws: WebSocket, channel: str):
             except RedisConnectionError as e:
                 logger.warning(f"Redis pubsub lost for {channel}; reconnecting: {e}")
                 manager.pubsub = None
-                return await redis_listen(ws, channel)  # restart subscription loop
+                return await redis_listen(ws, channel)
             if message and ws.client_state == WebSocketState.CONNECTED:
                 await ws.send_text(message["data"])
     except asyncio.CancelledError:
@@ -658,10 +622,9 @@ async def home(request: Request):
     except Exception as e:
         logger.error(f"Could not load agent configs: {e}")
     default_agent = agents_list[0]['name'] if agents_list else ""
-    server_api_keys = get_server_api_keys()
-    frontend_api_key = server_api_keys[0] if server_api_keys else ""
+    # Removed api_key from template context as it's no longer used for frontend init
     return templates.TemplateResponse("agent_interface.html", {
-        "request": request, "agents": agents_list, "agent": default_agent, "api_key": frontend_api_key
+        "request": request, "agents": agents_list, "agent": default_agent
     })
 
 
@@ -696,25 +659,21 @@ async def health_check():
 
 
 @app.get("/history/{thread_id}", tags=["Memory"])
-async def get_history(thread_id: str, agent_name: str, user_id: str, api_key: str = Depends(get_http_api_key),
+async def get_history(thread_id: str, agent_name: str, user_id: int, api_key: str = Depends(get_http_api_key),
                       db: AsyncSession = Depends(get_db)):
     if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Chat history not supported without a database.")
     safe_agent_name = sanitize_for_path(agent_name)
-    safe_user_id = sanitize_for_path(user_id)
     safe_thread_id = sanitize_for_path(thread_id)
     try:
-        user_db_id = (await db.execute(
-            select(users_table.c.id).where(users_table.c.user_id == safe_user_id))).scalar_one_or_none()
-        if not user_db_id:
-            return JSONResponse(content=[])
         session_id = (await db.execute(select(chat_sessions_table.c.id).where(
             (chat_sessions_table.c.thread_id == safe_thread_id) &
             (chat_sessions_table.c.agent_name == safe_agent_name) &
-            (chat_sessions_table.c.user_id == user_db_id)
+            (chat_sessions_table.c.user_id == user_id)
         ))).scalar_one_or_none()
         if not session_id:
-            return JSONResponse(content=[])
+            # Return 404 if session not found, instead of empty list for a specific thread_id
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found for the given criteria.")
         messages_stmt = select(chat_messages_table.c.sender, chat_messages_table.c.content).where(
             chat_messages_table.c.session_id == session_id).order_by(chat_messages_table.c.timestamp.asc())
         messages_result = (await db.execute(messages_stmt)).fetchall()
@@ -726,20 +685,15 @@ async def get_history(thread_id: str, agent_name: str, user_id: str, api_key: st
 
 
 @app.get("/sessions", tags=["Memory"])
-async def list_sessions(agent_name: str, user_id: str, api_key: str = Depends(get_http_api_key),
+async def list_sessions(agent_name: str, user_id: int, api_key: str = Depends(get_http_api_key),
                         db: AsyncSession = Depends(get_db)):
     if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Chat history not supported without a database.")
     safe_agent_name = sanitize_for_path(agent_name)
-    safe_user_id = sanitize_for_path(user_id)
     try:
-        user_db_id = (await db.execute(
-            select(users_table.c.id).where(users_table.c.user_id == safe_user_id))).scalar_one_or_none()
-        if not user_db_id:
-            return JSONResponse(content=[])
         sessions_stmt = select(chat_sessions_table.c.thread_id, chat_sessions_table.c.topic_name).where(
             (chat_sessions_table.c.agent_name == safe_agent_name) &
-            (chat_sessions_table.c.user_id == user_db_id)
+            (chat_sessions_table.c.user_id == user_id)
         ).order_by(desc(chat_sessions_table.c.updated_at))
         sessions_result = (await db.execute(sessions_stmt)).fetchall()
         sessions = [{"thread_id": row.thread_id, "topic_name": row.topic_name or "New Chat"} for row in sessions_result]
@@ -750,25 +704,20 @@ async def list_sessions(agent_name: str, user_id: str, api_key: str = Depends(ge
 
 
 @app.put("/sessions/{thread_id}/rename", tags=["Memory"], status_code=status.HTTP_200_OK)
-async def rename_session(thread_id: str, request: RenameRequest, agent_name: str, user_id: str,
+async def rename_session(thread_id: str, request: RenameRequest, agent_name: str, user_id: int,
                          api_key: str = Depends(get_http_api_key), db: AsyncSession = Depends(get_db)):
     if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Functionality not supported without a database.")
     safe_thread_id = sanitize_for_path(thread_id)
     safe_agent_name = sanitize_for_path(agent_name)
-    safe_user_id = sanitize_for_path(user_id)
     new_name = request.new_name.strip()
     if not new_name:
         raise HTTPException(status_code=400, detail="New name cannot be empty.")
     try:
-        user_db_id = (await db.execute(
-            select(users_table.c.id).where(users_table.c.user_id == safe_user_id))).scalar_one_or_none()
-        if not user_db_id:
-            raise HTTPException(status_code=404, detail="User not found.")
         update_stmt = update(chat_sessions_table).where(
             (chat_sessions_table.c.thread_id == safe_thread_id) &
             (chat_sessions_table.c.agent_name == safe_agent_name) &
-            (chat_sessions_table.c.user_id == user_db_id)
+            (chat_sessions_table.c.user_id == user_id)
         ).values(topic_name=new_name, updated_at=datetime.utcnow())
         result = await db.execute(update_stmt)
         await db.commit()
@@ -782,22 +731,17 @@ async def rename_session(thread_id: str, request: RenameRequest, agent_name: str
 
 
 @app.delete("/sessions/{thread_id}", tags=["Memory"], status_code=status.HTTP_200_OK)
-async def delete_session(thread_id: str, agent_name: str, user_id: str, api_key: str = Depends(get_http_api_key),
+async def delete_session(thread_id: str, agent_name: str, user_id: int, api_key: str = Depends(get_http_api_key),
                          db: AsyncSession = Depends(get_db)):
     if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Functionality not supported without a database.")
     safe_thread_id = sanitize_for_path(thread_id)
     safe_agent_name = sanitize_for_path(agent_name)
-    safe_user_id = sanitize_for_path(user_id)
     try:
-        user_db_id = (await db.execute(
-            select(users_table.c.id).where(users_table.c.user_id == safe_user_id))).scalar_one_or_none()
-        if not user_db_id:
-            raise HTTPException(status_code=404, detail="User not found.")
         session_id = (await db.execute(select(chat_sessions_table.c.id).where(
             (chat_sessions_table.c.thread_id == safe_thread_id) &
             (chat_sessions_table.c.agent_name == safe_agent_name) &
-            (chat_sessions_table.c.user_id == user_db_id)
+            (chat_sessions_table.c.user_id == user_id)
         ))).scalar_one_or_none()
         if not session_id:
             raise HTTPException(status_code=404, detail="Chat session not found or permission denied.")
