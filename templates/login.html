@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>RAGnetic Login</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="login-body">
+    <div id="toast-notification"></div>
+
+    <div id="login-container">
+        <h1>RAG<span>netic</span></h1>
+        <p>Log in to access your AI assistant.</p>
+        <form id="login-form">
+            <input type="text" id="username-input" placeholder="Username" required />
+            <input type="password" id="password-input" placeholder="Password" required />
+            <button type="submit">Login</button>
+        </form>
+    </div>
+
+    <script>
+        const toastNotification = document.getElementById('toast-notification');
+        const loginForm = document.getElementById('login-form');
+        const usernameInput = document.getElementById('username-input');
+        const passwordInput = document.getElementById('password-input');
+
+        function showToast(message, isError = false) {
+            toastNotification.textContent = message;
+            toastNotification.className = isError ? 'error' : 'success';
+            toastNotification.style.display = 'block';
+            setTimeout(() => {
+                toastNotification.style.display = 'none';
+            }, 4000);
+        }
+
+        loginForm.addEventListener('submit', handleLoginSubmit);
+
+        async function handleLoginSubmit(event) {
+            event.preventDefault();
+            const username = usernameInput.value;
+            const password = passwordInput.value;
+
+            try {
+                const response = await fetch('/api/v1/security/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Login failed.');
+                }
+
+                const data = await response.json();
+                const loggedInUserToken = data.access_token;
+                localStorage.setItem('ragnetic_user_token', loggedInUserToken);
+
+                // Fetch user details to get their DB ID
+                const userDetailsResponse = await fetch('/api/v1/security/me', {
+                    method: 'GET',
+                    headers: {
+                        'X-API-Key': loggedInUserToken
+                    }
+                });
+                if (!userDetailsResponse.ok) {
+                    throw new Error('Failed to fetch user details after login.');
+                }
+                const userDetails = await userDetailsResponse.json();
+                const loggedInDbUserId = userDetails.id;
+                localStorage.setItem('ragnetic_db_user_id', loggedInDbUserId);
+
+                showToast("Login successful!");
+                window.location.href = '/'; // Redirect to the main chat interface
+            } catch (error) {
+                console.error("Login error:", error);
+                showToast(`Login failed: ${error.message}`, true);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            usernameInput.focus();
+        });
+    </script>
+</body>
+</html>
