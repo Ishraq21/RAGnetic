@@ -387,7 +387,6 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
         payload = message_data["payload"]
         agent_name = payload.get("agent", "unknown_agent")
 
-        # Frontend now sends loggedInDbUserId (int) directly as user_id in the payload
         user_db_id = payload.get("user_id")
         if not isinstance(user_db_id, int):
             logger.error(f"WebSocket received non-integer user_id: {user_db_id}. Closing connection.")
@@ -622,11 +621,13 @@ async def home(request: Request):
     except Exception as e:
         logger.error(f"Could not load agent configs: {e}")
     default_agent = agents_list[0]['name'] if agents_list else ""
-    # Removed api_key from template context as it's no longer used for frontend init
     return templates.TemplateResponse("agent_interface.html", {
         "request": request, "agents": agents_list, "agent": default_agent
     })
 
+@app.get("/login", tags=["Application"])
+async def login_page(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request})
 
 @app.get("/health", tags=["System"])
 async def health_check():
@@ -672,7 +673,6 @@ async def get_history(thread_id: str, agent_name: str, user_id: int, api_key: st
             (chat_sessions_table.c.user_id == user_id)
         ))).scalar_one_or_none()
         if not session_id:
-            # Return 404 if session not found, instead of empty list for a specific thread_id
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found for the given criteria.")
         messages_stmt = select(chat_messages_table.c.sender, chat_messages_table.c.content).where(
             chat_messages_table.c.session_id == session_id).order_by(chat_messages_table.c.timestamp.asc())

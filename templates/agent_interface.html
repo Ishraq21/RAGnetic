@@ -32,17 +32,7 @@
         </div>
     </div>
 
-    <div id="login-container">
-        <h1>RAG<span>netic</span></h1>
-        <p>Log in to access your AI assistant.</p>
-        <form id="login-form">
-            <input type="text" id="username-input" placeholder="Username" required />
-            <input type="password" id="password-input" placeholder="Password" required />
-            <button type="submit">Login</button>
-        </form>
-    </div>
-
-    <aside id="chat-history-sidebar" style="display:none;">
+    <aside id="chat-history-sidebar">
         <div class="sidebar-top">
             <button id="new-chat-btn">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
@@ -58,7 +48,7 @@
         <ul id="history-list"></ul>
         <button id="logout-btn" style="width: 90%; margin: 10px auto; display: block; padding: 10px 15px; border: none; border-radius: 5px; background-color: #f44336; color: white; cursor: pointer; font-size: 1em;">Logout</button>
     </aside>
-    <div id="chat-container" style="display:none;">
+    <div id="chat-container">
         <div id="messages"></div>
         <div id="input-form-container">
             <div id="typing-indicator" style="opacity: 0; display:none;">
@@ -95,20 +85,14 @@
 
         const historyList = document.getElementById('history-list');
 
-        // Login Elements
-        const loginContainer = document.getElementById('login-container');
-        const loginForm = document.getElementById('login-form');
-        const usernameInput = document.getElementById('username-input');
-        const passwordInput = document.getElementById('password-input');
         const logoutBtn = document.getElementById('logout-btn');
 
 
-        let agent, thread_id, socket; // Removed 'user_id' as a global variable, rely on loggedInDbUserId
+        let agent, thread_id, socket;
         let confirmCallback = null;
         let isGenerating = false;
         const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
 
-        // Authentication state variables - these will hold the user-specific token and ID
         let loggedInUserToken = localStorage.getItem('ragnetic_user_token');
         let loggedInDbUserId = localStorage.getItem('ragnetic_db_user_id');
 
@@ -125,7 +109,6 @@
         function renderEmptyState() { messagesDiv.innerHTML = `<div id="empty-state"><h1>RAG<span>netic</span></h1><p>Your on-premise AI assistant. Select an agent and ask a question to begin.</p></div>`; }
 
         function setupChatEnvironment() {
-            showChatInterface();
             const savedAgent = localStorage.getItem('ragnetic_agent');
             if (savedAgent) {
                 agentSelect.value = savedAgent;
@@ -134,7 +117,6 @@
             thread_id = localStorage.getItem('ragnetic_thread_id');
 
             if (thread_id) {
-                // Pass loggedInDbUserId directly to loadHistory
                 loadHistory(agent, thread_id, loggedInDbUserId);
             } else {
                 renderEmptyState();
@@ -143,7 +125,6 @@
             openWebSocket();
         }
 
-        // Updated openWebSocket to use loggedInUserToken
         function openWebSocket(onOpenCallback) {
             if (socket && socket.readyState !== WebSocket.CLOSED) { socket.close(1000, "Starting new session"); }
             let wsUrl = `${protocol}://${location.host}/ws`;
@@ -158,25 +139,29 @@
                 if (isGenerating) setGeneratingState(false);
                 if (event.code === 1008) { showToast("Connection rejected: Invalid or missing API Key.", true); }
                 else if (event.code !== 1000) { showToast(`WebSocket disconnected: Code ${event.code}`, true); }
+                else {
+                    // Normal closure (1000) implies a logout or intentional refresh
+                    // If not logged in, redirect to login page
+                    if (!loggedInUserToken || !loggedInDbUserId) {
+                        window.location.href = '/login';
+                    }
+                }
             };
             socket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.token) { typingIndicator.style.display = 'none'; appendAgentToken(data.token); }
                 if (data.done) {
                     setGeneratingState(false);
-                    // The backend now sends the actual user_id (DB ID) if it creates a new user.
-                    // We need to update loggedInDbUserId if the backend provides it,
-                    // especially for a newly created session (e.g., first login).
                     if (data.user_id && data.user_id !== loggedInDbUserId) {
                         loggedInDbUserId = data.user_id;
                         localStorage.setItem('ragnetic_db_user_id', loggedInDbUserId);
                     }
-                    thread_id = data.thread_id; // Set global thread_id from backend
+                    thread_id = data.thread_id;
                      setTimeout(() => {
                         localStorage.setItem('ragnetic_thread_id', thread_id);
                         localStorage.setItem('ragnetic_agent', agent);
-                    }, 10); // 10ms delay
-                    fetchChatSessions(agent); // Re-fetch sessions to update sidebar titles and active state
+                    }, 10);
+                    fetchChatSessions(agent);
                     const lastMessage = messagesDiv.lastElementChild;
                     if (lastMessage && lastMessage.classList.contains('agent')) { lastMessage.dataset.streaming = 'false'; renderCodeblocks(lastMessage); renderMath(lastMessage); }
 
@@ -185,14 +170,13 @@
         }
         function handleFormSubmit(event) { if (event) event.preventDefault(); if (isGenerating) { socket.send(JSON.stringify({ type: 'interrupt' })); setGeneratingState(false); } else { sendMessage(); } }
         function sendMessage() {
-            if (!loggedInUserToken || !loggedInDbUserId) { // Ensure both are present for sending messages
+            if (!loggedInUserToken || !loggedInDbUserId) {
                 showToast("Please log in to chat.", true);
                 return;
             }
             const query = inputField.value.trim();
             if (!query) return;
 
-            // CRITICAL FIX: Send loggedInDbUserId (integer) to the backend
             const payload = { agent, user_id: parseInt(loggedInDbUserId), thread_id, query };
             const message = { type: 'query', payload: payload };
             const doSend = () => {
@@ -243,14 +227,12 @@
         }
         function appendAgentToken(token) { let lastMessage = messagesDiv.lastElementChild; if (!lastMessage || !lastMessage.classList.contains('agent') || lastMessage.dataset.streaming === 'false') { typingIndicator.style.display = 'none'; lastMessage = createAgentMessageBubble(); lastMessage.dataset.streaming = 'true'; } lastMessage.dataset.rawMarkdown += token; const contentDiv = lastMessage.querySelector('.content'); if (contentDiv) { contentDiv.innerHTML = marked.parse(lastMessage.dataset.rawMarkdown); renderCodeblocks(contentDiv); } scrollToBottom(); }
 
-        // Updated loadHistory to use loggedInDbUserId
-        async function loadHistory(agentName, threadId, userId) { // userId parameter here is the loggedInDbUserId
+        async function loadHistory(agentName, threadId, userId) {
             if (!loggedInUserToken || !loggedInDbUserId) {
                 showToast("Cannot load history: Not logged in.", true);
                 return;
             }
             try {
-                // Ensure the user_id query parameter is loggedInDbUserId (integer)
                 const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${loggedInDbUserId}`, {
                     method: 'GET',
                     headers: {
@@ -258,10 +240,9 @@
                     }
                 });
                 if (!response.ok) {
-                    // Check for 404 specifically
                     if (response.status === 404) {
                         console.warn(`History for thread ${threadId} not found or unauthorized.`);
-                        startNewSession(false); // Start a new session if history isn't found
+                        startNewSession(false);
                         return;
                     }
                     showToast(`Could not load session (status: ${response.status}).`, true);
@@ -277,14 +258,12 @@
             }
         }
 
-        // Updated fetchChatSessions to use loggedInDbUserId
         async function fetchChatSessions(agentName) {
             if (!loggedInUserToken || !loggedInDbUserId) {
                 historyList.innerHTML = '';
                 return;
             }
             try {
-                // Ensure the user_id query parameter is loggedInDbUserId (integer)
                 const response = await fetch(`/sessions?agent_name=${agentName}&user_id=${loggedInDbUserId}`, {
                     method: 'GET',
                     headers: {
@@ -328,7 +307,7 @@
                         li.classList.add('active');
                         thread_id = session.thread_id;
                         localStorage.setItem('ragnetic_thread_id', thread_id);
-                        loadHistory(agent, thread_id, loggedInDbUserId); // Ensure loggedInDbUserId is passed
+                        loadHistory(agent, thread_id, loggedInDbUserId);
                         openWebSocket();
                     };
                     addRenameFunctionality(li, session.thread_id);
@@ -341,7 +320,6 @@
             }
         }
 
-        // Updated addRenameFunctionality to use loggedInDbUserId
         function addRenameFunctionality(liElement, currentThreadId) {
             const renameButton = liElement.querySelector('.rename-btn');
             const textSpan = liElement.querySelector('.history-item-text');
@@ -363,7 +341,6 @@
                         return;
                     }
                     try {
-                        // Ensure user_id query parameter is loggedInDbUserId (integer)
                         const response = await fetch(`/sessions/${currentThreadId}/rename?agent_name=${agent}&user_id=${loggedInDbUserId}`, {
                             method: 'PUT',
                             headers: {
@@ -397,7 +374,6 @@
             };
         }
 
-        // Updated addDeleteFunctionality and deleteChatSession to use loggedInDbUserId
         function addDeleteFunctionality(liElement, currentThreadId) {
             const deleteButton = liElement.querySelector('.delete-btn');
             deleteButton.onclick = (e) => {
@@ -413,7 +389,6 @@
                 return;
             }
             try {
-                // Ensure user_id query parameter is loggedInDbUserId (integer)
                 const response = await fetch(`/sessions/${currentThreadId}?agent_name=${agent}&user_id=${loggedInDbUserId}`, {
                     method: 'DELETE',
                     headers: {
@@ -450,83 +425,22 @@
             fetchChatSessions(agent);
         }
 
-        // Functions to manage UI visibility
-        function showLoginForm() {
-            loginContainer.style.display = 'flex';
-            historySidebar.style.display = 'none';
-            chatContainer.style.display = 'none';
-            usernameInput.focus();
-        }
-
-        function showChatInterface() {
-            loginContainer.style.display = 'none';
-            historySidebar.style.display = 'flex';
-            chatContainer.style.display = 'flex';
-            inputField.focus();
-        }
-
-        // Login form submission handler
-        loginForm.addEventListener('submit', handleLoginSubmit);
-        async function handleLoginSubmit(event) {
-            event.preventDefault();
-            const username = usernameInput.value;
-            const password = passwordInput.value;
-
-            try {
-                const response = await fetch('/api/v1/security/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || 'Login failed.');
-                }
-
-                const data = await response.json();
-                loggedInUserToken = data.access_token;
-                localStorage.setItem('ragnetic_user_token', loggedInUserToken);
-
-                // Fetch user details to get their DB ID
-                const userDetailsResponse = await fetch('/api/v1/security/me', {
-                    method: 'GET',
-                    headers: {
-                        'X-API-Key': loggedInUserToken
-                    }
-                });
-                if (!userDetailsResponse.ok) {
-                    throw new Error('Failed to fetch user details after login.');
-                }
-                const userDetails = await userDetailsResponse.json();
-                loggedInDbUserId = userDetails.id; // Get the user's DB ID (this is an integer)
-                localStorage.setItem('ragnetic_db_user_id', loggedInDbUserId);
-
-
-                showToast("Login successful!");
-                setupChatEnvironment(); // Now calls the common setup function
-
-            } catch (error) {
-                console.error("Login error:", error);
-                showToast(`Login failed: ${error.message}`, true);
-            }
-        }
-
         // Logout handler
         logoutBtn.addEventListener('click', () => {
             loggedInUserToken = null;
             loggedInDbUserId = null;
             localStorage.removeItem('ragnetic_user_token');
             localStorage.removeItem('ragnetic_db_user_id');
-            localStorage.removeItem('ragnetic_thread_id'); // Clear thread on logout
-            localStorage.removeItem('ragnetic_user_id'); // Clear legacy frontend user_id on logout
+            localStorage.removeItem('ragnetic_thread_id');
+            localStorage.removeItem('ragnetic_user_id');
             localStorage.removeItem('ragnetic_agent');
-            thread_id = null; // Reset current thread_id
-            agent = null; // Reset current agent
+            thread_id = null;
+            agent = null;
             showToast("Logged out successfully.");
-            showLoginForm();
-            messagesDiv.innerHTML = ''; // Clear chat messages
-            historyList.innerHTML = ''; // Clear history list
+            // Redirect to login page after logout
+            window.location.href = '/login';
+            messagesDiv.innerHTML = '';
+            historyList.innerHTML = '';
             if (socket && socket.readyState !== WebSocket.CLOSED) {
                 socket.close(1000, "User logged out");
             }
@@ -538,9 +452,9 @@
         document.addEventListener('DOMContentLoaded', () => {
             // Check if user is already logged in (has a token and DB ID)
             if (loggedInUserToken && loggedInDbUserId) {
-                setupChatEnvironment(); // Directly call setup if logged in
+                setupChatEnvironment();
             } else {
-                showLoginForm(); // Otherwise, show the login form
+                window.location.href = '/login'; // Redirect to login if not authenticated
             }
         });
 
