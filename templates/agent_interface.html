@@ -126,59 +126,86 @@
             });
         }
         function appendAgentToken(token) { let lastMessage = messagesDiv.lastElementChild; if (!lastMessage || !lastMessage.classList.contains('agent') || lastMessage.dataset.streaming === 'false') { typingIndicator.style.display = 'none'; lastMessage = createAgentMessageBubble(); lastMessage.dataset.streaming = 'true'; } lastMessage.dataset.rawMarkdown += token; const contentDiv = lastMessage.querySelector('.content'); if (contentDiv) { contentDiv.innerHTML = marked.parse(lastMessage.dataset.rawMarkdown); renderCodeblocks(contentDiv); } scrollToBottom(); }
-        async function loadHistory(agentName, threadId, userId) { try { const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${userId}&api_key=${GLOBAL_API_KEY}`); if (!response.ok) { showToast(`Could not load session (status: ${response.status}).`, true); startNewSession(false); return; } const history = await response.json(); messagesDiv.innerHTML = ''; history.forEach(msg => { if (msg.type === 'human') appendUserMessage(msg.content); else if (msg.type === 'ai') { const agentMsgBubble = createAgentMessageBubble(); agentMsgBubble.dataset.rawMarkdown = msg.content; const contentDiv = agentMsgBubble.querySelector('.content'); contentDiv.innerHTML = marked.parse(msg.content); agentMsgBubble.dataset.streaming = 'false'; renderCodeblocks(contentDiv); renderMath(contentDiv); } }); setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 100); } catch (error) { console.error("Failed to fetch history:", error); showToast("Could not connect to server to load session.", true); } }
-        async function fetchChatSessions(agentName) {
-            if (!user_id || !GLOBAL_API_KEY) {
-                historyList.innerHTML = '';
-                return;
-            }
+        async function loadHistory(agentName, threadId, userId) {
             try {
-                const response = await fetch(`/sessions?agent_name=${agentName}&user_id=${user_id}&api_key=${GLOBAL_API_KEY}`);
-                if (!response.ok) { throw new Error('Failed to fetch chat sessions.'); }
-                const sessions = await response.json();
-                historyList.innerHTML = '';
-                sessions.forEach(session => {
-                    const li = document.createElement('li');
-                    li.dataset.threadId = session.thread_id;
-                    li.dataset.topicName = session.topic_name;
-                    const mainContent = document.createElement('div');
-                    mainContent.className = 'history-item-main';
-                    mainContent.innerHTML = `
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="history-icon" viewBox="0 0 16 16"><path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.5a1 1 0 0 0-.8.4l-1.9 2.533a1 1 0 0 1-1.6 0L5.3 12.4a1 1 0 0 0-.8-.4H2a2 2 0 0 1-2-2V2zm3.5 1a.5.5 0 0 0 0 1h9a.5.5 0 0 0 0-1h-9zm0 2.5a.5.5 0 0 0 0 1h9a.5.5 0 0 0 0-1h-9zm0 2.5a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1h-5z"/></svg>
-                        <span class="history-item-text">${session.topic_name}</span>
-                        <input type="text" class="rename-input" style="display: none;" />
-                    `;
-                    li.appendChild(mainContent);
-                    const actionsContainer = document.createElement('div');
-                    actionsContainer.className = 'history-item-actions';
-                    actionsContainer.innerHTML = `
-                        <button class="action-btn rename-btn" title="Rename Chat">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg>
-                        </button>
-                        <button class="action-btn delete-btn" title="Delete Chat">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/><path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/></svg>
-                        </button>
-                    `;
-                    li.appendChild(actionsContainer);
-                    if (session.thread_id === thread_id) { li.classList.add('active'); }
-                    mainContent.onclick = () => {
-                        if (li.classList.contains('editing')) return;
-                        document.querySelectorAll('#history-list li').forEach(item => item.classList.remove('active'));
-                        li.classList.add('active');
-                        thread_id = session.thread_id;
-                        localStorage.setItem('ragnetic_thread_id', thread_id);
-                        loadHistory(agent, thread_id, user_id);
-                        openWebSocket();
-                    };
-                    addRenameFunctionality(li, session.thread_id);
-                    addDeleteFunctionality(li, session.thread_id);
-                    historyList.appendChild(li);
+                // ORIGINAL: const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${userId}&api_key=${GLOBAL_API_KEY}`);
+                const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${userId}`, {
+                    method: 'GET',
+                    headers: {
+                        'X-API-Key': GLOBAL_API_KEY // <-- ADD THIS LINE
+                    }
                 });
+                if (!response.ok) { showToast(`Could not load session (status: ${response.status}).`, true); startNewSession(false); return; }
+                const history = await response.json();
+                messagesDiv.innerHTML = '';
+                history.forEach(msg => { if (msg.type === 'human') appendUserMessage(msg.content); else if (msg.type === 'ai') { const agentMsgBubble = createAgentMessageBubble(); agentMsgBubble.dataset.rawMarkdown = msg.content; const contentDiv = agentMsgBubble.querySelector('.content'); contentDiv.innerHTML = marked.parse(msg.content); agentMsgBubble.dataset.streaming = 'false'; renderCodeblocks(contentDiv); renderMath(contentDiv); } });
+                setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 100);
             } catch (error) {
-                console.error("Failed to fetch chat sessions:", error);
-                historyList.innerHTML = `<li class="no-history"><p>No chat history available.</p></li>`;
+                console.error("Failed to fetch history:", error);
+                showToast("Could not connect to server to load session.", true);
             }
         }
+
+        async function fetchChatSessions(agentName) {
+    if (!user_id || !GLOBAL_API_KEY) {
+        historyList.innerHTML = '';
+        return;
+    }
+    try {
+        // ORIGINAL: const response = await fetch(`/sessions?agent_name=${agentName}&user_id=${user_id}&api_key=${GLOBAL_API_KEY}`);
+        const response = await fetch(`/sessions?agent_name=${agentName}&user_id=${user_id}`, {
+            method: 'GET',
+            headers: {
+                'X-API-Key': GLOBAL_API_KEY // <-- ADD THIS LINE
+            }
+        });
+        if (!response.ok) { throw new Error('Failed to fetch chat sessions.'); }
+        const sessions = await response.json();
+        historyList.innerHTML = '';
+        sessions.forEach(session => {
+            const li = document.createElement('li');
+            li.dataset.threadId = session.thread_id;
+            li.dataset.topicName = session.topic_name;
+            const mainContent = document.createElement('div');
+            mainContent.className = 'history-item-main';
+            mainContent.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="history-icon" viewBox="0 0 16 16"><path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.5a1 1 0 0 0-.8.4l-1.9 2.533a1 1 0 0 1-1.6 0L5.3 12.4a1 1 0 0 0-.8-.4H2a2 2 0 0 1-2-2V2zm3.5 1a.5.5 0 0 0 0 1h9a.5.5 0 0 0 0-1h-9zm0 2.5a.5.5 0 0 0 0 1h9a.5.5 0 0 0 0-1h-9zm0 2.5a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1h-5z"/></svg>
+                <span class="history-item-text">${session.topic_name}</span>
+                <input type="text" class="rename-input" style="display: none;" />
+            `;
+            li.appendChild(mainContent);
+            const actionsContainer = document.createElement('div');
+            actionsContainer.className = 'history-item-actions';
+            actionsContainer.innerHTML = `
+                <button class="action-btn rename-btn" title="Rename Chat">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg>
+                </button>
+                <button class="action-btn delete-btn" title="Delete Chat">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/><path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/></svg>
+                </button>
+            `;
+            li.appendChild(actionsContainer);
+            if (session.thread_id === thread_id) { li.classList.add('active'); }
+            mainContent.onclick = () => {
+                if (li.classList.contains('editing')) return;
+                document.querySelectorAll('#history-list li').forEach(item => item.classList.remove('active'));
+                li.classList.add('active');
+                thread_id = session.thread_id;
+                localStorage.setItem('ragnetic_thread_id', thread_id);
+                loadHistory(agent, thread_id, user_id);
+                openWebSocket();
+            };
+            addRenameFunctionality(li, session.thread_id);
+            addDeleteFunctionality(li, session.thread_id);
+            historyList.appendChild(li);
+        });
+    } catch (error) {
+        console.error("Failed to fetch chat sessions:", error);
+        historyList.innerHTML = `<li class="no-history"><p>No chat history available.</p></li>`;
+    }
+}
+
+
         function addRenameFunctionality(liElement, currentThreadId) {
             const renameButton = liElement.querySelector('.rename-btn');
             const textSpan = liElement.querySelector('.history-item-text');
@@ -191,27 +218,31 @@
                 renameInput.value = textSpan.textContent;
                 renameInput.focus();
             };
-            const finishEditing = async () => {
-                const newName = renameInput.value.trim();
-                const oldName = textSpan.textContent;
-                if (newName && newName !== oldName) {
-                    try {
-                        const response = await fetch(`/sessions/${currentThreadId}/rename?agent_name=${agent}&user_id=${user_id}&api_key=${GLOBAL_API_KEY}`, {
-                            method: 'PUT',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ new_name: newName })
-                        });
-                        if (!response.ok) throw new Error('Failed to rename session.');
-                        textSpan.textContent = newName;
-                        showToast('Chat renamed successfully!');
-                    } catch (error) {
-                        console.error('Rename failed:', error);
-                        showToast('Error: Could not rename chat.', true);
-                    }
-                }
-                liElement.classList.remove('editing');
-                renameInput.style.display = 'none';
-                textSpan.style.display = 'block';
+    const finishEditing = async () => {
+        const newName = renameInput.value.trim();
+        const oldName = textSpan.textContent;
+        if (newName && newName !== oldName) {
+            try {
+                // ORIGINAL: const response = await fetch(`/sessions/${currentThreadId}/rename?agent_name=${agent}&user_id=${user_id}&api_key=${GLOBAL_API_KEY}`, {
+                const response = await fetch(`/sessions/${currentThreadId}/rename?agent_name=${agent}&user_id=${user_id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': GLOBAL_API_KEY // <-- ADD THIS LINE
+                    },
+                    body: JSON.stringify({ new_name: newName })
+                });
+                if (!response.ok) throw new Error('Failed to rename session.');
+                textSpan.textContent = newName;
+                showToast('Chat renamed successfully!');
+            } catch (error) {
+                console.error('Rename failed:', error);
+                showToast('Error: Could not rename chat.', true);
+            }
+        }
+        liElement.classList.remove('editing');
+        renameInput.style.display = 'none';
+        textSpan.style.display = 'block';
             };
             renameInput.onblur = finishEditing;
             renameInput.onkeydown = (e) => {
@@ -235,21 +266,25 @@
             };
         }
         async function deleteChatSession(liElement, currentThreadId) {
-            try {
-                const response = await fetch(`/sessions/${currentThreadId}?agent_name=${agent}&user_id=${user_id}&api_key=${GLOBAL_API_KEY}`, {
-                    method: 'DELETE'
-                });
-                if (!response.ok) { throw new Error('Failed to delete session.'); }
-                showToast('Chat deleted successfully!');
-                liElement.remove();
-                if (thread_id === currentThreadId) {
-                    startNewSession();
-                }
-            } catch(error) {
-                console.error("Delete failed:", error);
-                showToast('Error: Could not delete chat.', true);
+try {
+        // ORIGINAL: const response = await fetch(`/sessions/${currentThreadId}?agent_name=${agent}&user_id=${user_id}&api_key=${GLOBAL_API_KEY}`, {
+        const response = await fetch(`/sessions/${currentThreadId}?agent_name=${agent}&user_id=${user_id}`, {
+            method: 'DELETE',
+            headers: {
+                'X-API-Key': GLOBAL_API_KEY // <-- ADD THIS LINE
             }
+        });
+        if (!response.ok) { throw new Error('Failed to delete session.'); }
+        showToast('Chat deleted successfully!');
+        liElement.remove();
+        if (thread_id === currentThreadId) {
+            startNewSession();
         }
+    } catch(error) {
+        console.error("Delete failed:", error);
+        showToast('Error: Could not delete chat.', true);
+    }
+}
         function showConfirmationModal(onConfirm, text = "Are you sure?", confirmText = "Start New") {
             if (confirmText === "Start New" && (messagesDiv.children.length === 0 || document.getElementById('empty-state'))) {
                 onConfirm();

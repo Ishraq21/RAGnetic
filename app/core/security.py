@@ -4,6 +4,8 @@ import os
 import logging
 from typing import Optional, List, Dict, Any
 from fastapi import Header, HTTPException, status, Depends
+from fastapi import WebSocket, WebSocketException, status
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 
@@ -58,32 +60,33 @@ async def get_http_api_key(
 
 
 async def get_websocket_api_key(
-        websocket_api_key: Optional[str] = None,
-        db: AsyncSession = Depends(get_db)
+    websocket: WebSocket,
+    db: AsyncSession = Depends(get_db)
 ) -> str:
     """
-    Authenticates a WebSocket connection using the API key from query params.
+    Authenticates a WebSocket connection using the API key from either:
+    - query string (?api_key=...)
+    - or header (x-api-key)
     """
-    if websocket_api_key is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="WebSocket API Key missing. Please provide api_key query parameter.",
+    api_key = websocket.query_params.get("api_key") or websocket.headers.get("x-api-key")
+
+    if not api_key:
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="WebSocket API Key missing. Use ?api_key=... or x-api-key header.",
         )
 
-    # Check if it's the master RAGNETIC_API_KEYS
     server_keys = get_server_api_keys()
-    if websocket_api_key in server_keys:
-        return websocket_api_key
+    if api_key in server_keys:
+        return api_key
 
-    # If not a master key, try to authenticate as a user-specific API key
-    authenticated_user = await db_dao.get_user_by_api_key(db, websocket_api_key)
-
+    authenticated_user = await db_dao.get_user_by_api_key(db, api_key)
     if authenticated_user and authenticated_user.get("is_active"):
-        return websocket_api_key
+        return api_key
 
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid WebSocket API Key provided. Connection denied.",
+    raise WebSocketException(
+        code=status.WS_1008_POLICY_VIOLATION,
+        reason="Invalid WebSocket API Key provided. Connection denied.",
     )
 
 

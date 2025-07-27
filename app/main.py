@@ -343,14 +343,28 @@ class RenameRequest(BaseModel):
     new_name: str
 
 
-async def _get_or_create_user(db: AsyncSession, user_id: str) -> int:
+async def _get_or_create_user(db: AsyncSession, user_id: str):
+    # Try to find existing user
     stmt = select(users_table.c.id).where(users_table.c.user_id == user_id)
-    user_db_id = (await db.execute(stmt)).scalar_one_or_none()
-    if not user_db_id:
-        stmt = insert(users_table).values(user_id=user_id).returning(users_table.c.id)
-        user_db_id = (await db.execute(stmt)).scalar_one()
-        await db.commit()
-    return user_db_id
+    existing_user_id = (await db.execute(stmt)).scalar_one_or_none()
+
+    if existing_user_id:
+        return existing_user_id
+    else:
+        # Create new user if not found
+        insert_stmt = insert(users_table).values(
+            user_id=user_id,
+            is_active=True,
+            is_superuser=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+            hashed_password="",  # <--- ADD THIS LINE HERE
+        ).returning(users_table.c.id)
+        user_db_id = (await db.execute(insert_stmt)).scalar_one()
+        # Note: The commit is handled by the overall session context in FastAPI,
+        # or you might see a db.commit() nearby if it's explicitly done there.
+        # No explicit db.commit() needed right here if session is managed externally.
+        return user_db_id
 
 
 async def _get_or_create_session(db: AsyncSession, thread_id: str, agent_name: str, user_db_id: int) -> Tuple[
