@@ -359,7 +359,7 @@ async def _get_or_create_user(db: AsyncSession, user_id: str):
             is_superuser=False,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
-            hashed_password="",  # <--- ADD THIS LINE HERE
+            hashed_password="",
         ).returning(users_table.c.id)
         user_db_id = (await db.execute(insert_stmt)).scalar_one()
         # Note: The commit is handled by the overall session context in FastAPI,
@@ -393,7 +393,7 @@ async def _get_or_create_session(db: AsyncSession, thread_id: Optional[str], age
         thread_id=new_thread_id,  # Use the newly generated unique ID
         agent_name=agent_name,
         user_id=user_db_id,
-        topic_name=session_topic, # Set default topic for new chat
+        topic_name=None,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     ).returning(chat_sessions_table.c.id, chat_sessions_table.c.topic_name, chat_sessions_table.c.thread_id)
@@ -427,9 +427,9 @@ async def _save_message_and_update_session(db: AsyncSession, session_id: int, se
 async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api_key),
                          db: AsyncSession = Depends(get_db)):
     await ws.accept()
-    thread_id = "uninitialized"
+    canonical_thread_id: str = "uninitialized_thread"
     pubsub_task = None
-    channel = ""
+    channel: str = f"chat:{canonical_thread_id}"  # Initial channel using default, will be updated.
 
     try:
         message_data = await ws.receive_json()
@@ -440,16 +440,21 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
         payload = message_data["payload"]
         agent_name = payload.get("agent", "unknown_agent")
         user_id = sanitize_for_path(payload.get("user_id")) or f"user-{uuid4().hex[:8]}"
-        thread_id = sanitize_for_path(payload.get("thread_id")) or f"thread-{uuid4().hex[:8]}"
-        channel = f"chat:{thread_id}"
 
-        await manager.connect(ws, channel)
-
-        if isinstance(manager, RedisConnectionManager):
-            pubsub_task = asyncio.create_task(redis_listen(ws, channel))
+        thread_id_from_frontend = sanitize_for_path(payload.get("thread_id")) # This is the thread_id potentially passed from frontend
 
         user_db_id = await _get_or_create_user(db, user_id)
-        session_id, session_topic, returned_thread_id = await _get_or_create_session(db, thread_id, agent_name, user_db_id)
+        session_id, session_topic, returned_thread_id = await _get_or_create_session(db, thread_id_from_frontend, agent_name, user_db_id)
+
+        canonical_thread_id = returned_thread_id
+        channel = f"chat:{canonical_thread_id}"
+
+        await manager.connect(ws, channel)
+        if isinstance(manager, RedisConnectionManager):
+            if pubsub_task and not pubsub_task.done():
+                pubsub_task.cancel()
+                await asyncio.sleep(0.01)  # Small yield for task cancellation
+            pubsub_task = asyncio.create_task(redis_listen(ws, channel))
         is_first_message_in_session = session_topic is None
 
         agent_config = load_agent_config(agent_name)
@@ -468,7 +473,7 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
         while True:
             query = message_data.get("payload", {}).get("query")
             request_id = str(uuid4())
-            logger.info(f"[{thread_id}] Processing request {request_id} for query: '{query[:50]}...'")
+            logger.info(f"[{canonical_thread_id}] Processing request {request_id} for query: '{query[:50]}...'")
 
             await _save_message_and_update_session(db, session_id, 'human', query)
 
@@ -500,9 +505,9 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
 
             final_state, ai_response_content = await handle_query_streaming(
                 initial_state,
-                {"configurable": {"thread_id": thread_id}},
+                {"configurable": {"thread_id": canonical_thread_id}},
                 langgraph_agent,
-                thread_id,
+                canonical_thread_id, # Broadcast channel for streaming tokens
                 run_db_id,
                 db
             )
@@ -510,7 +515,7 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
             done_message = {
                 "done": True, "error": final_state.get("error", False) if final_state else True,
                 "errorMessage": final_state.get("errorMessage") if final_state else "Agent returned no output.",
-                "request_id": request_id, "user_id": user_id, "thread_id": thread_id,
+                "request_id": request_id, "user_id": user_id, "thread_id": canonical_thread_id,
             }
             await manager.broadcast(channel, json.dumps(done_message))
 
@@ -531,13 +536,14 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
             await ws.send_text(json.dumps({
                 "done": True,
                 "user_id": user_db_id,  # This is the backend user ID
-                "thread_id": returned_thread_id  # Send the backend-managed thread_id
+                "thread_id": canonical_thread_id,  # Send the backend-managed thread_id
+                "topic_name": session_topic
             }))
 
     except WebSocketDisconnect:
-        logger.info(f"[{thread_id}] Client disconnected.")
+        logger.info(f"[{canonical_thread_id}] Client disconnected.")
     except Exception as e:
-        logger.error(f"[{thread_id}] Unhandled WebSocket Error: {e}", exc_info=True)
+        logger.error(f"[{canonical_thread_id}] Unhandled WebSocket Error: {e}", exc_info=True)
     finally:
         if pubsub_task and not pubsub_task.done():
             pubsub_task.cancel()

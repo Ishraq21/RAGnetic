@@ -151,14 +151,15 @@
                         loggedInDbUserId = data.user_id;
                         localStorage.setItem('ragnetic_db_user_id', loggedInDbUserId);
                     }
-                    if (!thread_id) {
-                        thread_id = data.thread_id;
-                        localStorage.setItem('ragnetic_thread_id', thread_id);
-                        localStorage.setItem('ragnetic_agent', agent);
-                    }
-                    fetchChatSessions(agent);
+                    thread_id = data.thread_id; // Set global thread_id
+                     setTimeout(() => {
+                    localStorage.setItem('ragnetic_thread_id', thread_id);
+                    localStorage.setItem('ragnetic_agent', agent);
+                    }, 10); // 10ms delay
+                    fetchChatSessions(agent); // Re-fetch sessions to update sidebar titles and active state
                     const lastMessage = messagesDiv.lastElementChild;
                     if (lastMessage && lastMessage.classList.contains('agent')) { lastMessage.dataset.streaming = 'false'; renderCodeblocks(lastMessage); renderMath(lastMessage); }
+
                 }
             };
         }
@@ -224,6 +225,7 @@
 
         // Updated loadHistory to use loggedInUserToken
         async function loadHistory(agentName, threadId, userId) {
+        console.log(`loadHistory called for agent: ${agentName}, threadId: ${threadId}, userId: ${userId}`);
             if (!loggedInUserToken || !loggedInDbUserId) { // Require user to be logged in
                 showToast("Cannot load history: Not logged in.", true);
                 return;
@@ -237,6 +239,7 @@
                 });
                 if (!response.ok) { showToast(`Could not load session (status: ${response.status}).`, true); startNewSession(false); return; }
                 const history = await response.json();
+                console.log(`Fetched history for threadId ${threadId}: ${history.length} messages.`);
                 messagesDiv.innerHTML = '';
                 history.forEach(msg => { if (msg.type === 'human') appendUserMessage(msg.content); else if (msg.type === 'ai') { const agentMsgBubble = createAgentMessageBubble(); agentMsgBubble.dataset.rawMarkdown = msg.content; const contentDiv = agentMsgBubble.querySelector('.content'); contentDiv.innerHTML = marked.parse(msg.content); agentMsgBubble.dataset.streaming = 'false'; renderCodeblocks(contentDiv); renderMath(contentDiv); } });
                 setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 100);
@@ -292,6 +295,7 @@
                         li.classList.add('active');
                         thread_id = session.thread_id;
                         localStorage.setItem('ragnetic_thread_id', thread_id);
+                        console.log(`History item clicked: Calling loadHistory with thread_id=${thread_id}`);
                         loadHistory(agent, thread_id, user_id); // User_id here will be based on localStorage 'ragnetic_user_id'
                         openWebSocket();
                     };
@@ -476,6 +480,7 @@
 
                 if (savedAgent) agentSelect.value = savedAgent;
                 agent = agentSelect.value;
+                thread_id = savedThreadId;
 
                 // For the chat history, we now explicitly use the loggedInDbUserId
                 // and for localstorage tracking, we ensure it's aligned.
@@ -521,6 +526,7 @@
 
 
         document.addEventListener('DOMContentLoaded', () => {
+         console.log('DOMContentLoaded fired.');
             // Check if user is already logged in (has a token)
             if (loggedInUserToken && loggedInDbUserId) {
                 // Attempt to re-establish session
@@ -529,6 +535,7 @@
                 const savedThreadId = localStorage.getItem('ragnetic_thread_id');
 
                 if (savedAgent) agentSelect.value = savedAgent;
+                console.log(`DOMContentLoaded: savedAgent=${savedAgent}, savedThreadId=${savedThreadId}`);
                 agent = agentSelect.value;
 
                 // Ensure frontend's user_id is aligned with the logged-in DB user ID
@@ -541,12 +548,14 @@
                     loadHistory(agent, thread_id, user_id);
                 } else {
                     renderEmptyState();
+                    console.log('DOMContentLoaded: No savedThreadId, rendering empty state.');
                 }
                 fetchChatSessions(agent);
                 openWebSocket();
 
             } else {
                 showLoginForm();
+                console.log('DOMContentLoaded: Not logged in, showing login form.');
             }
         });
 
