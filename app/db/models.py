@@ -142,6 +142,7 @@ conversation_metrics_table = Table(
     Column("retrieval_time_s", Float(precision=10), nullable=True),
     Column("generation_time_s", Float(precision=10), nullable=True),
     Column("estimated_cost_usd", Float(precision=10), nullable=True),
+    Column("llm_model", String(255), nullable=True),
     Column("timestamp", DateTime, default=utc_timestamp, nullable=False),
     UniqueConstraint("session_id", "request_id", name="uq_session_request"),
 )
