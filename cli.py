@@ -2306,8 +2306,7 @@ def analytics_usage_command(
 
     try:
         with engine.connect() as connection:
-            # Join conversation_metrics_table with chat_sessions_table to get agent_name
-            # Changed to outerjoin to include metrics records even if session_id is NULL
+            # Join conversation_metrics_table with chat_sessions_table and users_table
             stmt = select(
                 func.sum(conversation_metrics_table.c.prompt_tokens).label("total_prompt_tokens"),
                 func.sum(conversation_metrics_table.c.completion_tokens).label("total_completion_tokens"),
@@ -2316,17 +2315,17 @@ def analytics_usage_command(
                 func.avg(conversation_metrics_table.c.retrieval_time_s).label("avg_retrieval_time_s"),
                 func.avg(conversation_metrics_table.c.generation_time_s).label("avg_generation_time_s"),
                 func.count(conversation_metrics_table.c.request_id).label("total_requests"),
-                chat_sessions_table.c.agent_name  # Include agent_name in select
-            ).outerjoin(  # Changed from .join to .outerjoin
+                chat_sessions_table.c.agent_name,  # Agent Name
+                conversation_metrics_table.c.llm_model,  # LLM Model Name
+                users_table.c.user_id  # User ID (username)
+            ).outerjoin(  # Left Outer Join to include metrics without sessions
                 chat_sessions_table, conversation_metrics_table.c.session_id == chat_sessions_table.c.id
+            ).outerjoin(  # Left Outer Join to include sessions without users (less common but safe)
+                users_table, chat_sessions_table.c.user_id == users_table.c.id
             )
 
             conditions = []
             if agent_name:
-                # Filter for specific agent_name, including where agent_name from chat_sessions is NULL
-                # If agent_name is provided, we filter where it matches OR if it's NULL (if such a case is intended to be included)
-                # For typical usage, filtering by an agent name means an actual agent name, not NULLs.
-                # So, filtering for chat_sessions_table.c.agent_name == agent_name
                 conditions.append(chat_sessions_table.c.agent_name == agent_name)
             if start_time:
                 conditions.append(conversation_metrics_table.c.timestamp >= start_time)
@@ -2336,8 +2335,12 @@ def analytics_usage_command(
             if conditions:
                 stmt = stmt.where(*conditions)
 
-            # Group by agent_name, which can now be NULL due to outerjoin
-            stmt = stmt.group_by(chat_sessions_table.c.agent_name)
+            # Group by Agent Name, LLM Model, and User ID (username)
+            stmt = stmt.group_by(
+                chat_sessions_table.c.agent_name,
+                conversation_metrics_table.c.llm_model,
+                users_table.c.user_id
+            )
 
             # Order by total cost descending
             stmt = stmt.order_by(func.sum(conversation_metrics_table.c.estimated_cost_usd).desc())
@@ -2350,19 +2353,21 @@ def analytics_usage_command(
         if not results:
             message = "No LLM usage metrics found in the database."
             if agent_name:
-                message = f"No LLM usage metrics found for agent: '{agent_name}'. (Note: This might exclude metrics not tied to a specific chat session.)"
+                message = f"No LLM usage metrics found for agent: '{agent_name}'. (Note: This might exclude metrics not tied to a specific chat session or user.)"
             typer.secho(message, fg=typer.colors.YELLOW)
             return
 
-        # Prepare data for pandas DataFrame
+        # Prepare data for pandas DataFrame with new columns
         df = pd.DataFrame(results, columns=[
             "Total Prompt Tokens", "Total Completion Tokens", "Total Tokens",
             "Total Estimated Cost (USD)", "Avg Retrieval Time (s)", "Avg Generation Time (s)",
-            "Total Requests", "Agent Name"
+            "Total Requests", "Agent Name", "LLM Model", "User ID"
         ])
 
-        # Handle None in 'Agent Name' column for display for rows not linked to a chat session
-        df['Agent Name'] = df['Agent Name'].fillna('N/A (No Chat Session)')
+        # Handle None in 'Agent Name', 'LLM Model', and 'User ID' columns for display
+        df['Agent Name'] = df['Agent Name'].fillna('N/A')
+        df['LLM Model'] = df['LLM Model'].fillna('N/A')
+        df['User ID'] = df['User ID'].fillna('N/A (No User)')
 
         # Format numerical columns for better readability
         df["Total Estimated Cost (USD)"] = df["Total Estimated Cost (USD)"].map(lambda x: f"${x:,.6f}")

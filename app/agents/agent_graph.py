@@ -273,7 +273,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "retrieval_time_s": retrieval_time,
             "generation_time_s": generation_time,
             "estimated_cost_usd": cost,
-            "timestamp": current_timestamp
+            "timestamp": current_timestamp,
+            "llm_model": model_name
         }
 
         log_metrics_data = {
