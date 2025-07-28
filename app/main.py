@@ -71,6 +71,7 @@ from alembic.script import ScriptDirectory
 from app.api.agents import router as agents_api_router
 from app.api.audit import router as audit_api_router
 from app.api.query import router as query_api_router
+from app.api.analytics import router as analytics_api_router
 from app.api.evaluation import router as evaluation_api_router
 from app.api.metrics import router as metrics_api_router
 from app.api import workflows
@@ -284,6 +285,7 @@ app.include_router(audit_api_router)
 app.include_router(query_api_router)
 app.include_router(evaluation_api_router)
 app.include_router(metrics_api_router)
+app.include_router(analytics_api_router)
 app.include_router(security_api_router)
 app.include_router(workflows.router, prefix="/api/v1")
 app.include_router(webhooks.router, prefix="/webhooks/v1")
