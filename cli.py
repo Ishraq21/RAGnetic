@@ -1,70 +1,53 @@
-import typer
-import uvicorn
-import os
-import shutil
-import yaml
-import glob
+import asyncio
 import configparser
+import glob
+import json
 import logging
 import logging.config
-from multiprocessing import Process
-import json
-import pandas as pd
-from datetime import datetime
-import asyncio
-from typing import Optional, List, Dict, Any
+import os
 import secrets
-from pathlib import Path
-from dotenv import load_dotenv
-import alembic.config
-import alembic.command
-from alembic.runtime.migration import MigrationContext
-import redis
+import shutil
 import subprocess
 import time
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, List, Dict
+from urllib.parse import urlparse
 
+import alembic.command
+import alembic.config
+import pandas as pd
+import pytest
+import redis
+import requests
+import typer
+import yaml
+from alembic.runtime.migration import MigrationContext
+from dotenv import load_dotenv
 # IMPORTS for inspect_agent dynamic vector store loading
 from langchain_community.vectorstores import FAISS, Chroma
-from langchain_qdrant import Qdrant
-from langchain_pinecone import Pinecone as PineconeLangChain
 from langchain_mongodb import MongoDBAtlasVectorSearch
+from langchain_pinecone import Pinecone as PineconeLangChain
+from langchain_qdrant import Qdrant
 from pinecone import Pinecone as PineconeClient
-
-from app.core.embed_config import get_embedding_model
-from langchain_core.documents import Document as LangChainDocument
-from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file
-
 # IMPORTS for connection checks
-from sqlalchemy import create_engine, text, select
+from sqlalchemy import create_engine, text
 from sqlalchemy import select, func
-import pandas as pd
-from datetime import datetime
-from app.db.models import conversation_metrics_table, chat_sessions_table
+from sqlalchemy import create_engine, text, select, func, case
+from sqlalchemy.sql import expression
 
-from sqlalchemy.engine.url import make_url
-
-from sqlalchemy.exc import SQLAlchemyError
-import requests
-from urllib.parse import urlparse
-from app.schemas.agent import DataSource
-from google.oauth2 import service_account
-
+from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file
 # Import core components from the application
 from app.core.config import get_path_settings, get_api_key, get_server_api_keys, get_log_storage_config, \
     get_memory_storage_config, get_db_connection, get_cors_settings
-from app.evaluation.dataset_generator import generate_test_set
-from app.evaluation.benchmark import run_benchmark
-from app.pipelines.embed import embed_agent_data
-from app.watcher import start_watcher
-import pytest
+from app.core.embed_config import get_embedding_model
 from app.core.validation import is_valid_agent_name_cli
-from app.db.models import metadata, agent_runs, chat_sessions_table, users_table
-from app.db.models import metadata, agent_runs, chat_sessions_table, users_table, agent_run_steps, workflows_table, workflow_runs_table
-from app.workflows.engine import WorkflowEngine
-from app.schemas.workflow import Workflow
-import subprocess
-from app.db import get_db
-from app.schemas.security import UserCreate, UserUpdate, RoleCreate, User, Role, Token, LoginRequest # Add LoginRequest
+from app.db.models import conversation_metrics_table
+from app.db.models import metadata, agent_runs, chat_sessions_table, users_table, agent_run_steps, workflows_table, \
+    workflow_runs_table
+from app.evaluation.benchmark import run_benchmark
+from app.evaluation.dataset_generator import generate_test_set
+from app.pipelines.embed import embed_agent_data
 
 # --- Centralized Path Configuration ---
 _APP_PATHS = get_path_settings()
@@ -2489,7 +2472,6 @@ def analytics_benchmarks_command(
             "Avg Generation Time (s)": combined_df[
                 "generation_time_s"].mean() if "generation_time_s" in combined_df.columns else 0.0,
 
-            # --- NEW SUMMARY COLUMNS (from agent config) ---
             # These are for a summary view, so we pick values from the first benchmark if multiple are aggregated
             # Or consider showing unique values if multiple configs are in play
             "Agent LLM Model (Sample)": combined_df["agent_llm_model"].iloc[
@@ -2535,6 +2517,338 @@ def analytics_benchmarks_command(
                 typer.echo(f"  - {key}: {value}")
 
     typer.secho("\n--- Benchmark Analysis Complete ---", bold=True)
+
+
+@analytics_app.command(name="workflow-runs", help="Displays aggregated workflow run metrics.")
+def analytics_workflow_runs_command(
+        workflow_name: Optional[str] = typer.Option(None, "--workflow", "-w",
+                                                    help="Filter metrics by a specific workflow name."),
+        status: Optional[str] = typer.Option(None, "--status", "-s",
+                                             help="Filter by workflow status (running, completed, failed, paused)."),
+        start_time: Optional[datetime] = typer.Option(None, "--start", "-S", formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"],
+                                                      help="Start time for metrics (YYYY-MM-DD or YYYY-MM-DDTHH:MM:S)."),
+        end_time: Optional[datetime] = typer.Option(None, "--end", "-E", formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"],
+                                                    help="End time for metrics (YYYY-MM-DD or YYYY-MM-DDTHH:MM:S)."),
+        limit: int = typer.Option(20, "--limit", "-n", help="Limit the number of aggregated workflow results."),
+):
+    """
+    Retrieves and displays aggregated workflow run metrics from the database.
+    """
+    logger.info("Retrieving workflow run metrics...")
+
+    if not _is_db_configured():
+        typer.secho("Database is not configured. Please run 'ragnetic configure' to set up a database for metrics.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    engine = _get_sync_db_engine()
+
+    try:
+        with engine.connect() as connection:
+            stmt = select(
+                workflows_table.c.name.label("workflow_name"),
+                func.count(workflow_runs_table.c.run_id).label("total_runs"),
+                func.avg(
+                    func.julianday(workflow_runs_table.c.end_time) - func.julianday(workflow_runs_table.c.start_time)
+                ).label("avg_duration_days"), # SQLite specific for duration
+                func.sum(
+                    case((workflow_runs_table.c.status == 'completed', 1), else_=0)
+                ).label("completed_runs"),
+                func.sum(
+                    case((workflow_runs_table.c.status == 'failed', 1), else_=0)
+                ).label("failed_runs"),
+                func.sum(
+                    case((workflow_runs_table.c.status == 'paused', 1), else_=0)
+                ).label("paused_runs")
+            ).join(
+                workflows_table, workflow_runs_table.c.workflow_id == workflows_table.c.id
+            )
+
+            conditions = []
+            if workflow_name:
+                conditions.append(workflows_table.c.name == workflow_name)
+            if status:
+                conditions.append(workflow_runs_table.c.status == status)
+            if start_time:
+                conditions.append(workflow_runs_table.c.start_time >= start_time)
+            if end_time:
+                conditions.append(workflow_runs_table.c.end_time <= end_time)
+
+            if conditions:
+                stmt = stmt.where(*conditions)
+
+            stmt = stmt.group_by(workflows_table.c.name)
+            stmt = stmt.order_by(func.count(workflow_runs_table.c.run_id).desc())
+            if limit:
+                stmt = stmt.limit(limit)
+
+            results = connection.execute(stmt).fetchall()
+
+        if not results:
+            message = "No workflow run metrics found in the database."
+            if workflow_name:
+                message = f"No workflow run metrics found for workflow: '{workflow_name}'."
+            typer.secho(message, fg=typer.colors.YELLOW)
+            return
+
+        df = pd.DataFrame(results, columns=[
+            "Workflow Name", "Total Runs", "Avg Duration (Days)",
+            "Completed Runs", "Failed Runs", "Paused Runs"
+        ])
+
+        # Convert avg_duration_days to seconds for better readability
+        # 1 day = 86400 seconds
+        df["Avg Duration (s)"] = df["Avg Duration (Days)"].fillna(0) * 86400
+        df["Avg Duration (s)"] = df["Avg Duration (s)"].map(lambda x: f"{x:.2f}")
+
+        # Calculate percentages
+        df["Success Rate"] = df["Completed Runs"] / df["Total Runs"]
+        df["Failure Rate"] = df["Failed Runs"] / df["Total Runs"]
+        df["Paused Rate"] = df["Paused Runs"] / df["Total Runs"]
+
+        # Handle NaN from division by zero for rates (e.g., if Total Runs is 0 for a group)
+        df = df.fillna(0)
+
+        # Format percentages
+        df["Success Rate"] = df["Success Rate"].map(lambda x: f"{x:.2%}")
+        df["Failure Rate"] = df["Failure Rate"].map(lambda x: f"{x:.2%}")
+        df["Paused Rate"] = df["Paused Rate"].map(lambda x: f"{x:.2%}")
+
+        # Reorder columns for final display
+        df = df[[
+            "Workflow Name", "Total Runs", "Success Rate", "Failure Rate", "Paused Rate",
+            "Avg Duration (s)", "Completed Runs", "Failed Runs", "Paused Runs"
+        ]]
+
+        typer.secho("\n--- Workflow Run Metrics Summary ---", bold=True, fg=typer.colors.CYAN)
+        typer.echo(df.to_string(index=False))
+        typer.secho(
+            "\nNote: Average duration calculation is based on SQL's `julianday` function, which may vary slightly across database types (e.g., PostgreSQL).",
+            fg=typer.colors.BLUE)
+
+    except Exception as e:
+        logger.error(f"An error occurred while fetching workflow run metrics: {e}", exc_info=True)
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+
+@analytics_app.command(name="agent-steps", help="Displays aggregated agent step metrics.")
+def analytics_agent_steps_command(
+        agent_name: Optional[str] = typer.Option(None, "--agent", "-a",
+                                                 help="Filter metrics by a specific agent name."),
+        node_name: Optional[str] = typer.Option(None, "--node", "-n",
+                                                help="Filter by a specific node name (e.g., 'agent', 'retriever')."),
+        status: Optional[str] = typer.Option(None, "--status", "-s",
+                                             help="Filter by step status (running, completed, failed)."),
+        start_time: Optional[datetime] = typer.Option(None, "--start", "-S", formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"],
+                                                      help="Start time for metrics (YYYY-MM-DD or YYYY-MM-DDTHH:MM:S)."),
+        end_time: Optional[datetime] = typer.Option(None, "--end", "-E", formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"],
+                                                    help="End time for metrics (YYYY-MM-DD or YYYY-MM-DDTHH:MM:S)."),
+        limit: int = typer.Option(20, "--limit", "-l", help="Limit the number of aggregated node results."),
+):
+    """
+    Retrieves and displays aggregated agent step metrics from the database.
+    """
+    logger.info("Retrieving agent step metrics...")
+
+    if not _is_db_configured():
+        typer.secho("Database is not configured. Please run 'ragnetic configure' to set up a database for metrics.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    engine = _get_sync_db_engine()
+
+    try:
+        with engine.connect() as connection:
+            stmt = select(
+                chat_sessions_table.c.agent_name,
+                agent_run_steps.c.node_name,
+                func.count(agent_run_steps.c.id).label("total_calls"),
+                func.avg(
+                    func.julianday(agent_run_steps.c.end_time) - func.julianday(agent_run_steps.c.start_time)
+                ).label("avg_duration_days"),  # SQLite specific for duration
+                func.sum(
+                    expression.case((agent_run_steps.c.status == 'completed', 1), else_=0)
+                    # FIX: Removed square brackets
+                ).label("completed_calls"),
+                func.sum(
+                    expression.case((agent_run_steps.c.status == 'failed', 1), else_=0)
+                ).label("failed_calls")
+            ).join(
+                agent_runs, agent_run_steps.c.agent_run_id == agent_runs.c.id
+            ).join(
+                chat_sessions_table, agent_runs.c.session_id == chat_sessions_table.c.id
+                # Link to chat_sessions for agent_name
+            )
+
+            conditions = []
+            if agent_name:
+                conditions.append(chat_sessions_table.c.agent_name == agent_name)
+            if node_name:
+                conditions.append(agent_run_steps.c.node_name == node_name)
+            if status:
+                conditions.append(agent_run_steps.c.status == status)
+            if start_time:
+                conditions.append(agent_run_steps.c.start_time >= start_time)
+            if end_time:
+                conditions.append(agent_run_steps.c.end_time <= end_time)
+
+            if conditions:
+                stmt = stmt.where(*conditions)
+
+            stmt = stmt.group_by(
+                chat_sessions_table.c.agent_name,
+                agent_run_steps.c.node_name
+            )
+            stmt = stmt.order_by(func.count(agent_run_steps.c.id).desc())
+            if limit:
+                stmt = stmt.limit(limit)
+
+            results = connection.execute(stmt).fetchall()
+
+        if not results:
+            message = "No agent step metrics found in the database."
+            if agent_name:
+                message += f" for agent: '{agent_name}'"
+            if node_name:
+                message += f" and node: '{node_name}'"
+            typer.secho(message, fg=typer.colors.YELLOW)
+            return
+
+        df = pd.DataFrame(results, columns=[
+            "Agent Name", "Node Name", "Total Calls", "Avg Duration (Days)",
+            "Completed Calls", "Failed Calls"
+        ])
+
+        df["Avg Duration (s)"] = df["Avg Duration (Days)"].fillna(0) * 86400
+        df["Avg Duration (s)"] = df["Avg Duration (s)"].map(lambda x: f"{x:.4f}")  # More precision for steps
+
+        df["Success Rate"] = df["Completed Calls"] / df["Total Calls"]
+        df["Failure Rate"] = df["Failed Calls"] / df["Total Calls"]
+
+        df = df.fillna(0)  # Handle NaN from division by zero or missing data
+
+        df["Success Rate"] = df["Success Rate"].map(lambda x: f"{x:.2%}")
+        df["Failure Rate"] = df["Failure Rate"].map(lambda x: f"{x:.2%}")
+
+        df = df[[
+            "Agent Name", "Node Name", "Total Calls", "Success Rate", "Failure Rate",
+            "Avg Duration (s)", "Completed Calls", "Failed Calls"
+        ]]
+
+        typer.secho("\n--- Agent Step Metrics Summary ---", bold=True, fg=typer.colors.CYAN)
+        typer.echo(df.to_string(index=False))
+        typer.secho(
+            "\nNote: Average duration calculation is based on SQL's `julianday` function, which may vary slightly across database types (e.g., PostgreSQL).",
+            fg=typer.colors.BLUE)
+
+    except Exception as e:
+        logger.error(f"An error occurred while fetching agent step metrics: {e}", exc_info=True)
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+
+@analytics_app.command(name="agent-runs", help="Displays aggregated agent run metrics.")
+def analytics_agent_runs_command(
+        agent_name: Optional[str] = typer.Option(None, "--agent", "-a",
+                                                 help="Filter metrics by a specific agent name."),
+        status: Optional[str] = typer.Option(None, "--status", "-s",
+                                             help="Filter by run status (running, completed, failed)."),
+        start_time: Optional[datetime] = typer.Option(None, "--start", "-S", formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"],
+                                                      help="Start time for metrics (YYYY-MM-DD or YYYY-MM-DDTHH:MM:S)."),
+        end_time: Optional[datetime] = typer.Option(None, "--end", "-E", formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"],
+                                                    help="End time for metrics (YYYY-MM-DD or YYYY-MM-DDTHH:MM:S)."),
+        limit: int = typer.Option(20, "--limit", "-l", help="Limit the number of aggregated agent run results."),
+):
+    """
+    Retrieves and displays aggregated agent run metrics from the database.
+    """
+    logger.info("Retrieving agent run metrics...")
+
+    if not _is_db_configured():
+        typer.secho("Database is not configured. Please run 'ragnetic configure' to set up a database for metrics.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    engine = _get_sync_db_engine()
+
+    try:
+        with engine.connect() as connection:
+            stmt = select(
+                chat_sessions_table.c.agent_name,
+                func.count(agent_runs.c.run_id).label("total_runs"),
+                func.avg(
+                    func.julianday(agent_runs.c.end_time) - func.julianday(agent_runs.c.start_time)
+                ).label("avg_duration_days"),  # SQLite specific for duration
+                func.sum(
+                    expression.case((agent_runs.c.status == 'completed', 1), else_=0)
+                ).label("completed_runs"),
+                func.sum(
+                    expression.case((agent_runs.c.status == 'failed', 1), else_=0)
+                ).label("failed_runs")
+            ).join(
+                chat_sessions_table, agent_runs.c.session_id == chat_sessions_table.c.id
+            )
+
+            conditions = []
+            if agent_name:
+                conditions.append(chat_sessions_table.c.agent_name == agent_name)
+            if status:
+                conditions.append(agent_runs.c.status == status)
+            if start_time:
+                conditions.append(agent_runs.c.start_time >= start_time)
+            if end_time:
+                conditions.append(agent_runs.c.end_time <= end_time)
+
+            if conditions:
+                stmt = stmt.where(*conditions)
+
+            stmt = stmt.group_by(chat_sessions_table.c.agent_name)
+            stmt = stmt.order_by(func.count(agent_runs.c.run_id).desc())
+            if limit:
+                stmt = stmt.limit(limit)
+
+            results = connection.execute(stmt).fetchall()
+
+        if not results:
+            message = "No agent run metrics found in the database."
+            if agent_name:
+                message += f" for agent: '{agent_name}'"
+            typer.secho(message, fg=typer.colors.YELLOW)
+            return
+
+        df = pd.DataFrame(results, columns=[
+            "Agent Name", "Total Runs", "Avg Duration (Days)",
+            "Completed Runs", "Failed Runs"
+        ])
+
+        df["Avg Duration (s)"] = df["Avg Duration (Days)"].fillna(0) * 86400
+        df["Avg Duration (s)"] = df["Avg Duration (s)"].map(lambda x: f"{x:.2f}")
+
+        df["Success Rate"] = df["Completed Runs"] / df["Total Runs"]
+        df["Failure Rate"] = df["Failed Runs"] / df["Total Runs"]
+
+        df = df.fillna(0)  # Handle NaN from division by zero or missing data
+
+        df["Success Rate"] = df["Success Rate"].map(lambda x: f"{x:.2%}")
+        df["Failure Rate"] = df["Failure Rate"].map(lambda x: f"{x:.2%}")
+
+        df = df[[
+            "Agent Name", "Total Runs", "Success Rate", "Failure Rate",
+            "Avg Duration (s)", "Completed Runs", "Failed Runs"
+        ]]
+
+        typer.secho("\n--- Agent Run Metrics Summary ---", bold=True, fg=typer.colors.CYAN)
+        typer.echo(df.to_string(index=False))
+        typer.secho(
+            "\nNote: Average duration calculation is based on SQL's `julianday` function, which may vary slightly across database types (e.g., PostgreSQL).",
+            fg=typer.colors.BLUE)
+
+    except Exception as e:
+        logger.error(f"An error occurred while fetching agent run metrics: {e}", exc_info=True)
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
 
 if __name__ == "__main__":
     setup_cli_logging()
