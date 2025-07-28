@@ -97,9 +97,25 @@ async def call_model(state: AgentState, config: RunnableConfig):
         retrieved_docs_str = ""
         retrieved_chunk_ids = []
         retrieved_docs = []
+
+        embedding_model_name = agent_config.embedding_model  # Get embedding model name
+
+
         t0 = time.perf_counter()
         if "retriever" in agent_config.tools:
             try:
+                # Calculate embedding tokens for the query
+                embedding_tokens = count_tokens(query, embedding_model_name)
+                logger.info(f"[call_model] Embedding query: '{query[:50]}...'")
+                logger.info(f"[call_model] Embedding model used: {embedding_model_name}")
+                logger.info(f"[call_model] Calculated embedding tokens: {embedding_tokens}")
+
+                # Calculate embedding cost using the enhanced calculate_cost function
+                embedding_cost_usd = calculate_cost(
+                    embedding_model_name=embedding_model_name,
+                    embedding_tokens=embedding_tokens
+                )
+                logger.info(f"[call_model] Calculated embedding cost: ${embedding_cost_usd:.6f}")
                 logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
                 retriever_tool = get_retriever_tool(agent_config)
                 retrieved_docs = await asyncio.to_thread(retriever_tool.invoke, {"input": query})
@@ -210,9 +226,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
         logger.info("Model invocation successful.")
 
         # --- Debugging: Log all relevant response attributes ---
-        logger.info(f"[call_model] Raw LLM response: {response}")  # Log the full response object
-        logger.info(f"[call_model] Raw LLM response metadata: {response.response_metadata}")
-        logger.info(f"[call_model] Raw LLM usage_metadata: {getattr(response, 'usage_metadata', {})}")
+        logger.debug(f"[call_model] Raw LLM response: {response}")  # Log the full response object
+        logger.debug(f"[call_model] Raw LLM response metadata: {response.response_metadata}")
+        logger.debug(f"[call_model] Raw LLM usage_metadata: {getattr(response, 'usage_metadata', {})}")
 
         prompt_tokens = 0
         completion_tokens = 0
@@ -247,8 +263,14 @@ async def call_model(state: AgentState, config: RunnableConfig):
             logger.debug(
                 f"[call_model] Estimated prompt_tokens: {prompt_tokens}, completion_tokens: {completion_tokens}")
 
-        # Calculate cost based on whatever tokens we derived
-        cost = calculate_cost(agent_config.llm_model, prompt_tokens, completion_tokens)
+        # Calculate total LLM cost based on derived tokens
+        llm_cost_usd = calculate_cost(
+            llm_model_name=agent_config.llm_model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens
+        )
+        # Sum LLM cost and embedding cost for total estimated_cost_usd
+        total_estimated_cost_usd = llm_cost_usd + embedding_cost_usd
 
         state.update({
             "messages": [response],
@@ -257,8 +279,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "total_duration_s": time.perf_counter() - start_time,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,  # Ensure total_tokens is sum of derived values
-            "estimated_cost_usd": cost,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "estimated_cost_usd": total_estimated_cost_usd,
             "retrieved_chunk_ids": retrieved_chunk_ids
         })
 
@@ -272,7 +294,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "total_tokens": prompt_tokens + completion_tokens,  # Ensure total_tokens here as well
             "retrieval_time_s": retrieval_time,
             "generation_time_s": generation_time,
-            "estimated_cost_usd": cost,
+            "estimated_cost_usd": llm_cost_usd,
+            "embedding_cost_usd": embedding_cost_usd,
             "timestamp": current_timestamp,
             "llm_model": model_name
         }
@@ -287,7 +310,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,  # Ensure total_tokens here as well
-            "estimated_cost_usd": cost,
+            "estimated_cost_usd": total_estimated_cost_usd,
+            "embedding_cost_usd": embedding_cost_usd,
+            "embedding_model_name": embedding_model_name,
             "retrieved_chunks": retrieved_chunk_ids,
             "timestamp": current_timestamp.isoformat()
         }
