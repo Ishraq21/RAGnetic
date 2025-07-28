@@ -20,7 +20,7 @@ from app.tools.arxiv_tool import get_arxiv_tool
 from app.tools.search_engine_tool import SearchTool
 from langchain_core.messages import HumanMessage, AIMessage
 from app.core.serialization import _serialize_for_db
-from app.db.dao import save_conversation_metrics
+from app.db.dao import save_conversation_metrics_sync
 from app.schemas.security import User # Import User schema
 
 logger = logging.getLogger("ragnetic")
@@ -182,7 +182,7 @@ async def query_agent(
             "estimated_cost_usd": final_state.get("estimated_cost_usd"),
             "timestamp": datetime.utcnow()
         }
-        await save_conversation_metrics(db, metrics_data)
+        await save_conversation_metrics_sync(db, metrics_data)
 
     # Finalize audit run with serialized final_state
     serialized = _serialize_for_db(final_state)

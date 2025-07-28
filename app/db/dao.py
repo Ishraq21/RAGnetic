@@ -466,12 +466,12 @@ async def get_user_by_api_key(db: AsyncSession, api_key_str: str) -> Optional[Di
     return None
 
 
-async def save_conversation_metrics(db: AsyncSession, metrics_data: dict):
-    """Saves a conversation metrics record to the database."""
+def save_conversation_metrics_sync(connection, metrics_data: dict):
+    """Saves a conversation metrics record to the database using a synchronous connection."""
     try:
-        stmt = insert(conversation_metrics_table).values(**metrics_data)
-        await db.execute(stmt)
-        await db.commit()
-        logger.info(f"Saved conversation metrics for request_id: {metrics_data['request_id']}")
+        connection.execute(conversation_metrics_table.insert().values(**metrics_data))
+        connection.commit() # Commit the transaction for this single operation
+        logger.info(f"Saved conversation metrics (sync) for request_id: {metrics_data['request_id']}")
     except Exception as e:
-        logger.error(f"Failed to save conversation metrics: {e}", exc_info=True)
+        logger.error(f"Failed to save conversation metrics (sync): {e}", exc_info=True)
+        connection.rollback() # Rollback on error
