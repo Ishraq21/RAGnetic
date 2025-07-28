@@ -1,0 +1,9 @@
+[
+  {
+    "question": "Why is the sky blue?",
+    "answer": "The sky is blue because of Rayleigh scattering.",
+    "type": "Factoid",
+    "retrieval_ground_truth_chunk_id": "07dd48d6adb0036d93ff7891448c7d53c26cb3a5286f146628d39aecd826d75c-0-94112a91",
+    "source_text": "The sky is blue because of Rayleigh scattering."
+  }
+]

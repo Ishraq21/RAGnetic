@@ -534,7 +534,7 @@ async def get_agent_steps_summary(
             stmt = stmt.where(and_(*filters))
 
         stmt = stmt.group_by(
-            chat_sessions_table.c.agent_name,  # Grouping by agent_name which can be null from outerjoin
+            chat_sessions_table.c.agent_name,
             agent_run_steps.c.node_name
         )
         stmt = stmt.order_by(func.count(agent_run_steps.c.id).desc())
@@ -575,3 +575,109 @@ async def get_agent_steps_summary(
     except Exception as e:
         logger.error(f"API: Failed to fetch agent step summary: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not retrieve agent step summary.")
+
+
+class AgentRunSummaryEntry(BaseModel):
+    agent_name: str = Field(..., description="Name of the agent.")
+    total_runs: int = Field(..., description="Total number of overall agent runs.")
+    success_rate: float = Field(..., description="Percentage of successful agent runs.")
+    failure_rate: float = Field(..., description="Percentage of failed agent runs.")
+    avg_duration_s: float = Field(..., description="Average duration of agent runs in seconds.")
+    completed_runs: int = Field(..., description="Total number of completed agent runs.")
+    failed_runs: int = Field(..., description="Total number of failed agent runs.")
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+@router.get("/agent-runs", response_model=List[AgentRunSummaryEntry])
+async def get_agent_runs_summary(
+        agent_name: Optional[str] = Query(None, description="Filter metrics by a specific agent name."),
+        status: Optional[str] = Query(None, description="Filter by run status (running, completed, failed)."),
+        start_time: Optional[datetime] = Query(None,
+                                               description="Filter metrics after this timestamp (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)."),
+        end_time: Optional[datetime] = Query(None,
+                                             description="Filter metrics before this timestamp (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)."),
+        limit: int = Query(20, ge=1, le=100, description="Limit the number of aggregated agent run results."),
+        current_user: User = Depends(PermissionChecker(["analytics:read_agent_runs"])),  # Require permission
+        db: AsyncSession = Depends(get_db),
+):
+    """
+    Retrieves aggregated agent run metrics.
+    Requires: 'analytics:read_agent_runs' permission.
+    """
+    logger.info(
+        f"API: User '{current_user.username}' fetching agent run summary with filters: {agent_name=}, {status=}, {start_time=}, {end_time=}")
+
+    try:
+        # Import necessary models locally if not already at the top level
+        from app.db.models import agent_runs, chat_sessions_table
+
+        stmt = select(
+            chat_sessions_table.c.agent_name,
+            func.count(agent_runs.c.run_id).label("total_runs"),
+            func.avg(
+                func.julianday(agent_runs.c.end_time) - func.julianday(agent_runs.c.start_time)
+            ).label("avg_duration_days"),  # SQLite specific for duration
+            func.sum(
+                expression.case((agent_runs.c.status == 'completed', 1), else_=0)
+            ).label("completed_runs"),
+            func.sum(
+                expression.case((agent_runs.c.status == 'failed', 1), else_=0)
+            ).label("failed_runs")
+        ).outerjoin(  # Use outerjoin to safely get agent_name, as session_id can be null for agent_runs
+            chat_sessions_table, agent_runs.c.session_id == chat_sessions_table.c.id
+        )
+
+        filters = []
+        if agent_name:
+            filters.append(chat_sessions_table.c.agent_name == agent_name)
+        if status:
+            filters.append(agent_runs.c.status == status)
+        if start_time:
+            filters.append(agent_runs.c.start_time >= start_time)
+        if end_time:
+            filters.append(agent_runs.c.end_time <= end_time)
+
+        if filters:
+            stmt = stmt.where(and_(*filters))
+
+        stmt = stmt.group_by(chat_sessions_table.c.agent_name)
+        stmt = stmt.order_by(func.count(agent_runs.c.run_id).desc())
+        stmt = stmt.limit(limit)
+
+        result = await db.execute(stmt)
+        rows = result.fetchall()
+
+        if not rows:
+            return []
+
+        response_data = []
+        for row in rows:
+            total_runs = row.total_runs if row.total_runs is not None else 0
+            completed_runs = row.completed_runs if row.completed_runs is not None else 0
+            failed_runs = row.failed_runs if row.failed_runs is not None else 0
+
+            success_rate = completed_runs / total_runs if total_runs > 0 else 0.0
+            failure_rate = failed_runs / total_runs if total_runs > 0 else 0.0
+
+            avg_duration_s = (row.avg_duration_days * 86400) if row.avg_duration_days is not None else 0.0
+
+            response_data.append(AgentRunSummaryEntry(
+                agent_name=row.agent_name if row.agent_name is not None else "N/A",  # Handle None agent_name
+                total_runs=total_runs,
+                success_rate=success_rate,
+                failure_rate=failure_rate,
+                avg_duration_s=avg_duration_s,
+                completed_runs=completed_runs,
+                failed_runs=failed_runs
+            ))
+
+        return response_data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Failed to fetch agent run summary: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not retrieve agent run summary.")
