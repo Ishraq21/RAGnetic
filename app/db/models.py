@@ -134,7 +134,7 @@ agent_tools_table = Table(
 conversation_metrics_table = Table(
     "conversation_metrics", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("session_id", Integer, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("session_id", Integer, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=True, index=True),
     Column("request_id", String(64), nullable=False, index=True),
     Column("prompt_tokens", Integer, nullable=False, default=0),
     Column("completion_tokens", Integer, nullable=False, default=0),

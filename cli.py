@@ -36,6 +36,11 @@ from app.agents.config_manager import load_agent_config, load_agent_from_yaml_fi
 
 # IMPORTS for connection checks
 from sqlalchemy import create_engine, text, select
+from sqlalchemy import select, func
+import pandas as pd
+from datetime import datetime
+from app.db.models import conversation_metrics_table, chat_sessions_table
+
 from sqlalchemy.engine.url import make_url
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -302,6 +307,9 @@ app.add_typer(user_app)
 
 role_app = typer.Typer(name="role", help="Manage user roles and permissions.")
 app.add_typer(role_app)
+
+analytics_app = typer.Typer(name="analytics", help="Commands for analyzing system performance, costs, and quality.")
+app.add_typer(analytics_app)
 
 
 @run_app.command(name="workflow", help="Triggers a workflow to run via the API.")
@@ -1842,7 +1850,6 @@ def list_users():
         raise typer.Exit(code=1)
 
 
-# cli.py (locate @user_app.command("update") and replace it)
 
 @user_app.command("update", help="Update an existing user account.")
 def update_user(
@@ -2258,6 +2265,118 @@ def whoami():
         typer.secho(f"Error fetching user info: {e}", fg=typer.colors.RED)
         if response is not None and response.text:
             typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+
+@analytics_app.command(name="benchmarks", help="Displays summaries of past benchmark runs.")
+def analytics_benchmarks_command(
+    agent_name: Optional[str] = typer.Option(None, "--agent", "-a", help="Filter benchmarks by a specific agent name."),
+    show_detailed: bool = typer.Option(False, "--detailed", "-d", help="Show detailed results for each question in the benchmark."),
+    latest: bool = typer.Option(False, "--latest", "-l", help="Show only the latest benchmark run for the specified agent."),
+):
+    """
+    Retrieves and displays summaries of past benchmark runs.
+    """
+    logger.info("Functionality for 'ragnetic analytics benchmarks' will be implemented here.")
+    typer.secho("This command will summarize key quality metrics from benchmark results.", fg=typer.colors.BLUE)
+
+
+@analytics_app.command(name="usage", help="Displays aggregated LLM usage and cost metrics.")
+def analytics_usage_command(
+        agent_name: Optional[str] = typer.Option(None, "--agent", "-a",
+                                                 help="Filter metrics by a specific agent name."),
+        start_time: Optional[datetime] = typer.Option(None, "--start", "-s", formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"],
+                                                      help="Start time for metrics (YYYY-MM-DD or YYYY-MM-DDTHH:MM:S)."),
+        end_time: Optional[datetime] = typer.Option(None, "--end", "-e", formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"],
+                                                    help="End time for metrics (YYYY-MM-DD or YYYY-MM-DDTHH:MM:S)."),
+        limit: int = typer.Option(50, "--limit", "-n", help="Limit the number of detailed metric entries."),
+):
+    """
+    Retrieves and displays aggregated LLM usage and cost metrics from the database.
+    """
+    logger.info("Retrieving LLM usage and cost metrics...")
+
+    if not _is_db_configured():
+        typer.secho("Database is not configured. Please run 'ragnetic configure' to set up a database for metrics.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    engine = _get_sync_db_engine()
+
+    try:
+        with engine.connect() as connection:
+            # Join conversation_metrics_table with chat_sessions_table to get agent_name
+            # Changed to outerjoin to include metrics records even if session_id is NULL
+            stmt = select(
+                func.sum(conversation_metrics_table.c.prompt_tokens).label("total_prompt_tokens"),
+                func.sum(conversation_metrics_table.c.completion_tokens).label("total_completion_tokens"),
+                func.sum(conversation_metrics_table.c.total_tokens).label("total_tokens"),
+                func.sum(conversation_metrics_table.c.estimated_cost_usd).label("total_estimated_cost_usd"),
+                func.avg(conversation_metrics_table.c.retrieval_time_s).label("avg_retrieval_time_s"),
+                func.avg(conversation_metrics_table.c.generation_time_s).label("avg_generation_time_s"),
+                func.count(conversation_metrics_table.c.request_id).label("total_requests"),
+                chat_sessions_table.c.agent_name  # Include agent_name in select
+            ).outerjoin(  # Changed from .join to .outerjoin
+                chat_sessions_table, conversation_metrics_table.c.session_id == chat_sessions_table.c.id
+            )
+
+            conditions = []
+            if agent_name:
+                # Filter for specific agent_name, including where agent_name from chat_sessions is NULL
+                # If agent_name is provided, we filter where it matches OR if it's NULL (if such a case is intended to be included)
+                # For typical usage, filtering by an agent name means an actual agent name, not NULLs.
+                # So, filtering for chat_sessions_table.c.agent_name == agent_name
+                conditions.append(chat_sessions_table.c.agent_name == agent_name)
+            if start_time:
+                conditions.append(conversation_metrics_table.c.timestamp >= start_time)
+            if end_time:
+                conditions.append(conversation_metrics_table.c.timestamp <= end_time)
+
+            if conditions:
+                stmt = stmt.where(*conditions)
+
+            # Group by agent_name, which can now be NULL due to outerjoin
+            stmt = stmt.group_by(chat_sessions_table.c.agent_name)
+
+            # Order by total cost descending
+            stmt = stmt.order_by(func.sum(conversation_metrics_table.c.estimated_cost_usd).desc())
+
+            if limit:
+                stmt = stmt.limit(limit)
+
+            results = connection.execute(stmt).fetchall()
+
+        if not results:
+            message = "No LLM usage metrics found in the database."
+            if agent_name:
+                message = f"No LLM usage metrics found for agent: '{agent_name}'. (Note: This might exclude metrics not tied to a specific chat session.)"
+            typer.secho(message, fg=typer.colors.YELLOW)
+            return
+
+        # Prepare data for pandas DataFrame
+        df = pd.DataFrame(results, columns=[
+            "Total Prompt Tokens", "Total Completion Tokens", "Total Tokens",
+            "Total Estimated Cost (USD)", "Avg Retrieval Time (s)", "Avg Generation Time (s)",
+            "Total Requests", "Agent Name"
+        ])
+
+        # Handle None in 'Agent Name' column for display for rows not linked to a chat session
+        df['Agent Name'] = df['Agent Name'].fillna('N/A (No Chat Session)')
+
+        # Format numerical columns for better readability
+        df["Total Estimated Cost (USD)"] = df["Total Estimated Cost (USD)"].map(lambda x: f"${x:,.6f}")
+        df["Avg Retrieval Time (s)"] = df["Avg Retrieval Time (s)"].map(lambda x: f"{x:.4f}")
+        df["Avg Generation Time (s)"] = df["Avg Generation Time (s)"].map(lambda x: f"{x:.4f}")
+        df["Total Requests"] = df["Total Requests"].astype(int)
+
+        typer.secho("\n--- LLM Usage & Cost Metrics Summary ---", bold=True, fg=typer.colors.CYAN)
+        typer.echo(df.to_string(index=False))
+        typer.secho("\nNote: Costs are estimated based on configured model pricing.", fg=typer.colors.BLUE)
+
+    except Exception as e:
+        logger.error(f"An error occurred while fetching LLM usage metrics: {e}", exc_info=True)
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
 

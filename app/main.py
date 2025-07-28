@@ -396,6 +396,8 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
         thread_id_from_frontend = sanitize_for_path(payload.get("thread_id"))
 
         session_id, session_topic, returned_thread_id = await _get_or_create_session(db, thread_id_from_frontend, agent_name, user_db_id)
+        logger.debug(
+            f"[main.py:websocket_chat] Session ID obtained: {session_id}, User DB ID: {user_db_id}, Agent Name: {agent_name}")
 
         canonical_thread_id = returned_thread_id
         channel = f"chat:{canonical_thread_id}"
@@ -462,13 +464,17 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
 
             final_state, ai_response_content = await handle_query_streaming(
                 initial_state,
-                {"configurable": {"thread_id": canonical_thread_id}},
+                {"configurable": {
+                    "thread_id": canonical_thread_id,
+                    "session_id": session_id,
+                    "user_id": user_db_id,
+                    "agent_name": agent_name
+                }},
                 langgraph_agent,
                 canonical_thread_id,
                 run_db_id,
                 db
             )
-
             done_message = {
                 "done": True,
                 "error": final_state.get("error", False),
@@ -478,7 +484,8 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
                 "thread_id": canonical_thread_id,
                 "topic_name": session_topic
             }
-            await manager.broadcast(channel, json.dumps(done_message))
+            await manager.broadcast(channel, json.dumps({"token": final_state.get("errorMessage", ""), **done_message})) # Pass final message for error display if any
+
 
             if ai_response_content and not (final_state and final_state.get("error")):
                 await _save_message_and_update_session(db, session_id, 'ai', ai_response_content)

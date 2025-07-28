@@ -5,6 +5,8 @@ from operator import add
 import time
 import uuid
 import json
+import asyncio
+from datetime import datetime
 
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
@@ -25,11 +27,12 @@ from ollama import ResponseError
 from app.tools.retriever_tool import get_retriever_tool
 from app.core.config import get_api_key, get_llm_model
 from app.core.cost_calculator import calculate_cost
+from app.db.dao import save_conversation_metrics_sync
+from app.db import get_sync_db_engine
 
 logger = logging.getLogger(__name__)
 logger = logging.getLogger("ragnetic")
 metrics_logger = logging.getLogger("ragnetic.metrics")
-
 
 class AgentState(TypedDict):
     """
@@ -50,34 +53,47 @@ class AgentState(TypedDict):
     total_tokens: int
     estimated_cost_usd: float
     retrieved_chunk_ids: List[str]
+    # session_id removed from TypedDict as it's passed via config directly
 
 
-def call_model(state: AgentState, config: RunnableConfig):
+async def call_model(state: AgentState, config: RunnableConfig):
     """
     Core reasoning step of the agent. Now also responsible for calculating
-    and populating all performance and cost metrics into the state.
+    and populating all performance and cost metrics into the state,
+    and saving them to the database and logging to file.
     """
+    sync_engine_connection = None
     try:
-        # Start total timer and get initial state
         start_time = time.perf_counter()
         agent_config = state['agent_config']
         tools = config['configurable'].get('tools', [])
         messages = state['messages']
+
+        # Extract session_id and other configurable items directly from config
+        session_id = config['configurable'].get("session_id")
+        request_id = config['configurable'].get("request_id") or state["request_id"]
+        # In a chat context, the agent name from config might be more reliable
+        agent_name_from_config = config['configurable'].get("agent_name", agent_config.name)
+
+        logger.debug(f"[call_model] Session ID from config: {session_id}")
+        logger.debug(f"[call_model] Request ID from config/state: {request_id}")
+        logger.debug(f"[call_model] Agent Name from config/state: {agent_name_from_config}")
+
+        if session_id is None:  # Add a warning if session_id is still None
+            logger.warning(f"[call_model] Session ID is None for request {request_id}. Metrics will be unlinked.")
+
 
         if not messages:
             logger.error("State has no messages. Cannot proceed.")
             return {"messages": [AIMessage(
                 content="I'm sorry, but there was an error processing your request as the message history is empty.")]}
 
-        # The last message is the current user query
         query = messages[-1].content
-        # All messages except the last one are history
         history = messages[:-1]
 
         model_name = agent_config.llm_model
-        logger.info(f"Processing query for agent '{agent_config.name}' using model '{model_name}'.")
+        logger.info(f"Processing query for agent '{agent_name_from_config}' using model '{model_name}'.")
 
-        # RAG Retrieval and Timing
         retrieved_docs_str = ""
         retrieved_chunk_ids = []
         retrieved_docs = []
@@ -86,13 +102,12 @@ def call_model(state: AgentState, config: RunnableConfig):
             try:
                 logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
                 retriever_tool = get_retriever_tool(agent_config)
-                retrieved_docs = retriever_tool.invoke({"input": query})
+                retrieved_docs = await asyncio.to_thread(retriever_tool.invoke, {"input": query})
                 if isinstance(retrieved_docs, str):
                     retrieved_docs_str = retrieved_docs
                     logger.error(f"Retriever tool returned an error string: {retrieved_docs}")
                 elif retrieved_docs:
                     retrieved_docs_str = "\n\n".join([doc.page_content for doc in retrieved_docs])
-                    # Correctly capture the list of chunk IDs if they exist
                     retrieved_chunk_ids = [doc.id for doc in retrieved_docs if hasattr(doc, 'id')]
                     logger.info(f"Successfully retrieved {len(retrieved_docs)} documents.")
                 else:
@@ -152,10 +167,8 @@ def call_model(state: AgentState, config: RunnableConfig):
                                    ---
                                    Based on the sources and your persona, please answer the user's query.
                                 """
-            # The system prompt should not be part of the history, but should be a separate message
             prompt_with_history = [SystemMessage(content=system_prompt_content)] + messages
 
-        # Model Initialization and Invocation
         model_kwargs = agent_config.model_params.model_dump(exclude_unset=True) if agent_config.model_params else {}
         if model_name.startswith("ollama/"):
             ollama_model_name = model_name.split("/", 1)[1]
@@ -181,24 +194,26 @@ def call_model(state: AgentState, config: RunnableConfig):
         logger.info("Invoking the language model...")
         t1 = time.perf_counter()
         try:
-            response = model_with_tools.invoke(prompt_with_history)
+            response = await model_with_tools.ainvoke(prompt_with_history)
         except ResponseError as e:
             if "does not support tools" in str(e):
                 logger.warning(f"Model '{model_name}' does not support tools. Retrying without tools.")
-                response = model.invoke(prompt_with_history)
+                response = await model.ainvoke(prompt_with_history)
             else:
                 raise e
         generation_time = time.perf_counter() - t1
         logger.info("Model invocation successful.")
 
-        # --- Metric Calculation and State Update ---
+        logger.info(f"[call_model] Raw LLM response metadata: {response.response_metadata}")  # ADD THIS LINE
+        logger.info(
+            f"[call_model] Extracted token_usage: {response.response_metadata.get('token_usage', {})}")  # ADD THIS LINE
+
         token_usage = response.response_metadata.get("token_usage", {})
         prompt_tokens = token_usage.get("prompt_tokens", 0)
         completion_tokens = token_usage.get("completion_tokens", 0)
         total_tokens = prompt_tokens + completion_tokens
         cost = calculate_cost(agent_config.llm_model, prompt_tokens, completion_tokens)
 
-        # This will update the original state dictionary with the new values
         state.update({
             "messages": [response],
             "retrieval_time_s": retrieval_time,
@@ -211,22 +226,48 @@ def call_model(state: AgentState, config: RunnableConfig):
             "retrieved_chunk_ids": retrieved_chunk_ids
         })
 
-        metrics_data = {
-            "request_id": state["request_id"],
-            "agent_name": agent_config.name,
+        current_timestamp = datetime.utcnow()
+
+        # 1. Data for Database Insertion (db_metrics_data)
+        # agent_name is NOT a column in conversation_metrics_table, so it's excluded here.
+        # session_id is now retrieved from config['configurable']
+        db_metrics_data = {
+            "request_id": request_id, # Using request_id from config or state
+            "session_id": session_id, # Using session_id from config
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "retrieval_time_s": retrieval_time,
+            "generation_time_s": generation_time,
+            "estimated_cost_usd": cost,
+            "timestamp": current_timestamp
+        }
+
+        # 2. Data for JSON File Logging (log_metrics_data)
+        # Includes agent_name and converts timestamp to ISO format for JSON serialization
+        log_metrics_data = {
+            "request_id": request_id,
+            "agent_name": agent_name_from_config, # Using agent_name from config for log
             "llm_model": agent_config.llm_model,
             "retrieval_s": retrieval_time,
-            "generation_s": state["generation_time_s"],
+            "generation_s": generation_time,
             "total_duration_s": state["total_duration_s"],
-            "prompt_tokens": state["prompt_tokens"],
-            "completion_tokens": state["completion_tokens"],
-            "total_tokens": state["total_tokens"],
-            "estimated_cost_usd": state["estimated_cost_usd"],
-            "retrieved_chunks": state["retrieved_chunk_ids"],
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": cost,
+            "retrieved_chunks": retrieved_chunk_ids,
+            "timestamp": current_timestamp.isoformat()
         }
+
+        sync_engine = get_sync_db_engine()
+        with sync_engine.connect() as sync_engine_connection:
+            await asyncio.to_thread(save_conversation_metrics_sync, sync_engine_connection, db_metrics_data)
+
+        # Original logging to file
         metrics_logger.info(
             "Agent request metrics",
-            extra={'extra_data': metrics_data}
+            extra={'extra_data': log_metrics_data}
         )
 
         return state
@@ -235,6 +276,9 @@ def call_model(state: AgentState, config: RunnableConfig):
         error_message = AIMessage(content=f"I'm sorry, but I encountered an unexpected error. Error: {e}")
         state.update({"messages": [error_message]})
         return state
+    finally:
+        if sync_engine_connection:
+            sync_engine_connection.close()
 
 
 def should_continue(state: AgentState) -> str:
