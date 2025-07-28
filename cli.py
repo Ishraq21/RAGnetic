@@ -2311,16 +2311,18 @@ def analytics_usage_command(
                 func.sum(conversation_metrics_table.c.prompt_tokens).label("total_prompt_tokens"),
                 func.sum(conversation_metrics_table.c.completion_tokens).label("total_completion_tokens"),
                 func.sum(conversation_metrics_table.c.total_tokens).label("total_tokens"),
-                func.sum(conversation_metrics_table.c.estimated_cost_usd).label("total_estimated_cost_usd"),
+                func.sum(conversation_metrics_table.c.estimated_cost_usd).label("total_llm_cost_usd"),
+                # Renamed for clarity
+                func.sum(conversation_metrics_table.c.embedding_cost_usd).label("total_embedding_cost_usd"),
                 func.avg(conversation_metrics_table.c.retrieval_time_s).label("avg_retrieval_time_s"),
                 func.avg(conversation_metrics_table.c.generation_time_s).label("avg_generation_time_s"),
                 func.count(conversation_metrics_table.c.request_id).label("total_requests"),
-                chat_sessions_table.c.agent_name,  # Agent Name
-                conversation_metrics_table.c.llm_model,  # LLM Model Name
+                chat_sessions_table.c.agent_name,
+                conversation_metrics_table.c.llm_model,
                 users_table.c.user_id  # User ID (username)
-            ).outerjoin(  # Left Outer Join to include metrics without sessions
+            ).outerjoin(
                 chat_sessions_table, conversation_metrics_table.c.session_id == chat_sessions_table.c.id
-            ).outerjoin(  # Left Outer Join to include sessions without users (less common but safe)
+            ).outerjoin(
                 users_table, chat_sessions_table.c.user_id == users_table.c.id
             )
 
@@ -2342,7 +2344,7 @@ def analytics_usage_command(
                 users_table.c.user_id
             )
 
-            # Order by total cost descending
+            # Order by total LLM cost descending
             stmt = stmt.order_by(func.sum(conversation_metrics_table.c.estimated_cost_usd).desc())
 
             if limit:
@@ -2360,9 +2362,21 @@ def analytics_usage_command(
         # Prepare data for pandas DataFrame with new columns
         df = pd.DataFrame(results, columns=[
             "Total Prompt Tokens", "Total Completion Tokens", "Total Tokens",
-            "Total Estimated Cost (USD)", "Avg Retrieval Time (s)", "Avg Generation Time (s)",
+            "Total LLM Cost (USD)", "Total Embedding Cost (USD)",
+            "Avg Retrieval Time (s)", "Avg Generation Time (s)",
             "Total Requests", "Agent Name", "LLM Model", "User ID"
         ])
+
+        # Calculate Total Estimated Cost (sum of LLM and Embedding costs)
+        df["Total Estimated Cost (USD)"] = df["Total LLM Cost (USD)"] + df["Total Embedding Cost (USD)"]
+
+        # Reorder columns for better display
+        df = df[[
+            "Total Prompt Tokens", "Total Completion Tokens", "Total Tokens",
+            "Total LLM Cost (USD)", "Total Embedding Cost (USD)", "Total Estimated Cost (USD)",
+            "Avg Retrieval Time (s)", "Avg Generation Time (s)",
+            "Total Requests", "Agent Name", "LLM Model", "User ID"
+        ]]
 
         # Handle None in 'Agent Name', 'LLM Model', and 'User ID' columns for display
         df['Agent Name'] = df['Agent Name'].fillna('N/A')
@@ -2370,6 +2384,8 @@ def analytics_usage_command(
         df['User ID'] = df['User ID'].fillna('N/A (No User)')
 
         # Format numerical columns for better readability
+        df["Total LLM Cost (USD)"] = df["Total LLM Cost (USD)"].map(lambda x: f"${x:,.6f}")
+        df["Total Embedding Cost (USD)"] = df["Total Embedding Cost (USD)"].fillna(0.0).map(lambda x: f"${x:,.6f}")
         df["Total Estimated Cost (USD)"] = df["Total Estimated Cost (USD)"].map(lambda x: f"${x:,.6f}")
         df["Avg Retrieval Time (s)"] = df["Avg Retrieval Time (s)"].map(lambda x: f"{x:.4f}")
         df["Avg Generation Time (s)"] = df["Avg Generation Time (s)"].map(lambda x: f"{x:.4f}")
