@@ -26,7 +26,7 @@ from ollama import ResponseError
 # Local application imports
 from app.tools.retriever_tool import get_retriever_tool
 from app.core.config import get_api_key, get_llm_model
-from app.core.cost_calculator import calculate_cost
+from app.core.cost_calculator import calculate_cost, count_tokens
 from app.db.dao import save_conversation_metrics_sync
 from app.db import get_sync_db_engine
 
@@ -186,9 +186,14 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 logger.info("Initializing ChatGoogleGenerativeAI directly.")
                 model = ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, **model_kwargs)
             else:
-                logger.info("Initializing model with streaming=True.")
-                model = init_chat_model(model_name, model_provider=provider, streaming=True, api_key=api_key,
-                                        **model_kwargs)
+                if provider == "openai" and model_kwargs.get("streaming", True):
+                    # Ensure stream_usage is passed correctly to init_chat_model for OpenAI streaming
+                    openai_model_kwargs = model_kwargs.copy()
+                    openai_model_kwargs["stream_usage"] = True
+                    model = init_chat_model(model_name, model_provider=provider, streaming=True, api_key=api_key, **openai_model_kwargs)
+                else:
+                    model = init_chat_model(model_name, model_provider=provider, streaming=True, api_key=api_key, **model_kwargs)
+
 
         model_with_tools = model.bind_tools(tools)
         logger.info("Invoking the language model...")
@@ -204,14 +209,45 @@ async def call_model(state: AgentState, config: RunnableConfig):
         generation_time = time.perf_counter() - t1
         logger.info("Model invocation successful.")
 
-        logger.info(f"[call_model] Raw LLM response metadata: {response.response_metadata}")  # ADD THIS LINE
-        logger.info(
-            f"[call_model] Extracted token_usage: {response.response_metadata.get('token_usage', {})}")  # ADD THIS LINE
+        # --- Debugging: Log all relevant response attributes ---
+        logger.info(f"[call_model] Raw LLM response: {response}")  # Log the full response object
+        logger.info(f"[call_model] Raw LLM response metadata: {response.response_metadata}")
+        logger.info(f"[call_model] Raw LLM usage_metadata: {getattr(response, 'usage_metadata', {})}")
 
-        token_usage = response.response_metadata.get("token_usage", {})
-        prompt_tokens = token_usage.get("prompt_tokens", 0)
-        completion_tokens = token_usage.get("completion_tokens", 0)
-        total_tokens = prompt_tokens + completion_tokens
+        prompt_tokens = 0
+        completion_tokens = 0
+
+        # Prioritize usage_metadata from AIMessage object (LangChain standard)
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            prompt_tokens = response.usage_metadata.get("input_tokens", 0)
+            completion_tokens = response.usage_metadata.get("output_tokens", 0)
+            logger.debug(
+                f"[call_model] Retrieved tokens from usage_metadata: input={prompt_tokens}, output={completion_tokens}")
+
+        # Fallback to response_metadata.token_usage (older LangChain or non-standard)
+        if not prompt_tokens and not completion_tokens:
+            token_usage_from_metadata = response.response_metadata.get("token_usage", {})
+            if token_usage_from_metadata:
+                prompt_tokens = token_usage_from_metadata.get("prompt_tokens", 0)
+                completion_tokens = token_usage_from_metadata.get("completion_tokens", 0)
+                logger.debug(
+                    f"[call_model] Retrieved tokens from response_metadata.token_usage: input={prompt_tokens}, output={completion_tokens}")
+
+        # If still no tokens, use estimation (last resort)
+        if not prompt_tokens and not completion_tokens:
+            logger.warning("[call_model] No explicit token usage found in metadata. Estimating tokens using fallback.")
+
+            prompt_text_for_estimation = ""
+            for msg in prompt_with_history:
+                if msg.content:
+                    prompt_text_for_estimation += msg.content + "\n"
+
+            prompt_tokens = count_tokens(prompt_text_for_estimation, model_name)
+            completion_tokens = count_tokens(response.content, model_name)
+            logger.debug(
+                f"[call_model] Estimated prompt_tokens: {prompt_tokens}, completion_tokens: {completion_tokens}")
+
+        # Calculate cost based on whatever tokens we derived
         cost = calculate_cost(agent_config.llm_model, prompt_tokens, completion_tokens)
 
         state.update({
@@ -221,40 +257,35 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "total_duration_s": time.perf_counter() - start_time,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,  # Ensure total_tokens is sum of derived values
             "estimated_cost_usd": cost,
             "retrieved_chunk_ids": retrieved_chunk_ids
         })
 
         current_timestamp = datetime.utcnow()
 
-        # 1. Data for Database Insertion (db_metrics_data)
-        # agent_name is NOT a column in conversation_metrics_table, so it's excluded here.
-        # session_id is now retrieved from config['configurable']
         db_metrics_data = {
-            "request_id": request_id, # Using request_id from config or state
-            "session_id": session_id, # Using session_id from config
+            "request_id": request_id,
+            "session_id": session_id,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,  # Ensure total_tokens here as well
             "retrieval_time_s": retrieval_time,
             "generation_time_s": generation_time,
             "estimated_cost_usd": cost,
             "timestamp": current_timestamp
         }
 
-        # 2. Data for JSON File Logging (log_metrics_data)
-        # Includes agent_name and converts timestamp to ISO format for JSON serialization
         log_metrics_data = {
             "request_id": request_id,
-            "agent_name": agent_name_from_config, # Using agent_name from config for log
+            "agent_name": agent_name_from_config,
             "llm_model": agent_config.llm_model,
             "retrieval_s": retrieval_time,
             "generation_s": generation_time,
             "total_duration_s": state["total_duration_s"],
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,  # Ensure total_tokens here as well
             "estimated_cost_usd": cost,
             "retrieved_chunks": retrieved_chunk_ids,
             "timestamp": current_timestamp.isoformat()
@@ -264,7 +295,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
         with sync_engine.connect() as sync_engine_connection:
             await asyncio.to_thread(save_conversation_metrics_sync, sync_engine_connection, db_metrics_data)
 
-        # Original logging to file
         metrics_logger.info(
             "Agent request metrics",
             extra={'extra_data': log_metrics_data}
@@ -279,7 +309,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
     finally:
         if sync_engine_connection:
             sync_engine_connection.close()
-
 
 def should_continue(state: AgentState) -> str:
     """Routes to the tool node if the model requests it, otherwise ends."""

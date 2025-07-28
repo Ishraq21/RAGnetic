@@ -51,6 +51,7 @@ from app.api.security import router as security_api_router
 # Agents & Pipelines
 from app.agents.agent_graph import get_agent_workflow, AgentState
 from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.callbacks import UsageMetadataCallbackHandler
 from app.core.structured_logging import get_logging_config, DatabaseLogHandler, ragnetic_logs_table
 
 # Tools
@@ -462,19 +463,27 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
 
             initial_state: AgentState = {"messages": history, "request_id": request_id, "agent_config": agent_config}
 
-            final_state, ai_response_content = await handle_query_streaming(
-                initial_state,
-                {"configurable": {
+            token_callback = UsageMetadataCallbackHandler()
+
+            # handle_query_streaming passes this config directly to langgraph_agent.astream_events
+            run_config = {
+                "configurable": {
                     "thread_id": canonical_thread_id,
                     "session_id": session_id,
                     "user_id": user_db_id,
-                    "agent_name": agent_name
-                }},
+                    "agent_name": agent_name,
+                    "callbacks": [token_callback] # NEW: Pass the callback handler here
+                }
+            }
+            final_state, ai_response_content = await handle_query_streaming(
+                initial_state,
+                run_config,
                 langgraph_agent,
                 canonical_thread_id,
                 run_db_id,
                 db
             )
+
             done_message = {
                 "done": True,
                 "error": final_state.get("error", False),
@@ -484,7 +493,7 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
                 "thread_id": canonical_thread_id,
                 "topic_name": session_topic
             }
-            await manager.broadcast(channel, json.dumps({"token": final_state.get("errorMessage", ""), **done_message})) # Pass final message for error display if any
+            await manager.broadcast(channel, json.dumps({"token": final_state.get("errorMessage", ""), **done_message}))
 
 
             if ai_response_content and not (final_state and final_state.get("error")):
