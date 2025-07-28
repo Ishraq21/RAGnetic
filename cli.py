@@ -31,8 +31,6 @@ from langchain_pinecone import Pinecone as PineconeLangChain
 from langchain_qdrant import Qdrant
 from pinecone import Pinecone as PineconeClient
 # IMPORTS for connection checks
-from sqlalchemy import create_engine, text
-from sqlalchemy import select, func
 from sqlalchemy import create_engine, text, select, func, case
 from sqlalchemy.sql import expression
 
@@ -293,58 +291,7 @@ analytics_app = typer.Typer(name="analytics", help="Commands for analyzing syste
 app.add_typer(analytics_app)
 
 
-@run_app.command(name="workflow", help="Triggers a workflow to run via the API.")
-def run_workflow_cli(
-        workflow_name: str = typer.Argument(..., help="The name of the workflow to run."),
-        initial_input_json: Optional[str] = typer.Option(
-            None, "--input", "-i", help="Initial JSON input for the workflow."
-        ),
-):
-    """Triggers a workflow run by calling the local API endpoint."""
-    # Read server host and port from config file
-    config = configparser.ConfigParser()
-    config.read(_CONFIG_FILE)
-    host = config.get('SERVER', 'host', fallback='127.0.0.1')
-    port = config.get('SERVER', 'port', fallback='8000')
 
-    url = f"http://{host}:{port}/api/v1/workflows/{workflow_name}/trigger"
-    # Get the server API key to authenticate CLI calls
-    server_api_keys = get_server_api_keys()
-    if not server_api_keys:
-        typer.secho("Error: No server API key configured. Please run 'ragnetic set-server-key'.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    api_key = server_api_keys[0]  # Use the first configured key
-    headers = {"Content-Type": "application/json", "x-api-key": api_key}
-
-    initial_input = {}
-    if initial_input_json:
-        try:
-            initial_input = json.loads(initial_input_json)
-        except json.JSONDecodeError:
-            typer.secho("Error: Invalid JSON input.", fg=typer.colors.RED)
-            raise typer.Exit(code=1)
-    response = None  # Initialize response
-    try:
-        typer.secho(f"Attempting to trigger workflow '{workflow_name}' via API...", fg=typer.colors.CYAN)
-        response = requests.post(url, headers=headers, json=initial_input, timeout=10)
-        response.raise_for_status()
-
-        # Check for accepted status
-        if response.status_code == 202:
-            typer.secho(f"Successfully triggered workflow '{workflow_name}'.", fg=typer.colors.GREEN)
-            typer.secho(f"API response: {response.json()}", fg=typer.colors.BRIGHT_WHITE)
-        else:
-            typer.secho(f"Workflow trigger failed with status code {response.status_code}.", fg=typer.colors.RED)
-            typer.echo(f"Response: {response.text}")
-            raise typer.Exit(code=1)
-
-    except requests.exceptions.RequestException as e:
-        typer.secho(f"Error: Could not connect to the RAGnetic server at {url}", fg=typer.colors.RED)
-        typer.echo(f"Please ensure the server is running with 'ragnetic start-server'.")
-        typer.echo(f"Detailed error: {e}")
-        if response is not None and response.text:
-            typer.echo(f"API Response: {response.text}")
-        raise typer.Exit(code=1)
 
 MODEL_PROVIDERS = {
     "OpenAI": "OPENAI_API_KEY",
@@ -1341,12 +1288,7 @@ def benchmark_command(
         raise typer.Exit(code=1)
 
 
-audit_app = typer.Typer(name="audit", help="Commands for inspecting agent audit trails.")
-app.add_typer(audit_app)
-
-
-
-@audit_app.command("inspect", help="Inspect a specific agent run and its steps.")
+@app.command("inspect-run", help="Inspect a specific agent run and its steps.")
 def inspect_run(
         run_id: str = typer.Argument(..., help="The unique ID of the run to inspect."),
         details: bool = typer.Option(False, "--details", "-d",
@@ -1421,7 +1363,7 @@ def inspect_run(
         raise typer.Exit(code=1)
 
 
-@audit_app.command("runs", help="Lists recent agent runs.")
+@app.command("list-runs", help="Lists recent agent runs.")
 def list_runs(
         agent_name: Optional[str] = typer.Option(None, "--agent", "-a", help="Filter runs by a specific agent name."),
         limit: int = typer.Option(20, "--limit", "-n", help="Number of recent runs to display."),
@@ -1513,7 +1455,7 @@ def list_runs(
         raise typer.Exit(code=1)
 
 
-@audit_app.command("list-workflows", help="Lists recent workflow runs.")
+@app.command("list-workflows", help="Lists recent workflow runs.")
 def list_workflow_runs(
         limit: int = typer.Option(20, "--limit", "-n", help="Number of recent workflow runs to display."),
 ):
@@ -1576,7 +1518,7 @@ def list_workflow_runs(
         raise typer.Exit(code=1)
 
 
-@audit_app.command("inspect-workflow", help="Inspect a specific workflow run and its I/O.")
+@app.command("inspect-workflow", help="Inspect a specific workflow run and its I/O.")
 def inspect_workflow_run(
         run_id: str = typer.Argument(..., help="The unique ID of the workflow run to inspect."),
 ):
@@ -1638,6 +1580,59 @@ def inspect_workflow_run(
 
     except Exception as e:
         typer.secho(f"An error occurred while inspecting the workflow run: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+@app.command(name="trigger-workflow", help="Triggers a workflow to run via the API.")
+def run_workflow_cli(
+        workflow_name: str = typer.Argument(..., help="The name of the workflow to run."),
+        initial_input_json: Optional[str] = typer.Option(
+            None, "--input", "-i", help="Initial JSON input for the workflow."
+        ),
+):
+    """Triggers a workflow run by calling the local API endpoint."""
+    # Read server host and port from config file
+    config = configparser.ConfigParser()
+    config.read(_CONFIG_FILE)
+    host = config.get('SERVER', 'host', fallback='127.0.0.1')
+    port = config.get('SERVER', 'port', fallback='8000')
+
+    url = f"http://{host}:{port}/api/v1/workflows/{workflow_name}/trigger"
+    # Get the server API key to authenticate CLI calls
+    server_api_keys = get_server_api_keys()
+    if not server_api_keys:
+        typer.secho("Error: No server API key configured. Please run 'ragnetic set-server-key'.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    api_key = server_api_keys[0]  # Use the first configured key
+    headers = {"Content-Type": "application/json", "x-api-key": api_key}
+
+    initial_input = {}
+    if initial_input_json:
+        try:
+            initial_input = json.loads(initial_input_json)
+        except json.JSONDecodeError:
+            typer.secho("Error: Invalid JSON input.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+    response = None  # Initialize response
+    try:
+        typer.secho(f"Attempting to trigger workflow '{workflow_name}' via API...", fg=typer.colors.CYAN)
+        response = requests.post(url, headers=headers, json=initial_input, timeout=10)
+        response.raise_for_status()
+
+        # Check for accepted status
+        if response.status_code == 202:
+            typer.secho(f"Successfully triggered workflow '{workflow_name}'.", fg=typer.colors.GREEN)
+            typer.secho(f"API response: {response.json()}", fg=typer.colors.BRIGHT_WHITE)
+        else:
+            typer.secho(f"Workflow trigger failed with status code {response.status_code}.", fg=typer.colors.RED)
+            typer.echo(f"Response: {response.text}")
+            raise typer.Exit(code=1)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error: Could not connect to the RAGnetic server at {url}", fg=typer.colors.RED)
+        typer.echo(f"Please ensure the server is running with 'ragnetic start-server'.")
+        typer.echo(f"Detailed error: {e}")
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
         raise typer.Exit(code=1)
 
 @app.command(name="delete-workflow", help="Permanently deletes a workflow definition from the database and its YAML file.")
