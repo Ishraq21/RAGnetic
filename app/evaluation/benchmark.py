@@ -17,7 +17,7 @@ from app.schemas.agent import AgentConfig
 from app.tools.retriever_tool import get_retriever_tool
 from app.core.config import get_llm_model
 from app.core.parsing_utils import normalize_yes_no, safe_json_parse
-from app.core.cost_calculator import calculate_cost
+from app.core.cost_calculator import calculate_cost, count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +84,10 @@ Respond with raw JSON only.
 def run_benchmark(agent_config: AgentConfig, test_set: List[Dict[str, Any]]) -> pd.DataFrame:
     """
     Execute retrieval, generation, and evaluation, including token and cost tracking.
+    This version includes agent configuration details in the output.
     """
     logger.info("Starting benchmark for '%s'", agent_config.name)
 
-    # NEW: Initialize judge_cache locally for each benchmark run
     judge_cache: Dict[str, Dict[str, Any]] = {}
 
     # Initialize components
@@ -117,26 +117,50 @@ def run_benchmark(agent_config: AgentConfig, test_set: List[Dict[str, Any]]) -> 
         context_str = "\n\n".join(d.page_content for d in docs)
         answer = "N/A";
         gen_time = 0.0;
-        agent_token_usage = {}
+        agent_token_usage = {};
+        embedding_tokens_query = 0;  # Initialize embedding tokens for query
+        embedding_cost_query = 0.0;  # Initialize embedding cost for query
+
         if item.get("type") != "Out-of-scope":
+            # Estimate embedding tokens for the query
+            embedding_tokens_query = count_tokens(q, agent_config.embedding_model)
+            embedding_cost_query = calculate_cost(
+                embedding_model_name=agent_config.embedding_model,
+                embedding_tokens=embedding_tokens_query
+            )
+
             t1 = time.perf_counter()
             resp = agent_llm.invoke([HumanMessage(content=f"Context:\n{context_str}\n\nQuestion: {q}\nAnswer:")])
             gen_time = time.perf_counter() - t1
             answer = resp.content
-            # --- Capture token usage from the response ---
             agent_token_usage = resp.response_metadata.get("token_usage", {})
+            # Prioritize usage_metadata if available (LangChain's new standard)
+            if hasattr(resp, 'usage_metadata') and resp.usage_metadata:
+                agent_token_usage = {
+                    "prompt_tokens": resp.usage_metadata.get("input_tokens", 0),
+                    "completion_tokens": resp.usage_metadata.get("output_tokens", 0),
+                    "total_tokens": resp.usage_metadata.get("total_tokens", 0)
+                }
 
         recalled = any(d.id == gt_id for d in docs)
 
         # Evaluation
         cache_key = hashlib.sha256(f"{q}|{context_str}|{answer}".encode()).hexdigest()
-        if cache_key in judge_cache: # MODIFIED: Use local judge_cache
-            ev = judge_cache[cache_key] # MODIFIED: Use local judge_cache
+        if cache_key in judge_cache:
+            ev = judge_cache[cache_key]
         else:
             t2 = time.perf_counter()
             try:
                 out_resp = eval_chain.invoke({"question": q, "context": context_str, "answer": answer})
                 judge_token_usage = getattr(out_resp, 'response_metadata', {}).get("token_usage", {})
+                # Prioritize usage_metadata for judge LLM too
+                if hasattr(out_resp, 'usage_metadata') and out_resp.usage_metadata:
+                    judge_token_usage = {
+                        "prompt_tokens": out_resp.usage_metadata.get("input_tokens", 0),
+                        "completion_tokens": out_resp.usage_metadata.get("output_tokens", 0),
+                        "total_tokens": out_resp.usage_metadata.get("total_tokens", 0)
+                    }
+
                 ev = {"faithfulness": normalize_yes_no(out_resp.get("faithfulness")),
                       "answer_relevance": normalize_yes_no(out_resp.get("answer_relevance")),
                       "conciseness_score": int(out_resp.get("conciseness_score", -1)),
@@ -151,19 +175,33 @@ def run_benchmark(agent_config: AgentConfig, test_set: List[Dict[str, Any]]) -> 
                       "coherence_score": int(fb.get("coherence_score", -1)), "reasoning": fb.get("reasoning", "")}
             judge_time = time.perf_counter() - t2
             ev["llm_judge_time_s"] = judge_time
-            judge_cache[cache_key] = ev # MODIFIED: Use local judge_cache
+            judge_cache[cache_key] = ev
 
         total_duration = time.perf_counter() - start_time
 
         # --- Calculate costs and aggregate token counts ---
         agent_prompt_tokens = agent_token_usage.get("prompt_tokens", 0)
         agent_completion_tokens = agent_token_usage.get("completion_tokens", 0)
+
+        # Calculate cost for agent LLM call
+        agent_llm_cost = calculate_cost(
+            llm_model_name=agent_config.llm_model,
+            prompt_tokens=agent_prompt_tokens,
+            completion_tokens=agent_completion_tokens
+        )
+
         judge_prompt_tokens = judge_token_usage.get("prompt_tokens", 0)
         judge_completion_tokens = judge_token_usage.get("completion_tokens", 0)
 
-        agent_cost = calculate_cost(agent_config.llm_model, agent_prompt_tokens, agent_completion_tokens)
-        judge_cost = calculate_cost(agent_config.evaluation_llm_model or agent_config.llm_model, judge_prompt_tokens,
-                                    judge_completion_tokens)
+        # Calculate cost for judge LLM call
+        judge_llm_cost = calculate_cost(
+            llm_model_name=agent_config.evaluation_llm_model or agent_config.llm_model,
+            prompt_tokens=judge_prompt_tokens,
+            completion_tokens=judge_completion_tokens
+        )
+
+        # Total estimated cost for this benchmark item: agent LLM + judge LLM + embedding query
+        total_estimated_cost_usd = agent_llm_cost + judge_llm_cost + embedding_cost_query
 
         # --- Combine all metrics into a single record ---
         rec = {
@@ -179,10 +217,31 @@ def run_benchmark(agent_config: AgentConfig, test_set: List[Dict[str, Any]]) -> 
             "total_duration_s": total_duration,
             **calculate_retrieval_metrics(docs, gt_id, agent_config.vector_store.hit_rate_k_value),
             **ev,
-            "prompt_tokens": agent_prompt_tokens,
-            "completion_tokens": agent_completion_tokens,
-            "total_tokens": agent_prompt_tokens + agent_completion_tokens,
-            "estimated_cost_usd": agent_cost + judge_cost,  # Sum of agent and judge costs
+            # LLM Token counts for agent and judge
+            "agent_llm_prompt_tokens": agent_prompt_tokens,
+            "agent_llm_completion_tokens": agent_completion_tokens,
+            "judge_llm_prompt_tokens": judge_prompt_tokens,
+            "judge_llm_completion_tokens": judge_completion_tokens,
+            "total_tokens": agent_prompt_tokens + agent_completion_tokens + judge_prompt_tokens + judge_completion_tokens,
+            # Sum all tokens
+
+            # Costs
+            "estimated_llm_cost_usd": agent_llm_cost + judge_llm_cost,  # Sum of agent and judge LLM costs
+            "estimated_embedding_cost_usd": embedding_cost_query,  # Embedding cost
+            "estimated_cost_usd": total_estimated_cost_usd,  # Total (LLM + Embedding)
+
+            # Agent Configuration Details (NEW)
+            "agent_llm_model": agent_config.llm_model,
+            "agent_embedding_model": agent_config.embedding_model,
+            "chunking_mode": agent_config.chunking.mode,
+            "chunk_size": agent_config.chunking.chunk_size,
+            "chunk_overlap": agent_config.chunking.chunk_overlap,
+            "vector_store_type": agent_config.vector_store.type,
+            "retrieval_strategy": agent_config.vector_store.retrieval_strategy,
+            "bm25_k": agent_config.vector_store.bm25_k,
+            "semantic_k": agent_config.vector_store.semantic_k,
+            "rerank_top_n": agent_config.vector_store.rerank_top_n,
+            "hit_rate_k_value": agent_config.vector_store.hit_rate_k_value,
         }
         records.append(rec)
 
