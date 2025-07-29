@@ -46,7 +46,11 @@ from app.db.models import metadata, agent_runs, chat_sessions_table, users_table
 from app.evaluation.benchmark import run_benchmark
 from app.evaluation.dataset_generator import generate_test_set
 from app.pipelines.embed import embed_agent_data
-
+from app.schemas.data_prep import DatasetPreparationConfig
+from app.schemas.fine_tuning import FineTuningJobConfig, FineTuningStatus
+from app.training.data_prep.jsonl_instruction_loader import JsonlInstructionLoader
+from app.training.data_prep.conversational_jsonl_loader import ConversationalJsonlLoader
+from app.schemas.data_prep import DatasetPreparationConfig
 # --- Centralized Path Configuration ---
 _APP_PATHS = get_path_settings()
 _PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
@@ -61,6 +65,11 @@ _TEMP_CLONES_DIR = _APP_PATHS["TEMP_CLONES_DIR"]
 _BENCHMARK_DIR = _APP_PATHS["BENCHMARK_DIR"]
 _WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
 # _SKILLS_DIR = _APP_PATHS["SKILLS_DIR"]
+_TRAINING_CONFIGS_DIR = _APP_PATHS["TRAINING_CONFIGS_DIR"]
+_DATA_PREPARED_DIR = _APP_PATHS["DATA_PREPARED_DIR"]
+_DATA_RAW_DIR = _APP_PATHS["DATA_RAW_DIR"]
+_FINE_TUNED_MODELS_BASE_DIR = _APP_PATHS["FINE_TUNED_MODELS_BASE_DIR"]
+_DATA_PREP_CONFIGS = _APP_PATHS["DATA_PREP_CONFIGS"]
 
 _CLI_CONFIG_FILE = _RAGNETIC_DIR / "cli_config.ini"
 
@@ -289,6 +298,14 @@ app.add_typer(role_app)
 
 analytics_app = typer.Typer(name="analytics", help="Commands for analyzing system performance, costs, and quality.")
 app.add_typer(analytics_app)
+
+# Typer app for fine-tuning commands
+training_app = typer.Typer(name="training", help="Commands for managing LLM fine-tuning jobs.")
+app.add_typer(training_app)
+
+# Typer app for dataset preparation commands
+dataset_app = typer.Typer(name="dataset", help="Commands for preparing datasets for fine-tuning.")
+app.add_typer(dataset_app)
 
 
 
@@ -737,7 +754,8 @@ def init():
     typer.secho("Initializing new RAGnetic project...", bold=True)
     paths_to_create = {
         "DATA_DIR", "AGENTS_DIR", "VECTORSTORE_DIR", "MEMORY_DIR",
-        "LOGS_DIR", "TEMP_CLONES_DIR", "RAGNETIC_DIR", "BENCHMARK_DIR", "WORKFLOWS_DIR"
+        "LOGS_DIR", "TEMP_CLONES_DIR", "RAGNETIC_DIR", "BENCHMARK_DIR", "WORKFLOWS_DIR", "TRAINING_CONFIGS_DIR", "DATA_RAW_DIR", "FINE_TUNED_MODELS_BASE_DIR", "DATA_PREPARED_DIR",
+        "DATA_PREP_CONFIGS"
     }
     for key, path in _APP_PATHS.items():
         if key in paths_to_create and not os.path.exists(path):
@@ -846,9 +864,20 @@ def start_server(
         host: str = typer.Option(None, help="Server host. Overrides config."),
         port: int = typer.Option(None, help="Server port. Overrides config."),
         reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
+        worker_device_type: Optional[str] = typer.Option(None, "--worker-device",
+                                                        help="Target device for the main worker (auto, cpu, gpu, mps). Overrides auto-detection."),
+        gpu_visible_devices: Optional[str] = typer.Option(None, "--gpu-devices",
+                                                         help="Comma-separated list of GPU device IDs (e.g., '0' or '0,1'). Only for NVIDIA GPUs."),
+        worker_concurrency: Optional[int] = typer.Option(None, "--worker-concurrency",
+                                                          help="Number of concurrent worker processes/threads (for --autoscale)."),
+        worker_pool_type: str = typer.Option("solo", "--worker-pool",
+                                             help="Celery worker pool type (fork, solo, prefork, spawn, gevent, eventlet). 'solo' or 'spawn' recommended for macOS."),
+        tokenizers_parallelism: bool = typer.Option(True, "--tokenizers-parallelism/--no-tokenizers-parallelism",
+                                                    help="Enable Hugging Face tokenizers parallelism. Set to False (--no-tokenizers-parallelism) to avoid 'fork' warnings on macOS.")
 ):
     """
-    Starts the RAGnetic server (Uvicorn), the Celery worker, and the Celery Beat scheduler.
+    Starts the RAGnetic server (Uvicorn), the Celery worker(s), and the Celery Beat scheduler.
+    This consolidates all background task management under one command.
     """
     config = configparser.ConfigParser()
     config.read(_CONFIG_FILE)
@@ -882,92 +911,115 @@ def start_server(
             typer.secho("Please install Redis (e.g., 'brew install redis') or start it manually.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
 
-    def get_beat_db_uri():
-        conn_name = (get_memory_storage_config().get("connection_name") or
-                     get_log_storage_config().get("connection_name"))
-        if not conn_name:
-            raise RuntimeError("Database connection for Celery Beat could not be determined.")
-        conn_str = get_db_connection(conn_name).replace('+aiosqlite', '').replace('+asyncpg', '')
-        return conn_str
-
+    from app.training.trainer_tasks import get_beat_db_uri
     beat_db_uri = get_beat_db_uri()
 
-    beat_env = os.environ.copy()
-    beat_env["CELERY_BEAT_DBURI"] = beat_db_uri
+    # Prepare a custom environment for Celery worker and beat processes
+    celery_env = os.environ.copy() # Start with current environment variables
+    celery_env["CELERY_BEAT_DBURI"] = beat_db_uri
 
+    # Apply GPU/device visibility settings
+    if gpu_visible_devices:
+        if worker_device_type and worker_device_type.lower() not in ["gpu", "cuda"]:
+            typer.secho("Warning: --gpu-devices specified but --worker-device is not 'gpu' or 'cuda'. "
+                        "This might lead to unexpected behavior.", fg=typer.colors.YELLOW)
+        celery_env["CUDA_VISIBLE_DEVICES"] = gpu_visible_devices
+        typer.secho(f"Setting CUDA_VISIBLE_DEVICES to: {gpu_visible_devices}", fg=typer.colors.CYAN)
+    elif worker_device_type and worker_device_type.lower() == "gpu":
+        typer.secho("Info: User requested 'gpu' worker but no specific --gpu-devices. "
+                    "Celery worker will attempt to use default/all available NVIDIA GPUs.", fg=typer.colors.CYAN)
+    elif worker_device_type and worker_device_type.lower() == "mps":
+        typer.secho("Info: User requested 'mps' worker. Ensure PyTorch is installed with MPS support.",
+                    fg=typer.colors.CYAN)
+
+    if tokenizers_parallelism is not None:
+        celery_env["TOKENIZERS_PARALLELISM"] = str(tokenizers_parallelism).lower()
+        typer.secho(f"Setting TOKENIZERS_PARALLELISM to: {tokenizers_parallelism}", fg=typer.colors.CYAN)
+    else:
+        pass
+
+    # Determine concurrency for Celery worker
+    final_concurrency = worker_concurrency if worker_concurrency is not None else 4  # Default to 4
+
+    # Base Celery worker command arguments
+    base_worker_args = [
+        "celery", "-A", "app.training.trainer_tasks", "worker",
+        f"--pool={worker_pool_type}",
+        "--loglevel=info",
+        f"--autoscale={final_concurrency},1",
+        "-Q", "ragnetic_fine_tuning_tasks,celery",
+    ]
+
+    # In reload mode, subprocesses are managed directly.
     if reload:
         typer.secho("Starting server and worker in --reload mode...", fg=typer.colors.YELLOW, bold=True)
-        typer.secho("Note: Celery Beat does not support auto-reloading. Restart the server to apply schedule changes from YAML files.", fg=typer.colors.CYAN)
+        typer.secho(
+            "Note: Celery Beat does not support auto-reloading. Restart the server to apply schedule changes from YAML files.",
+            fg=typer.colors.CYAN)
 
         uvicorn_cmd = ["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port), "--reload"]
-        celery_worker_cmd = [
-            "watchmedo", "auto-restart", "--directory=./app", "--pattern=*.py",
-            "--recursive", "--", "celery", "-A", "app.workflows.tasks", "worker", "--loglevel=info"
-        ]
-        # We start Beat without a reloader, as it's not well-supported.
-        celery_beat_cmd = [
-            "celery", "-A", "app.workflows.tasks", "beat",
-            "-S", "sqlalchemy_celery_beat.schedulers:DatabaseScheduler",
-            "--loglevel=info"
-        ]
 
         uvicorn_process = subprocess.Popen(uvicorn_cmd)
-        worker_process = subprocess.Popen(celery_worker_cmd)
-        beat_process = subprocess.Popen(celery_beat_cmd)
+        # Pass celery_env to worker_process
+        worker_process = subprocess.Popen(base_worker_args, env=celery_env)  # Pass env
+        beat_process = subprocess.Popen([
+            "celery", "-A", "app.training.trainer_tasks", "beat",
+            "-S", "sqlalchemy_celery_beat.schedulers:DatabaseScheduler",
+            "--loglevel=info"
+        ], env=celery_env)  # Pass env
 
         try:
             uvicorn_process.wait()
         except KeyboardInterrupt:
             typer.echo("\nShutting down processes...")
         finally:
-            beat_process.terminate()
-            worker_process.terminate()
-            beat_process.wait()
-            worker_process.wait()
+            if beat_process and beat_process.poll() is None:
+                beat_process.terminate()
+                beat_process.wait()
+            if worker_process and worker_process.poll() is None:
+                worker_process.terminate()
+                worker_process.wait()
+            if redis_process and redis_process.poll() is None:
+                redis_process.terminate()
+                redis_process.wait()
 
+    # For production (non-reload) mode
     else:
-        # For production, run them as standard background/foreground processes
         worker_process = None
         beat_process = None
         try:
             typer.secho("Starting Celery worker...", fg=typer.colors.BLUE, bold=True)
-            worker_process = subprocess.Popen(["celery", "-A", "app.workflows.tasks", "worker", "--loglevel=info"])
+            # Pass celery_env to worker_process
+            worker_process = subprocess.Popen(base_worker_args, env=celery_env)  # Pass env
 
             typer.secho("Starting Celery Beat scheduler...", fg=typer.colors.BLUE, bold=True)
             beat_cmd = [
-                "celery",
-                "-A", "app.workflows.tasks",
-                "beat",
+                "celery", "-A", "app.training.trainer_tasks", "beat",
                 "-S", "sqlalchemy_celery_beat.schedulers:DatabaseScheduler",
                 "--loglevel=info"
             ]
-            # The `env` argument ensures only the beat process gets this variable
-            beat_process = subprocess.Popen(beat_cmd, env=beat_env)
+            beat_process = subprocess.Popen(beat_cmd, env=celery_env)
 
             typer.secho(f"Starting Uvicorn server on http://{final_host}:{final_port}...", fg=typer.colors.BLUE,
                         bold=True)
-            # This runs in the foreground and blocks until you press Ctrl+C
             subprocess.run(["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port)], check=True)
 
         except KeyboardInterrupt:
             typer.echo("\nShutting down processes...")
         except Exception as e:
-            typer.secho(f"An error occurred: {e}", fg=typer.colors.RED)
+            typer.secho(f"An error occurred during server startup: {e}", fg=typer.colors.RED)
         finally:
-            # Terminate processes in reverse order of startup
-            if beat_process:
+            if beat_process and beat_process.poll() is None:
                 beat_process.terminate()
                 beat_process.wait()
-            if worker_process:
+            if worker_process and worker_process.poll() is None:
                 worker_process.terminate()
                 worker_process.wait()
-
-            if redis_process:
+            if redis_process and redis_process.poll() is None:
                 typer.secho("Stopping Redis server...", fg=typer.colors.YELLOW)
                 redis_process.terminate()
                 redis_process.wait()
 
-    typer.secho("Shutdown complete.", fg=typer.colors.GREEN)
 
 @app.command(help="Lists all configured agents.")
 def list_agents():
@@ -2664,7 +2716,7 @@ def analytics_agent_steps_command(
                 ).label("avg_duration_days"),  # SQLite specific for duration
                 func.sum(
                     expression.case((agent_run_steps.c.status == 'completed', 1), else_=0)
-                    # FIX: Removed square brackets
+
                 ).label("completed_calls"),
                 func.sum(
                     expression.case((agent_run_steps.c.status == 'failed', 1), else_=0)
@@ -2842,6 +2894,245 @@ def analytics_agent_runs_command(
     except Exception as e:
         logger.error(f"An error occurred while fetching agent run metrics: {e}", exc_info=True)
         typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+@training_app.command("apply", help="Submit a fine-tuning job defined in a YAML configuration file.")
+def training_apply_command(
+    config_file: Path = typer.Option(..., "--file", "-f", exists=True, file_okay=True, dir_okay=False,
+                                       help="Path to the fine-tuning job YAML configuration file (e.g., training_configs/my_job.yaml)."),
+):
+    """
+    Reads a YAML configuration file for a fine-tuning job, validates it,
+    and submits it to the RAGnetic API for asynchronous processing.
+    """
+    try:
+        # 1. Load YAML content
+        typer.secho(f"Loading fine-tuning configuration from: {config_file}", fg=typer.colors.CYAN)
+        with open(config_file, 'r', encoding='utf-8') as f:
+            yaml_content = yaml.safe_load(f)
+
+        # 2. Validate YAML against Pydantic schema
+        job_config = FineTuningJobConfig(**yaml_content)
+        typer.secho(f"Configuration loaded and validated for job: '{job_config.job_name}'", fg=typer.colors.GREEN)
+
+        # 3. Get API key and server URL
+        server_url = _get_server_url()
+        api_key = _get_api_key_for_cli()
+        headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+        url = f"{server_url}/training/apply"
+
+        # 4. Send to API
+        typer.secho(f"Submitting fine-tuning job '{job_config.job_name}' to RAGnetic API...", fg=typer.colors.CYAN)
+        response = requests.post(url, headers=headers, json=job_config.model_dump(), timeout=120) # Use model_dump() for JSON serialization
+        response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+
+        # 5. Process API response
+        job_info = response.json()
+        typer.secho(f"Fine-tuning job '{job_info['job_name']}' (ID: {job_info['adapter_id']}) dispatched successfully.", fg=typer.colors.GREEN)
+        typer.echo(f"Status: {job_info['training_status']}")
+        typer.echo(f"Model will be saved to: {job_info['adapter_path']}")
+        typer.echo("You can monitor its progress with: " + typer.style(f"ragnetic training status <adapter_id>", bold=True))
+
+    except FileNotFoundError:
+        typer.secho(f"Error: Configuration file not found at '{config_file}'.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except yaml.YAMLError as e:
+        typer.secho(f"Error parsing YAML file '{config_file}': {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.secho(f"An unexpected error occurred: {e}", fg=typer.colors.RED)
+        if isinstance(e, requests.exceptions.HTTPError):
+            typer.echo(f"API Response Error: {e.response.text}")
+        raise typer.Exit(code=1)
+
+
+@training_app.command("status", help="Check the status of a specific fine-tuning job by its adapter ID.")
+def training_status_command(
+    adapter_id: str = typer.Argument(..., help="The unique adapter ID of the fine-tuning job to check."),
+):
+    """
+    Retrieves and displays the current status and detailed metadata for a specific
+    fine-tuning job from the RAGnetic API.
+    """
+    try:
+        server_url = _get_server_url()
+        api_key = _get_api_key_for_cli()
+        headers = {"X-API-Key": api_key}
+        url = f"{server_url}/training/jobs/{adapter_id}"
+
+        typer.secho(f"Fetching status for fine-tuning job '{adapter_id}'...", fg=typer.colors.CYAN)
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+
+        job_info = response.json()
+        typer.secho(f"\n--- Fine-tuning Job Details for '{job_info.get('job_name', 'N/A')}' (ID: {job_info['adapter_id']}) ---", bold=True, fg=typer.colors.CYAN)
+
+        # Pretty print job details
+        for key, value in job_info.items():
+            if key == "hyperparameters" and value:
+                typer.echo(f"  {key.replace('_', ' ').title()}:")
+                for hp_key, hp_val in value.items():
+                    typer.echo(f"    - {hp_key}: {hp_val}")
+            elif key in ["final_loss", "validation_loss", "gpu_hours_consumed", "estimated_training_cost_usd"] and value is not None:
+                if "cost_usd" in key:
+                    typer.echo(f"  {key.replace('_', ' ').title()}: ${value:.6f}")
+                elif "hours" in key:
+                    typer.echo(f"  {key.replace('_', ' ').title()}: {value:.2f} hours")
+                else:
+                    typer.echo(f"  {key.replace('_', ' ').title()}: {value:.4f}")
+            elif isinstance(value, str) and ("_at" in key or "timestamp" in key) and len(value) >= 19 and "T" in value: # Basic ISO format check
+                try:
+                    dt_object = datetime.fromisoformat(value.replace('Z', '+00:00')) # Handle 'Z' for UTC
+                    typer.echo(f"  {key.replace('_', ' ').title()}: {dt_object.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+                except ValueError:
+                    typer.echo(f"  {key.replace('_', ' ').title()}: {value}") # Fallback
+            else:
+                typer.echo(f"  {key.replace('_', ' ').title()}: {value}")
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error fetching job status: {e}", fg=typer.colors.RED)
+        if hasattr(e, 'response') and e.response is not None and e.response.text:
+            typer.echo(f"API Response: {e.response.text}")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.secho(f"An unexpected error occurred: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@training_app.command("list-models", help="List all available fine-tuned models (completed jobs).")
+def training_list_models_command(
+    status_filter: Optional[FineTuningStatus] = typer.Option(None, "--status", "-s", help="Filter by training status (e.g., 'completed', 'failed')."),
+    base_model: Optional[str] = typer.Option(None, "--base-model", "-b", help="Filter by the base LLM model name (case-insensitive partial match)."),
+    job_name: Optional[str] = typer.Option(None, "--job-name", "-j", help="Filter by the user-defined job name (case-insensitive partial match)."),
+    limit: int = typer.Option(100, "--limit", help="Maximum number of models to return."),
+    offset: int = typer.Option(0, "--offset", help="Number of models to skip (for pagination)."),
+):
+    """
+    Retrieves and displays a list of all fine-tuned models from the RAGnetic API,
+    with options for filtering and pagination.
+    """
+    try:
+        server_url = _get_server_url()
+        api_key = _get_api_key_for_cli()
+        headers = {"X-API-Key": api_key}
+        url = f"{server_url}/training/models"
+
+        params = {"limit": limit, "offset": offset}
+        if status_filter:
+            params["status_filter"] = status_filter.value
+        if base_model:
+            params["base_model_name"] = base_model
+        if job_name:
+            params["job_name"] = job_name
+
+        typer.secho("Fetching fine-tuned models...", fg=typer.colors.CYAN)
+        response = requests.get(url, headers=headers, params=params, timeout=60)
+        response.raise_for_status()
+
+        models = response.json()
+        if not models:
+            typer.secho("No fine-tuned models found matching the criteria.", fg=typer.colors.YELLOW)
+            return
+
+        typer.secho("\n--- Available Fine-Tuned Models ---", bold=True, fg=typer.colors.CYAN)
+        df = pd.DataFrame(models)
+
+        # Select and reorder columns for display
+        display_cols = [
+            "adapter_id", "job_name", "base_model_name", "training_status",
+            "final_loss", "validation_loss", "gpu_hours_consumed",
+            "estimated_training_cost_usd", "created_at", "adapter_path"
+        ]
+        # Filter to only columns that exist in the DataFrame
+        df_display = df[[col for col in display_cols if col in df.columns]]
+
+        # Format numerical columns for better readability
+        if "estimated_training_cost_usd" in df_display.columns:
+            df_display["estimated_training_cost_usd"] = df_display["estimated_training_cost_usd"].apply(lambda x: f"${x:.6f}" if pd.notna(x) else "N/A")
+        if "final_loss" in df_display.columns:
+            df_display["final_loss"] = df_display["final_loss"].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
+        if "validation_loss" in df_display.columns:
+            df_display["validation_loss"] = df_display["validation_loss"].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
+        if "gpu_hours_consumed" in df_display.columns:
+            df_display["gpu_hours_consumed"] = df_display["gpu_hours_consumed"].apply(lambda x: f"{x:.2f} hrs" if pd.notna(x) else "N/A")
+
+        # Format datetime columns
+        for col in ["created_at", "updated_at"]:
+            if col in df_display.columns:
+                df_display[col] = pd.to_datetime(df_display[col]).dt.strftime('%Y-%m-%d %H:%M UTC')
+
+        typer.echo(df_display.to_string(index=False))
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error listing fine-tuned models: {e}", fg=typer.colors.RED)
+        if hasattr(e, 'response') and e.response is not None and e.response.text:
+            typer.echo(f"API Response: {e.response.text}")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.secho(f"An unexpected error occurred: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+
+@dataset_app.command("prepare", help="Prepare a raw dataset for fine-tuning using a YAML configuration.")
+def dataset_prepare_command(
+    # CHANGE HERE: From typer.Argument to typer.Option
+    config_file: Path = typer.Option(..., "--file", "-f", exists=True, file_okay=True, dir_okay=False,
+                                       help="Path to the dataset preparation YAML configuration file (e.g., data_prep_configs/my_prep.yaml)."),
+):
+    """
+    Reads a YAML configuration file for dataset preparation, validates it,
+    and processes the raw input data into a format suitable for fine-tuning.
+    """
+    try:
+        # 1. Load YAML content
+        typer.secho(f"Loading dataset preparation configuration from: {config_file}", fg=typer.colors.CYAN)
+        with open(config_file, 'r', encoding='utf-8') as f:
+            yaml_content = yaml.safe_load(f)
+
+        # 2. Validate YAML against Pydantic schema
+        prep_config = DatasetPreparationConfig(**yaml_content)
+        typer.secho(f"Configuration loaded and validated for dataset preparation: '{prep_config.prep_name}'",
+                    fg=typer.colors.GREEN)
+
+        # Ensure output directory exists
+        output_path = Path(prep_config.output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 3. Choose and execute the appropriate loader/processor
+        if prep_config.format_type == "jsonl-instruction":
+            loader = JsonlInstructionLoader(prep_config.input_file)
+            prepared_data = loader.load()  # This will raise ValueError if format is wrong
+
+            with open(output_path, 'w', encoding='utf-8') as f:
+                for record in prepared_data:
+                    f.write(json.dumps(record) + "\n")
+
+            typer.secho(f"Successfully prepared {len(prepared_data)} records and saved to '{output_path}'.",
+                        fg=typer.colors.GREEN)
+        elif prep_config.format_type == "conversational-jsonl":  # ADD THIS NEW ELIF BLOCK
+            loader = ConversationalJsonlLoader(prep_config.input_file)
+            prepared_data = loader.load()
+
+            with open(output_path, 'w', encoding='utf-8') as f:
+                for record in prepared_data:
+                    f.write(json.dumps(record) + "\n")  # Conversational data is also typically JSONL
+
+            typer.secho(f"Successfully prepared {len(prepared_data)} records and saved to '{output_path}'.",
+                        fg=typer.colors.GREEN)
+        else:
+            typer.secho(f"Error: Unsupported format type '{prep_config.format_type}'.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+    except FileNotFoundError:
+        typer.secho(f"Error: Configuration or input file not found. Check paths in '{config_file}'.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except yaml.YAMLError as e:
+        typer.secho(f"Error parsing YAML file '{config_file}': {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.secho(f"An unexpected error occurred during dataset preparation: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
 

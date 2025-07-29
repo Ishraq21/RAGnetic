@@ -1,5 +1,6 @@
 import os
 import logging
+from pathlib import Path
 from typing import List, TypedDict, Annotated, Optional
 from operator import add
 import time
@@ -15,20 +16,29 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
+from langchain_huggingface.llms import HuggingFacePipeline as LCHuggingFacePipeline
+from transformers import AutoTokenizer, pipeline
+from huggingface_hub import InferenceClient
+from langchain_community.llms.huggingface_text_gen_inference import HuggingFaceTextGenInference
+
+
 from app.schemas.agent import AgentConfig
 
 # LangChain's generic chat model initializer
 from langchain.chat_models import init_chat_model
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_huggingface import ChatHuggingFace
 from langchain_ollama import ChatOllama
 from ollama import ResponseError
 
 # Local application imports
 from app.tools.retriever_tool import get_retriever_tool
-from app.core.config import get_api_key, get_llm_model
+from app.core.config import get_api_key, get_llm_model, get_path_settings
 from app.core.cost_calculator import calculate_cost, count_tokens
 from app.db.dao import save_conversation_metrics_sync
 from app.db import get_sync_db_engine
+
+from app.training.model_manager import FineTunedModelManager
 
 logger = logging.getLogger(__name__)
 logger = logging.getLogger("ragnetic")
@@ -63,6 +73,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
     and saving them to the database and logging to file.
     """
     sync_engine_connection = None
+    embedding_cost_usd = 0.0
     try:
         start_time = time.perf_counter()
         agent_config = state['agent_config']
@@ -186,10 +197,11 @@ async def call_model(state: AgentState, config: RunnableConfig):
             prompt_with_history = [SystemMessage(content=system_prompt_content)] + messages
 
         model_kwargs = agent_config.model_params.model_dump(exclude_unset=True) if agent_config.model_params else {}
+        base_llm_model = None
         if model_name.startswith("ollama/"):
             ollama_model_name = model_name.split("/", 1)[1]
             logger.info(f"Initializing local Ollama model: '{ollama_model_name}' with params: {model_kwargs}")
-            model = ChatOllama(model=ollama_model_name, **model_kwargs)
+            base_llm_model = ChatOllama(model=ollama_model_name, **model_kwargs)
         else:
             provider = "openai"
             if "claude" in model_name.lower():
@@ -200,26 +212,157 @@ async def call_model(state: AgentState, config: RunnableConfig):
             api_key = get_api_key(provider)
             if provider == "google":
                 logger.info("Initializing ChatGoogleGenerativeAI directly.")
-                model = ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, **model_kwargs)
+                base_llm_model = ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, **model_kwargs)
             else:
                 if provider == "openai" and model_kwargs.get("streaming", True):
-                    # Ensure stream_usage is passed correctly to init_chat_model for OpenAI streaming
                     openai_model_kwargs = model_kwargs.copy()
                     openai_model_kwargs["stream_usage"] = True
-                    model = init_chat_model(model_name, model_provider=provider, streaming=True, api_key=api_key, **openai_model_kwargs)
+                    base_llm_model = init_chat_model(model_name, model_provider=provider, streaming=True,
+                                                     api_key=api_key, **openai_model_kwargs)
                 else:
-                    model = init_chat_model(model_name, model_provider=provider, streaming=True, api_key=api_key, **model_kwargs)
+                    base_llm_model = init_chat_model(model_name, model_provider=provider, streaming=True,
+                                                     api_key=api_key, **model_kwargs)
 
+        final_llm_model_raw_hf = None  # This will hold the raw transformers model (e.g., LlamaForCausalLM)
+        final_tokenizer_hf = None  # This will hold the transformers tokenizer
 
-        model_with_tools = model.bind_tools(tools)
-        logger.info("Invoking the language model...")
+        # Use the fine_tuned_model_id if specified
+        if agent_config.fine_tuned_model_id:
+            logger.info(f"Fine-tuned model ID specified: {agent_config.fine_tuned_model_id}. Attempting to load.")
+            _APP_PATHS = get_path_settings()
+            fine_tuned_models_base_dir = _APP_PATHS["FINE_TUNED_MODELS_BASE_DIR"]
+            model_manager = FineTunedModelManager(Path(fine_tuned_models_base_dir))
+
+            db_engine_sync = get_sync_db_engine()
+            from app.db.models import fine_tuned_models_table
+            from sqlalchemy import select
+
+            adapter_record = None
+            with db_engine_sync.connect() as conn:
+                stmt = select(fine_tuned_models_table).where(
+                    fine_tuned_models_table.c.adapter_id == agent_config.fine_tuned_model_id)
+                result = conn.execute(stmt).first()
+                if result:
+                    adapter_record = result._asdict()
+                    logger.info(f"Found fine-tuned model record for ID: {agent_config.fine_tuned_model_id}")
+                else:
+                    logger.error(f"Fine-tuned model record not found in DB for ID: {agent_config.fine_tuned_model_id}.")
+                    raise ValueError(f"Fine-tuned model '{agent_config.fine_tuned_model_id}' not found.")
+
+            if adapter_record:
+                adapter_path_from_db = adapter_record['adapter_path']
+                base_model_name_from_db = adapter_record['base_model_name']
+
+                # Load the fine-tuned model (raw transformers model)
+                loaded_ft_model_and_tokenizer = await asyncio.to_thread(
+                    model_manager.load_adapter,  # model_manager.load_adapter returns the HF model
+                    adapter_path_from_db,
+                    base_model_name_from_db
+                )
+
+                if loaded_ft_model_and_tokenizer:
+                    final_llm_model_raw_hf = loaded_ft_model_and_tokenizer
+
+                    final_tokenizer_hf = AutoTokenizer.from_pretrained(adapter_path_from_db)
+                    logger.info(
+                        f"Successfully loaded fine-tuned model '{agent_config.fine_tuned_model_id}' and its tokenizer.")
+                else:
+                    logger.error(
+                        f"Failed to load fine-tuned model '{agent_config.fine_tuned_model_id}'. Cannot proceed without it.")
+                    # Raise an error or fall back to a default strategy if fine-tuned model is mandatory
+                    raise RuntimeError(f"Failed to load mandatory fine-tuned model {agent_config.fine_tuned_model_id}.")
+
+        # Now, based on whether a fine-tuned model was loaded, determine the final model to use.
+        # If a fine-tuned model was successfully loaded, create a ChatHuggingFace instance from it.
+        if agent_config.fine_tuned_model_id:
+            logger.info(f"Fine-tuned model ID specified: {agent_config.fine_tuned_model_id}. Loading adapter…")
+            paths = get_path_settings()
+            manager = FineTunedModelManager(Path(paths["FINE_TUNED_MODELS_BASE_DIR"]))
+
+            # fetch record from DB
+            from app.db.models import fine_tuned_models_table
+            from sqlalchemy import select
+            with get_sync_db_engine().connect() as conn:
+                row = conn.execute(
+                    select(fine_tuned_models_table).where(
+                        fine_tuned_models_table.c.adapter_id == agent_config.fine_tuned_model_id
+                    )
+                ).first()
+            if not row:
+                raise ValueError(f"Fine-tuned model '{agent_config.fine_tuned_model_id}' not found in DB")
+
+            adapter_path = row.adapter_path
+            base_name = row.base_model_name
+
+            # load HF adapter
+            loaded = await asyncio.to_thread(manager.load_adapter, adapter_path, base_name)
+            if not loaded:
+                raise RuntimeError(f"Failed to load fine-tuned model {agent_config.fine_tuned_model_id}")
+
+            final_llm_model_raw_hf = loaded
+            final_tokenizer_hf = AutoTokenizer.from_pretrained(adapter_path)
+            logger.info("Adapter + tokenizer loaded, building pipeline…")
+
+            # build a sync-only transformers Pipeline
+            hf_pipeline_instance = pipeline(
+                "text-generation",
+                model=final_llm_model_raw_hf,
+                tokenizer=final_tokenizer_hf,
+                max_new_tokens=model_kwargs.get("max_tokens", 512),
+                temperature=model_kwargs.get("temperature", 0.7),
+                return_full_text=False,
+            )
+
+            # wrap in LangChain’s HuggingFacePipeline
+            langchain_hf_llm_instance = LCHuggingFacePipeline(pipeline=hf_pipeline_instance)
+
+            # turn off streaming (no async_client)
+            chat_hf_kwargs = model_kwargs.copy()
+            chat_hf_kwargs["streaming"] = False
+
+            final_llm_model = ChatHuggingFace(
+                llm=langchain_hf_llm_instance,
+                **chat_hf_kwargs
+            )
+            logger.info("Wrapped fine-tuned HF model with ChatHuggingFace (sync mode).")
+
+        else:
+            # no fine-tune → use your base ChatOllama / OpenAI / Claude / Google logic
+            logger.info("No fine-tuned model; using base LLM")
+            if model_name.startswith("ollama/"):
+                final_llm_model = ChatOllama(model=model_name.split("/", 1)[1], **model_kwargs)
+            else:
+                provider = ("anthropic" if "claude" in model_name.lower()
+                            else "google" if "gemini" in model_name.lower()
+                else "openai")
+                api_key = get_api_key(provider)
+                if provider == "google":
+                    final_llm_model = ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, **model_kwargs)
+                else:
+                    # note: for openai you can still stream
+                    openai_kwargs = model_kwargs.copy()
+                    if provider == "openai" and openai_kwargs.get("streaming", True):
+                        openai_kwargs["stream_usage"] = True
+                        final_llm_model = init_chat_model(model_name, model_provider=provider,
+                                                          streaming=True, api_key=api_key, **openai_kwargs)
+                    else:
+                        final_llm_model = init_chat_model(model_name, model_provider=provider,
+                                                          streaming=True, api_key=api_key, **model_kwargs)
+
+        # bind your tools
+        model_with_tools = final_llm_model.bind_tools(tools)
+        logger.info("Invoking the LLM (sync pipeline wrapped in thread)…")
+
         t1 = time.perf_counter()
         try:
-            response = await model_with_tools.ainvoke(prompt_with_history)
+            response = await asyncio.to_thread(
+                model_with_tools.invoke,
+                prompt_with_history
+            )
         except ResponseError as e:
             if "does not support tools" in str(e):
                 logger.warning(f"Model '{model_name}' does not support tools. Retrying without tools.")
-                response = await model.ainvoke(prompt_with_history)
+                response = await model_with_tools.ainvoke(prompt_with_history)
             else:
                 raise e
         generation_time = time.perf_counter() - t1
@@ -297,7 +440,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "estimated_cost_usd": llm_cost_usd,
             "embedding_cost_usd": embedding_cost_usd,
             "timestamp": current_timestamp,
-            "llm_model": model_name
+            "llm_model": model_name,
+            "fine_tuned_model_id": agent_config.fine_tuned_model_id
+
         }
 
         log_metrics_data = {
@@ -314,7 +459,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "embedding_cost_usd": embedding_cost_usd,
             "embedding_model_name": embedding_model_name,
             "retrieved_chunks": retrieved_chunk_ids,
-            "timestamp": current_timestamp.isoformat()
+            "timestamp": current_timestamp.isoformat(),
+            "fine_tuned_model_id": agent_config.fine_tuned_model_id
+
         }
 
         sync_engine = get_sync_db_engine()

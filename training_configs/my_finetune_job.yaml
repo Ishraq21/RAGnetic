@@ -1,0 +1,18 @@
+job_name: "my-custom-llama2-finetune"
+base_model_name: "ollama/llama2" # Or "ollama/mistral", "meta-llama/Llama-2-7b-hf" etc.
+dataset_path: "data/prepared/my_conversations_prepared.jsonl"
+# eval_dataset_path: "data/prepared/my_conversations_eval.jsonl"
+output_base_dir: "models/fine_tuned" # Where the fine-tuned model will be saved
+hyperparameters:
+  lora_rank: 8          # LoRA rank (dimension). Higher = more expressive, more parameters.
+  learning_rate: 0.0002 # Learning rate for the optimizer.
+  epochs: 3             # Number of training epochs.
+  batch_size: 4         # Training batch size per device.
+  lora_alpha: 16        # LoRA alpha parameter (scaling factor).
+  # target_modules: ["q_proj", "v_proj"] # Optional: Specific modules to apply LoRA to. If None, PEFT will try to auto-detect.
+  lora_dropout: 0.05    # Dropout for LoRA layers.
+  gradient_accumulation_steps: 1 # Accumulate gradients over N steps to simulate larger batch size
+  logging_steps: 10     # How often to log training progress
+  save_steps: 500       # How often to save model checkpoints
+  save_total_limit: 1   # Keep only the last checkpoint
+  cost_per_gpu_hour: 0.5 # Estimated cost in USD per GPU hour for metrics tracking
