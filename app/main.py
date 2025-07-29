@@ -74,6 +74,7 @@ from app.api.query import router as query_api_router
 from app.api.analytics import router as analytics_api_router
 from app.api.evaluation import router as evaluation_api_router
 from app.api.metrics import router as metrics_api_router
+from app.api.training import router as training_api_router
 from app.api import workflows
 from app.api import webhooks
 
@@ -287,9 +288,9 @@ app.include_router(evaluation_api_router)
 app.include_router(metrics_api_router)
 app.include_router(analytics_api_router)
 app.include_router(security_api_router)
+app.include_router(training_api_router)
 app.include_router(workflows.router, prefix="/api/v1")
 app.include_router(webhooks.router, prefix="/webhooks/v1")
-
 
 class RenameRequest(BaseModel):
     new_name: str

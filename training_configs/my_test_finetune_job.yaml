@@ -1,0 +1,14 @@
+job_name: "test-conversational-finetune"
+base_model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+dataset_path: "data/prepared_datasets/my_conversations_prepared.jsonl"
+output_base_dir: "models/fine_tuned"
+hyperparameters:
+  lora_rank: 4         # Smaller rank for quicker testing
+  learning_rate: 0.0003
+  epochs: 1            # Just 1 epoch for a quick test
+  batch_size: 1        # Small batch size for testing
+  lora_alpha: 8
+  lora_dropout: 0.05
+  logging_steps: 5
+  mixed_precision_dtype: "no"
+device: "mps"          # Explicitly target MPS on your M2 Max

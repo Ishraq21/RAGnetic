@@ -262,6 +262,11 @@ class AgentConfig(BaseModel):
         description="Configuration for parallel data ingestion and processing within a single source."
     )
 
+    fine_tuned_model_id: Optional[str] = Field(
+        None,
+        description="The unique ID of a specific fine-tuned model or LoRA adapter to use with this agent's base LLM."
+    )
+
 # --- Agent Inspection Response Models ---
 
 class DocumentMetadata(BaseModel):

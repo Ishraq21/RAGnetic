@@ -391,13 +391,13 @@ async def get_workflow_runs_summary(
             ).label("avg_duration_days"),
             func.sum(
                 expression.case((workflow_runs_table.c.status == 'completed', 1), else_=0)
-                # FIX: Removed square brackets
+
             ).label("completed_runs"),
             func.sum(
-                expression.case((workflow_runs_table.c.status == 'failed', 1), else_=0)  # FIX: Removed square brackets
+                expression.case((workflow_runs_table.c.status == 'failed', 1), else_=0)
             ).label("failed_runs"),
             func.sum(
-                expression.case((workflow_runs_table.c.status == 'paused', 1), else_=0)  # FIX: Removed square brackets
+                expression.case((workflow_runs_table.c.status == 'paused', 1), else_=0)
             ).label("paused_runs")
         ).join(
             workflows_table, workflow_runs_table.c.workflow_id == workflows_table.c.id

@@ -19,7 +19,7 @@ dependencies     = [
   "arxiv",
   "beautifulsoup4",
   "certifi",
-  "faiss-cpu",
+  #"faiss-cpu", # REMOVE THIS
   "fastapi",
   'datasets',
   "google-api-python-client",
@@ -71,12 +71,47 @@ dependencies     = [
   "python-hcl2",
   "sql-metadata",
   "lark",
-  " sqlalchemy-celery-beat",
+  "sqlalchemy-celery-beat",
+  "transformers",
+  "fsspec",
+  "accelerate",
+  "peft",
+  "s3fs",
+  "trl",
+  "tensorboard",
+  "huggingface-hub>=0.34.0",
+
 ]
-scripts = { "ragnetic" = "cli:app" }
+
+[project.optional-dependencies]
+# For CPU-only environments (e.g., standard laptops, non-GPU servers)
+cpu = [
+  "torch==2.7.1", # Specify CPU-only PyTorch version, check PyTorch website for latest.
+  "faiss-cpu",
+  #"bitsandbytes-cpu" # bitsandbytes for CPU might not be strictly necessary for training, but can be added if its CPU optimizers are desired.
+]
+
+# For NVIDIA CUDA GPU environments
+gpu = [
+  "torch==2.7.1+cu121", # REPLACE with exact version from pytorch.org/get-started/locally/ for YOUR CUDA version (e.g., +cu118)
+  "bitsandbytes==0.43.1", # Check compatibility with your torch/CUDA version
+  "faiss-gpu"
+]
+
+# For Apple Silicon (M1/M2/M3) GPU environments (MPS)
+mps = [
+  "torch==2.7.1", # Standard PyTorch install for macOS includes MPS support
+  # faiss-gpu can be used on MPS via PyTorch's Metal backend if compiled, or use faiss-cpu.
+  # If you want FAISS to leverage MPS, you might need to install 'faiss-nightly' or build from source
+  # For now, if faiss-gpu or faiss-cpu is used, it will fall back to CPU if not compiled for MPS.
+  "faiss-cpu", # For simplicity, use CPU FAISS on MPS, as FAISS GPU on MPS is complex.
+]
+
+
+[project.scripts]
+ragnetic = "cli:app"
 
 [tool.setuptools]
 include-package-data = true
 packages = { find = { where = ["."], include = ["app*"], exclude = ["tests*"] } }
 py-modules = ["cli"]
-

@@ -84,6 +84,11 @@ def get_path_settings() -> Dict[str, Path | List[Path]]:
         "BENCHMARK_DIR": project_root / "benchmark",
         "WORKFLOWS_DIR": project_root / "workflows",
    #    "SKILLS_DIR": project_root / "skills",
+        "TRAINING_CONFIGS_DIR": project_root / "training_configs",
+        "FINE_TUNED_MODELS_BASE_DIR": project_root / "models" / "fine_tuned",
+        "DATA_PREPARED_DIR": project_root / "data" / "prepared_datasets",  # For prepared datasets
+        "DATA_RAW_DIR": project_root / "data" / "raw_data",  # For raw datasets
+        "DATA_PREP_CONFIGS": project_root/ "data_prep_configs",
     }
 
     default_allowed_dirs = f"{paths['DATA_DIR']},{paths['AGENTS_DIR']},{paths['TEMP_CLONES_DIR']}"

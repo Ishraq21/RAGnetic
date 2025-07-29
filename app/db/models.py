@@ -145,6 +145,7 @@ conversation_metrics_table = Table(
     Column("llm_model", String(255), nullable=True),
     Column("embedding_cost_usd", Float(precision=10), nullable=True),
     Column("timestamp", DateTime, default=utc_timestamp, nullable=False),
+    Column("fine_tuned_model_id", String(255), nullable=True, index=True),
     UniqueConstraint("session_id", "request_id", name="uq_session_request"),
 )
 
@@ -166,7 +167,7 @@ agent_runs = Table(
     Column('session_id', Integer, ForeignKey('chat_sessions.id'), nullable=False, index=True),
     Column('start_time', DateTime, nullable=False),
     Column('end_time', DateTime, nullable=True),
-    Column('status', agent_status_enum, nullable=False, default='running'), # <-- UPDATED
+    Column('status', agent_status_enum, nullable=False, default='running'),
     Column('initial_messages', JSON, nullable=True),
     Column('final_state', JSON, nullable=True)
 )
@@ -181,7 +182,7 @@ agent_run_steps = Table(
     Column('end_time', DateTime, nullable=True),
     Column('inputs', JSON, nullable=True),
     Column('outputs', JSON, nullable=True),
-    Column('status', agent_status_enum, nullable=False, default='running') # <-- UPDATED
+    Column('status', agent_status_enum, nullable=False, default='running')
 )
 
 
@@ -266,6 +267,31 @@ periodic_task_changed_table = Table(
     Column("id", Integer, primary_key=True),
     Column("last_update", DateTime, nullable=False),
 )
+
+fine_tuning_status_enum = Enum("pending", "running", "completed", "failed", "paused", name="fine_tuning_status_enum")
+
+fine_tuned_models_table = Table(
+    "fine_tuned_models", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("adapter_id", String(255), nullable=False, unique=True, index=True), # System-generated UUID for the adapter
+    Column("job_name", String(255), nullable=False, index=True), # User-defined name from YAML for tracking
+    Column("base_model_name", String(255), nullable=False),      # e.g., 'ollama/llama2', 'mistral'
+    Column("adapter_path", String(512), nullable=False),         # Absolute file path to saved weights
+    Column("training_dataset_id", String(512), nullable=True),   # Path or identifier of the dataset used
+    Column("training_status", fine_tuning_status_enum, nullable=False, default="pending"),
+    Column("training_logs_path", String(512), nullable=True),
+    Column("hyperparameters", JSON, nullable=True),              # JSON representation of hyperparameters used
+    Column("final_loss", Float, nullable=True),
+    Column("validation_loss", Float, nullable=True),
+    Column("gpu_hours_consumed", Float, nullable=True),
+    Column("estimated_training_cost_usd", Float, nullable=True),
+    Column("created_by_user_id", Integer, ForeignKey("users.id"), nullable=False, index=True),
+    Column("created_at", DateTime, default=datetime.utcnow, nullable=False),
+    Column("updated_at", DateTime, onupdate=datetime.utcnow, default=datetime.utcnow, nullable=False),
+    Index("fine_tuned_models_status_idx", "training_status"),
+    Index("fine_tuned_models_base_model_idx", "base_model_name"),
+)
+
 
 
 # --- Indexes for Performance ---
