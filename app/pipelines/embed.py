@@ -1,20 +1,21 @@
 import os
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import uuid
 import hashlib
 import json
 import asyncio
 
 # LangChain and LlamaIndex have different Document objects
-from langchain_core.documents import Document as LangChainDocument
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document as LangChainDocument  # Using canonical import path
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from llama_index.core.schema import Document as LlamaDocument
 from llama_index.core.node_parser import SemanticSplitterNodeParser
 from llama_index.embeddings.langchain import LangchainEmbedding
 
 # LangChain vector store components
 from langchain_community.vectorstores import FAISS, Chroma
+from langchain_community.vectorstores.utils import filter_complex_metadata
 from langchain_qdrant import Qdrant
 from langchain_pinecone import Pinecone as PineconeLangChain
 from langchain_mongodb import MongoDBAtlasVectorSearch
@@ -23,15 +24,13 @@ from pinecone import Pinecone as PineconeClient
 # Use forward references for type hints to avoid circular imports
 from app.schemas.agent import AgentConfig, DataSource, ChunkingConfig
 from app.core.embed_config import get_embedding_model
-from app.core.config import get_api_key
+from app.core.config import get_api_key, get_path_settings
 from app.pipelines.loaders import (
     directory_loader, url_loader, db_loader, api_loader,
     code_repository_loader, gdoc_loader, web_crawler_loader,
     notebook_loader, pdf_loader, docx_loader, csv_loader,
     text_loader, iac_loader, parquet_loader
 )
-
-from app.core.config import get_api_key, get_path_settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -41,8 +40,15 @@ _VECTORSTORE_DIR = _APP_PATHS["VECTORSTORE_DIR"]
 
 
 class VectorStoreCreationError(Exception):
-    """Custom exception for errors during vector store creation."""
+    """Raised when vector store creation fails."""
     pass
+
+
+def _generate_chunk_id(content: str, original_id: str = "", reproducible: bool = False, idx: int = None) -> str:
+    if reproducible:
+        hash_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
+        return f"{original_id}-{idx}-{hash_digest}" if idx is not None else f"{original_id}-{hash_digest}"
+    return str(uuid.uuid4())
 
 
 def _get_chunks_from_documents(
@@ -56,80 +62,112 @@ def _get_chunks_from_documents(
     reproducible IDs for chunks. Supports 'none', 'semantic', and 'default' modes.
     This function remains synchronous as it's CPU-bound after documents are loaded.
     """
-    chunks: List[LangChainDocument] = []
+    final_chunks_list: List[LangChainDocument] = []  # Use a single list for all modes' results
     chunking_mode = chunking_config.mode
     logger.info(f"Applying chunking mode: '{chunking_mode}'")
+
+    # Ensure input documents are valid LangChainDocuments
+    validated_documents = []
+    for i, doc in enumerate(documents):
+        if not isinstance(doc, LangChainDocument):
+            logger.error(
+                f"[DEBUG] _get_chunks_from_documents (Input Validation): Input doc at #{i} is not LangChainDocument, got {type(doc)}. Skipping. Content snippet: {str(doc)[:100]}")
+            continue
+        validated_documents.append(doc)
+    documents = validated_documents  # Use validated documents for chunking
 
     # --- Handle 'none' chunking mode ---
     if chunking_mode == 'none':
         logger.info("Chunking mode is 'none'. Using documents directly as chunks.")
-        chunks = documents
-        for idx, chunk in enumerate(chunks):
-            original_doc_id = chunk.metadata.get("original_doc_id", "")
+        for idx, doc in enumerate(documents):
+            # Create a new LangChainDocument instance to guarantee consistency
+            new_chunk = LangChainDocument(page_content=doc.page_content, metadata=doc.metadata.copy(), id=doc.id)
             if reproducible_ids:
-                content_hash = hashlib.sha256(chunk.page_content.encode('utf-8')).hexdigest()
-                chunk.id = f"{original_doc_id}-{idx}-{content_hash[:8]}"
+                content_hash = hashlib.sha256(new_chunk.page_content.encode('utf-8')).hexdigest()
+                new_chunk.id = f"{new_chunk.metadata.get('original_doc_id', '')}-{idx}-{content_hash[:8]}"
             else:
-                chunk.id = str(uuid.uuid4())
-            chunk.metadata["chunk_id"] = chunk.id
-        return chunks
+                new_chunk.id = str(uuid.uuid4())
+            new_chunk.metadata["chunk_id"] = new_chunk.id
+            final_chunks_list.append(new_chunk)
+        logger.info(f"None chunking resulted in {len(final_chunks_list)} chunks.")
+        return final_chunks_list
 
     # --- Handle 'semantic' chunking mode ---
     elif chunking_mode == 'semantic':
         logger.info("Attempting semantic chunking using LlamaIndex...")
         try:
-            langchain_embeddings = get_embedding_model(embedding_model_name)
-            llama_embeddings = LangchainEmbedding(langchain_embeddings)
-            semantic_splitter = SemanticSplitterNodeParser.from_defaults(
-                embed_model=llama_embeddings,
+            embeddings = LangchainEmbedding(get_embedding_model(embedding_model_name))
+            splitter = SemanticSplitterNodeParser.from_defaults(
+                embed_model=embeddings,
                 breakpoint_percentile_threshold=chunking_config.breakpoint_percentile_threshold,
             )
-            llama_docs = [LlamaDocument(text=doc.page_content, metadata=doc.metadata) for doc in documents]
-            nodes = semantic_splitter.get_nodes_from_documents(llama_docs)
+            llama_docs = [LlamaDocument(text=d.page_content, metadata=d.metadata.copy(), id_=d.id) for d in documents]
+            nodes = splitter.get_nodes_from_documents(llama_docs)
+            final_chunks_list = []
             for node in nodes:
-                original_doc_id = node.metadata.get("original_doc_id", "")
                 content = node.get_content()
-                if reproducible_ids:
-                    content_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
-                    generated_chunk_id = f"{original_doc_id}-{content_hash[:8]}"
-                else:
-                    generated_chunk_id = str(uuid.uuid4())
-                metadata = {**node.metadata, "chunk_id": generated_chunk_id}
-                new_doc = LangChainDocument(page_content=content, metadata=metadata)
-                new_doc.id = generated_chunk_id
-                chunks.append(new_doc)
-            logger.info(f"Successfully applied semantic chunking. Resulted in {len(chunks)} chunks.")
-        except Exception as e:
-            logger.error(f"Semantic chunking failed: {e}. Falling back to default recursive splitting.", exc_info=True)
-            chunking_mode = 'default'
+                metadata = node.metadata.copy()
+
+                original_doc_id = metadata.get("original_doc_id", "")
+                cid = _generate_chunk_id(content, original_doc_id, reproducible_ids)
+
+                metadata["chunk_id"] = cid
+                new_doc = LangChainDocument(page_content=content, metadata=metadata, id=cid)
+                final_chunks_list.append(new_doc)
+            logger.info(f"Successfully applied semantic chunking. Resulted in {len(final_chunks_list)} chunks.")
+            return final_chunks_list
+        except Exception:
+            logger.warning("Semantic chunking failed, falling back to default.", exc_info=True)
+            chunking_mode = 'default'  # Fallback to default below
 
     # --- Handle 'default' (Recursive) chunking mode ---
-    elif chunking_mode == 'default':
+    # This block will execute if chunking_mode was 'default' initially, or if 'semantic' failed and fell back here.
+    if chunking_mode == 'default':
         logger.info(
             f"Applying default recursive character chunking with size={chunking_config.chunk_size} and overlap={chunking_config.chunk_overlap}.")
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunking_config.chunk_size,
             chunk_overlap=chunking_config.chunk_overlap
         )
-        split_chunks = splitter.split_documents(documents)
-        for idx, chunk in enumerate(split_chunks):
-            original_doc_id = chunk.metadata.get("original_doc_id", "")
-            if reproducible_ids:
-                content_hash = hashlib.sha256(chunk.page_content.encode('utf-8')).hexdigest()
-                generated_chunk_id = f"{original_doc_id}-{idx}-{content_hash[:8]}"
+        split_chunks_raw = splitter.split_documents(documents)  # This should return LangChainDocuments
+
+        normalized_chunks: List[LangChainDocument] = []
+        for idx, item in enumerate(split_chunks_raw):
+            logger.debug(
+                f"[DEBUG] _get_chunks_from_documents/default: raw_chunk_item #{idx} type: {type(item)}, content_snippet: {str(item)[:100]}")  # NEW DEBUG LOG
+
+            if isinstance(item, LangChainDocument):
+                normalized_chunks.append(item)
+            elif isinstance(item, tuple) and len(item) >= 2:
+                page_content, metadata = item[0], item[1] if isinstance(item[1], dict) else {}
+                chunk_doc = LangChainDocument(page_content=page_content, metadata=metadata)
+                normalized_chunks.append(chunk_doc)  # CORRECTED: Append the converted Document
+                logger.debug(
+                    f"[Chunk Normalize] Tuple found at #{idx} – converted to LangChainDocument in _get_chunks_from_documents/default.")
             else:
-                generated_chunk_id = str(uuid.uuid4())
-            chunk.id = generated_chunk_id
-            chunk.metadata["chunk_id"] = generated_chunk_id
-            chunks.append(chunk)
-        logger.info(f"Default chunking resulted in {len(chunks)} chunks.")
+                logger.warning(
+                    f"[Chunk Normalize] Unexpected type at #{idx}: {type(item)} — skipping in _get_chunks_from_documents/default. Content: {str(item)[:100]}")
+                continue
 
-    if not chunks:
-        raise ValueError("No chunks were generated after document splitting.")
-    return chunks
+        # Correctly populate final_chunks_list from normalized_chunks
+        for idx, d in enumerate(normalized_chunks):
+            cid = _generate_chunk_id(d.page_content, d.metadata.get('original_doc_id', ''), reproducible_ids, idx)
+            final_chunks_list.append(
+                LangChainDocument(
+                    page_content=d.page_content,
+                    metadata={**d.metadata, "chunk_id": cid},
+                    id=cid
+                )
+            )
+        logger.info(f"Default chunking resulted in {len(final_chunks_list)} chunks.")
+        return final_chunks_list
+
+    # If no mode executed successfully or yielded chunks. This return should ideally be unreachable.
+    return []
 
 
-async def load_documents_from_source(source: DataSource, agent_config: AgentConfig, reproducible_ids: bool) -> list[LangChainDocument]:
+async def load_documents_from_source(source: DataSource, agent_config: AgentConfig, reproducible_ids: bool) -> list[
+    LangChainDocument]:
     """
     Dispatcher function that calls the appropriate loader based on the source type,
     passing the full agent_config for policy application and scaling settings,
@@ -139,7 +177,6 @@ async def load_documents_from_source(source: DataSource, agent_config: AgentConf
     logger.info(f"Dispatching to loader for source type: '{source_type}'")
     loaded_docs: List[LangChainDocument] = []
 
-    # Each loader's 'load' function should now accept a 'source' argument if it needs it for metadata enrichment.
     loader_args = {'agent_config': agent_config, 'source': source}
 
     try:
@@ -194,124 +231,118 @@ async def load_documents_from_source(source: DataSource, agent_config: AgentConf
                      exc_info=True)
         return []
 
+    final_loaded_docs = []
     for idx, doc in enumerate(loaded_docs):
+        if not isinstance(doc, LangChainDocument):
+            logger.error(
+                f"DEBUG: Invalid document type returned by loader: Expected LangChainDocument, got {type(doc)}. Skipping. Content snippet: {str(doc)[:100]}")
+            continue
+
+        # Create a copy of metadata to ensure we don't modify original objects if they are shared
+        metadata_copy = doc.metadata.copy()
+
         # Ensure 'source' metadata is consistently added/updated from the DataSource object
-        doc.metadata['source_type'] = source.type # Consistently set source_type from DataSource
+        metadata_copy['source_type'] = source.type
         if source.path:
-            doc.metadata['source_path'] = source.path # Detailed path
+            metadata_copy['source_path'] = source.path
         if source.url:
-            doc.metadata['source_url'] = source.url # Detailed URL
+            metadata_copy['source_url'] = source.url
         if source.db_connection:
-            doc.metadata['source_db_connection'] = source.db_connection # Detailed DB connection string
+            metadata_copy['source_db_connection'] = source.db_connection
 
         # Original doc ID generation as before
-        source_identifier = doc.metadata.get('source', source.path or source.url or source.type)
+        source_identifier = metadata_copy.get('source', source.path or source.url or source.type)
         if reproducible_ids:
             hash_input = f"{source_identifier}-{idx}-{doc.page_content}"
-            doc.metadata['original_doc_id'] = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
+            metadata_copy['original_doc_id'] = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
         else:
-            doc.metadata['original_doc_id'] = str(uuid.uuid4())
-    return loaded_docs
+            metadata_copy['original_doc_id'] = str(uuid.uuid4())
+
+        # Create a new LangChainDocument instance with updated metadata and original ID
+        new_doc = LangChainDocument(page_content=doc.page_content, metadata=metadata_copy, id=doc.id)
+        final_loaded_docs.append(new_doc)
+
+    return final_loaded_docs
 
 
 async def embed_agent_data(config: AgentConfig) -> bool:
     """
-    Main embedding pipeline. Loads, chunks, stores documents asynchronously, and saves a
-    raw text copy of chunks for scalable BM25 initialization.
-    Returns True if a vector store was created, False otherwise.
+    Main pipeline: load, chunk, filter metadata, build vector store, save BM25.
     """
-    logger.info(f"[EMBED CONFIG] chunking.mode={config.chunking.mode}, vector_store.type={config.vector_store.type}")
-    logger.info(f"Starting data embedding process for agent: '{config.name}'")
-
-    loading_tasks = [
-        load_documents_from_source(source, config, config.reproducible_ids)
-        for source in config.sources or []
-    ]
-
-    all_loaded_docs_lists = await asyncio.gather(*loading_tasks, return_exceptions=True)
-
-    all_docs = []
-    for loaded_docs_list in all_loaded_docs_lists:
-        if isinstance(loaded_docs_list, Exception):
-            logger.error(f"A document loading task failed: {loaded_docs_list}", exc_info=True)
-            continue
-        validated_docs = [doc for doc in loaded_docs_list if doc.page_content and doc.page_content.strip()]
-        all_docs.extend(validated_docs)
-
-    if not all_docs:
-        logger.info(
-            f"No valid documents found for agent '{config.name}' from any specified sources. Skipping vector store creation.")
+    logger.info(f"Embedding for agent: {config.name}")
+    # 1) Load
+    tasks = [load_documents_from_source(s, config, config.reproducible_ids) for s in config.sources or []]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    docs = []
+    for res in results:
+        if isinstance(res, Exception):
+            logger.error("Loader task failed", exc_info=True)
+        else:
+            docs.extend(res)
+    if not docs:
+        logger.info("No documents to embed.")
         return False
 
-    all_docs.sort(key=lambda d: d.metadata.get("original_doc_id", ""))
-    logger.info(f"Loaded a total of {len(all_docs)} valid documents from all sources.")
+    # 2) Chunk
+    docs.sort(key=lambda d: d.metadata.get('original_doc_id', ''))
+    chunks = _get_chunks_from_documents(docs, config.chunking, config.embedding_model, config.reproducible_ids)
+    if not chunks:
+        logger.info("No chunks generated.")
+        return False
 
+    for i, c in enumerate(chunks):
+        logger.debug(f"Chunk #{i} type: {type(c)}")
+
+
+    # 3) Filter metadata in batch
+    # This loop applies filter_complex_metadata to each chunk individually
+    # filter_complex_metadata expects a Document and returns a Document with filtered metadata.
+    chunks = filter_complex_metadata(chunks)
+    if not chunks:
+        logger.info("No valid chunks after metadata filtering.")
+        return False
+
+    # 4) Build store
+    store_dir = os.path.join(_VECTORSTORE_DIR, config.name)
+    os.makedirs(store_dir, exist_ok=True)
+    embeddings = get_embedding_model(config.embedding_model)
+    vs = config.vector_store
     try:
-        langchain_embeddings = get_embedding_model(config.embedding_model)
-
-        chunks = _get_chunks_from_documents(
-            documents=all_docs,
-            chunking_config=config.chunking,
-            embedding_model_name=config.embedding_model,
-            reproducible_ids=config.reproducible_ids,
-        )
-
-        # Ensure chunks are not empty before attempting vector store creation
-        if not chunks:
-            logger.info(f"No chunks generated for agent '{config.name}'. Skipping vector store creation.")
-            return False
-
-        vs_config = config.vector_store
-        db_type = vs_config.type
-        vectorstore_path = os.path.join(_VECTORSTORE_DIR, config.name)
-
-        os.makedirs(vectorstore_path, exist_ok=True, mode=0o750)
-
-        logger.info(f"Creating vector store of type '{db_type}' for agent '{config.name}' at {vectorstore_path}")
-
-        if db_type == 'faiss':
-            db = await asyncio.to_thread(FAISS.from_documents, chunks, langchain_embeddings)
-            await asyncio.to_thread(db.save_local, vectorstore_path)
-        elif db_type == 'chroma':
-            await asyncio.to_thread(Chroma.from_documents, chunks, langchain_embeddings,
-                                    persist_directory=vectorstore_path)
-        elif db_type == 'qdrant':
-            await asyncio.to_thread(Qdrant.from_documents, chunks, langchain_embeddings, host=vs_config.qdrant_host,
-                                    port=vs_config.qdrant_port,
-                                    path=None if vs_config.qdrant_host else vectorstore_path,
-                                    collection_name=config.name)
-        elif db_type == 'pinecone':
-            pc_api_key = get_api_key("pinecone")
-            PineconeClient(api_key=pc_api_key)
-            await asyncio.to_thread(PineconeLangChain.from_documents, chunks, langchain_embeddings,
-                                    index_name=vs_config.pinecone_index_name)
-        elif db_type == 'mongodb_atlas':
-            conn_string = get_api_key("mongodb")
-            for chunk in chunks:
-                chunk.metadata['_id'] = chunk.id
-            await asyncio.to_thread(MongoDBAtlasVectorSearch.from_documents, documents=chunks,
-                                    embedding=langchain_embeddings,
-                                    connection_string=conn_string,
-                                    namespace=f"{vs_config.mongodb_db_name}.{vs_config.mongodb_collection_name}",
-                                    index_name=vs_config.mongodb_index_name)
+        if vs.type == 'faiss':
+            db = await asyncio.to_thread(FAISS.from_documents, chunks, embeddings)
+            await asyncio.to_thread(db.save_local, store_dir)
+        elif vs.type == 'chroma':
+            chroma_dir = os.path.join(store_dir, 'chroma_db')
+            db = await asyncio.to_thread(Chroma.from_documents, chunks, embeddings, persist_directory=chroma_dir)
+        elif vs.type == 'qdrant':
+            db = await asyncio.to_thread(Qdrant.from_documents, chunks, embeddings,
+                                         host=vs.qdrant_host, port=vs.qdrant_port, collection_name=config.name)
+        elif vs.type == 'pinecone':
+            PineconeClient(api_key=get_api_key('pinecone'))
+            db = await asyncio.to_thread(PineconeLangChain.from_documents, chunks, embeddings,
+                                         index_name=vs.pinecone_index_name)
+        elif vs.type == 'mongodb_atlas':
+            for c in chunks:
+                c.metadata['_id'] = c.id
+            db = await asyncio.to_thread(
+                MongoDBAtlasVectorSearch.from_documents,
+                documents=chunks,
+                embedding=embeddings,
+                connection_string=get_api_key('mongodb'),
+                namespace=f"{vs.mongodb_db_name}.{vs.mongodb_collection_name}",
+                index_name=vs.mongodb_index_name
+            )
         else:
-            raise ValueError(f"Unsupported vector store type: {db_type}")
-
-        logger.info(f"Successfully created and populated vector store for agent '{config.name}'.")
-
-        bm25_docs_path = os.path.join(_VECTORSTORE_DIR, config.name, "bm25_documents.jsonl")
-
-        def _write_bm25_chunks_to_file():
-            with open(bm25_docs_path, 'w', encoding='utf-8') as f:
-                for chunk in chunks:
-                    f.write(json.dumps({"id": chunk.id, "page_content": chunk.page_content}) + "\n")
-
-        await asyncio.to_thread(_write_bm25_chunks_to_file)
-
-        logger.info(f"Saved {len(chunks)} chunks for scalable BM25 retrieval at {bm25_docs_path}")
-        logger.info(f"Successfully created vector store and BM25 source for agent '{config.name}'.")
-        return True
-
+            raise ValueError(f"Unsupported store: {vs.type}")
     except Exception as e:
-        logger.error(f"Failed to create vector store for agent '{config.name}'. Error: {e}", exc_info=True)
-        raise VectorStoreCreationError(f"Vector store creation failed for agent '{config.name}'.") from e
+        logger.error("Store creation failed", exc_info=True)
+        raise VectorStoreCreationError from e
+
+    # 5) Save BM25
+    bm25_path = os.path.join(store_dir, 'bm25_documents.jsonl')
+    with open(bm25_path, 'w', encoding='utf-8') as f:
+        for c in chunks:
+            f.write(json.dumps({'id': c.id, 'page_content': c.page_content}) + '\n')
+
+    logger.info(f"Finished embedding for {config.name}")
+    return True
