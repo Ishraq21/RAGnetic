@@ -1,17 +1,5 @@
 // app/static/js/ingestion_modal_logic.js
 
-// These global variables are expected to be defined in agent_interface.html's script.
-// They are accessed directly through the closure or passed to functions.
-// const API_BASE_URL;
-// const WS_URL;
-// let loggedInUserToken;
-// let loggedInDbUserId;
-// const agentSelect; // The main chat's agent selector
-// const showToast; // Function from agent_interface.html to display toasts
-// const ingestionModal; // The main modal container (from agent_interface.html)
-// const openIngestionModalBtn; // The button that opens the modal
-// const closeIngestionModalBtn; // The close button inside the modal
-
 // Define the IngestionModal global object immediately upon script parse
 window.IngestionModal = (function() {
     // Private variables for the module scope
@@ -25,9 +13,13 @@ window.IngestionModal = (function() {
     let parallelIngestionCheckbox;
     let numWorkersGroup;
     let numIngestionWorkersInput;
-    let ingestionTabButtons;
-    let ingestNewTabContent;
     let closeIngestionModalBtn;
+
+    // UI elements for panel switching
+    let ingestionFormPanel;
+    let ingestionStatusPanel;
+    let backToIngestionFormBtn;
+
 
     /**
      * Initializes the ingestion modal's JavaScript logic and elements.
@@ -35,7 +27,7 @@ window.IngestionModal = (function() {
      * has been loaded and inserted into the DOM.
      */
     function init() {
-        // Basic check for required globals, now within the init function
+        // Basic check for required globals from agent_interface.html
         if (typeof API_BASE_URL === 'undefined' || typeof WS_URL === 'undefined' ||
             typeof loggedInUserToken === 'undefined' || typeof loggedInDbUserId === 'undefined' ||
             typeof agentSelect === 'undefined' || typeof showToast === 'undefined' ||
@@ -56,10 +48,12 @@ window.IngestionModal = (function() {
         parallelIngestionCheckbox = ingestionModal.querySelector('#parallelIngestion');
         numWorkersGroup = ingestionModal.querySelector('#numWorkersGroup');
         numIngestionWorkersInput = ingestionModal.querySelector('#numIngestionWorkers');
-        ingestionTabButtons = ingestionModal.querySelectorAll('.ingestion-tabs .tab-button');
-        ingestNewTabContent = ingestionModal.querySelector('#ingest-new-tab');
-
         closeIngestionModalBtn = ingestionModal.querySelector('#close-ingestion-modal');
+
+        // Panel elements
+        ingestionFormPanel = ingestionModal.querySelector('#ingestion-form-panel');
+        ingestionStatusPanel = ingestionModal.querySelector('#ingestion-status-panel');
+        backToIngestionFormBtn = ingestionModal.querySelector('#backToIngestionFormBtn');
 
 
         // Attach all event listeners
@@ -79,13 +73,34 @@ window.IngestionModal = (function() {
         if (ingestionForm) {
             ingestionForm.addEventListener('submit', handleIngestionFormSubmit);
         }
-
-        ingestionTabButtons.forEach(button => {
-            button.addEventListener('click', () => handleTabSwitch(button.dataset.tab));
-        });
+        if (backToIngestionFormBtn) {
+            backToIngestionFormBtn.addEventListener('click', showIngestionFormPanel);
+        }
 
         // Initial setup for the modal state
         resetIngestionModalState();
+    }
+
+    // Function to switch to the form panel
+    function showIngestionFormPanel() {
+        if (ingestionFormPanel) {
+            ingestionFormPanel.style.display = 'block'; // Or 'flex' if you style it as flex
+        }
+        if (ingestionStatusPanel) {
+            ingestionStatusPanel.style.display = 'none';
+        }
+        // Do NOT call resetIngestionModalState here, as it calls showIngestionFormPanel,
+        // which would create an infinite loop. resetIngestionModalState should be the entry point for resetting.
+    }
+
+    // Function to switch to the status panel
+    function showIngestionStatusPanel() {
+        if (ingestionFormPanel) {
+            ingestionFormPanel.style.display = 'none';
+        }
+        if (ingestionStatusPanel) {
+            ingestionStatusPanel.style.display = 'block'; // Or 'flex'
+        }
     }
 
     function resetIngestionModalState() {
@@ -99,54 +114,19 @@ window.IngestionModal = (function() {
             startIngestionBtn.disabled = false;
             startIngestionBtn.textContent = "Start Ingestion";
         }
-        // Ensure sourceType has a default value, or set one if it's empty
         if (ingestionSourceTypeSelect) {
             if (!ingestionSourceTypeSelect.value) {
-                ingestionSourceTypeSelect.value = 'local_upload'; // Set a default
+                ingestionSourceTypeSelect.value = 'local_upload';
             }
             renderIngestionSourceFields(ingestionSourceTypeSelect.value);
         }
-        showTab('ingest-new-tab'); // Show the first tab by default (and now, only)
+        // Ensure form panel is visible and status panel is hidden on reset/initial open
+        showIngestionFormPanel(); // This is the correct place to set the initial state
     }
 
     function closeIngestionModal() {
         if (ingestionModal) ingestionModal.style.display = 'none';
-        resetIngestionModalState();
-    }
-
-    // Tab switching logic (simplified as there's only one active tab now)
-    function handleTabSwitch(tabId) {
-        ingestionTabButtons.forEach(button => {
-            button.classList.remove('active');
-        });
-        ingestionModal.querySelectorAll('.tab-content').forEach(content => {
-            content.classList.remove('active');
-        });
-
-        const targetButton = ingestionModal.querySelector(`.tab-button[data-tab="${tabId}"]`);
-        const targetContent = ingestionModal.querySelector(`#${tabId}`);
-
-        if (targetButton) targetButton.classList.add('active');
-        if (targetContent) targetContent.classList.add('active');
-
-
-    }
-
-    function showTab(tabId) {
-        ingestionTabButtons.forEach(button => {
-            if (button.dataset.tab === tabId) {
-                button.classList.add('active');
-            } else {
-                button.classList.remove('active');
-            }
-        });
-        ingestionModal.querySelectorAll('.tab-content').forEach(content => {
-            if (content.id === tabId) {
-                content.classList.add('active');
-            } else {
-                content.classList.remove('active');
-            }
-        });
+        resetIngestionModalState(); // Ensures it resets to the form view
     }
 
     // Helper for ingestion modal status messages
@@ -162,7 +142,7 @@ window.IngestionModal = (function() {
         ingestionStatusMessagesDiv.scrollTop = ingestionStatusMessagesDiv.scrollHeight;
     }
 
-    // Public method: loadIngestionAgents (remains, as agent selection is still needed)
+    // Public method: loadIngestionAgents
     async function loadIngestionAgents(currentChatAgentName) {
         if (!loggedInUserToken) {
             addIngestionStatusMessage('Authentication token missing. Cannot load agents.', 'error');
@@ -196,7 +176,7 @@ window.IngestionModal = (function() {
         }
     }
 
-
+    // Public method: renderIngestionSourceFields
     function renderIngestionSourceFields(sourceType) {
         if (!ingestionSourceFieldsDiv) {
             console.warn("ingestionSourceFieldsDiv not found. Cannot render source fields.");
@@ -321,19 +301,24 @@ window.IngestionModal = (function() {
 
     async function handleIngestionFormSubmit(event) {
         event.preventDefault();
+
+        // Immediately switch to the status panel
+        showIngestionStatusPanel();
+
         addIngestionStatusMessage('Ingestion process started:', 'info'); // Clear and reset
         ingestionProgressBar.style.width = '0%';
         ingestionProgressBar.textContent = '';
-        startIngestionBtn.disabled = true;
-        startIngestionBtn.textContent = "Ingesting...";
+        // startIngestionBtn is part of the form, so its visibility is handled by the panel.
+        // Its state (disabled/text) will be handled when returning to the form.
 
         const selectedAgentName = ingestionAgentNameSelect.value;
         const sourceType = ingestionSourceTypeSelect.value;
+        // The reproducibleIds checkbox is part of the form, its value is read once on submit
         const reproducibleIds = document.getElementById('reproducibleIds').checked;
         const parallelIngestion = document.getElementById('parallelIngestion').checked;
         const numIngestionWorkers = document.getElementById('numIngestionWorkers').value ? parseInt(document.getElementById('numIngestionWorkers').value) : undefined;
 
-        let sourcesToAdd = []; // This will hold the new source objects for the agent config
+        let sourcesToAdd = [];
 
         try {
             if (!loggedInUserToken || !loggedInDbUserId) {
@@ -516,18 +501,19 @@ window.IngestionModal = (function() {
             console.error('Ingestion process error:', error);
             ingestionProgressBar.style.width = '0%';
             ingestionProgressBar.textContent = '';
-            startIngestionBtn.disabled = false;
-            startIngestionBtn.textContent = "Start Ingestion";
+            // If an error occurs, it's generally good to show the "Ingest More Data" button
+            // so the user can go back and fix the form.
         }
-    } // Closes handleIngestionFormSubmit function
+    }
 
     // Expose public methods
     return {
         init: init,
         loadAgents: loadIngestionAgents,
         renderIngestionSourceFields: renderIngestionSourceFields,
-        showTab: showTab,
-        closeIngestionModal: closeIngestionModal
+        closeIngestionModal: closeIngestionModal,
+        // showIngestionFormPanel is exposed to allow agent_interface.html to reset to form view on modal open
+        showIngestionFormPanel: showIngestionFormPanel
     };
 
 })();

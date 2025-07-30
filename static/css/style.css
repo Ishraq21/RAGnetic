@@ -588,3 +588,252 @@ body:not(.login-body) {
     grid-template-columns: 280px 1fr;
     display: grid; /* Revert to grid for chat layout */
 }
+
+/* Enhanced Modal Content */
+.modal-content.large-modal {
+    background: linear-gradient(145deg, var(--card-background) 0%, rgba(30, 30, 30, 0.9) 100%);
+    border: 1px solid var(--border-color);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7), var(--futuristic-glow); /* More pronounced glow */
+    border-radius: 16px; /* Slightly more rounded */
+    padding: 3rem; /* More internal space */
+    display: flex; /* Use flexbox for internal layout */
+    flex-direction: column;
+    gap: 2rem; /* Space between main sections */
+
+
+    max-height: 85vh; /* Reduced from 90vh (example) or whatever it was before */
+    overflow-y: auto; /* Ensure scrollability if content exceeds max-height */
+}
+
+.modal-content h3 {
+    color: white;
+    margin-bottom: 1.5rem; /* Space below title */
+}
+
+/* Sections within the form */
+.form-section {
+    background-color: rgba(30, 30, 30, 0.6); /* Slightly lighter background for sections */
+    border: 1px solid rgba(51, 51, 51, 0.7); /* Subtle border for sections */
+    border-radius: 10px;
+    padding: 1.5rem 2rem; /* Consistent padding */
+    margin-bottom: 1.5rem; /* Space between sections */
+    box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.3); /* Inner shadow for depth */
+}
+
+.form-section:last-of-type {
+    margin-bottom: 0; /* No margin after the last section */
+}
+
+.form-section h3 {
+    color: var(--text-color);
+    margin-top: 0;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(99, 93, 255, 0.2); /* Accent border below heading */
+}
+
+/* Form Group Styling */
+.modal-content .form-group {
+    margin-bottom: 1.25rem; /* More consistent spacing for form groups */
+}
+
+.modal-content label {
+    font-size: 0.9em; /* Slightly smaller label for density */
+    color: var(--muted-text); /* Muted color for labels */
+    letter-spacing: 0.03em; /* Slight letter spacing */
+    margin-bottom: 6px; /* Reduced margin */
+    transition: color 0.2s ease-in-out;
+}
+
+/* Input, Select, Textarea common styles */
+.modal-content input[type="text"],
+.modal-content input[type="number"],
+.modal-content input[type="url"],
+.modal-content select,
+.modal-content textarea,
+.modal-content input[type="file"] {
+    background: #1a1a1a; /* Darker input background */
+    border: 1px solid var(--border-color);
+    border-radius: 6px; /* Slightly less rounded */
+    padding: 0.8rem 1rem; /* Adjusted padding */
+    font-size: 0.95em; /* Consistent font size */
+    transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+}
+
+.modal-content input[type="file"] {
+    /* Style file input button */
+    padding: 0.8rem 1rem;
+    border: 1px solid var(--border-color);
+    background-color: #2a2a2a;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.modal-content input[type="file"]::-webkit-file-upload-button {
+    background-color: var(--accent-color);
+    color: white;
+    padding: 8px 15px;
+    border-radius: 5px;
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.2s ease;
+    margin-right: 15px;
+}
+
+.modal-content input[type="file"]::-webkit-file-upload-button:hover {
+    background-color: var(--button-hover-background);
+    transform: translateY(-1px);
+}
+
+.modal-content input[type="text"]:focus,
+.modal-content input[type="url"]:focus,
+.modal-content select:focus,
+.modal-content textarea:focus,
+.modal-content input[type="file"]:focus {
+    background-color: #252525; /* Slightly lighter on focus */
+    border-color: var(--accent-color);
+    box-shadow: 0 0 12px 2px rgba(99, 93, 255, 0.6); /* Stronger glow on focus */
+}
+
+.modal-content .checkbox-group {
+    margin-top: 10px; /* Reduced margin */
+    margin-bottom: 15px; /* Consistent spacing */
+    font-size: 0.9em;
+    color: var(--text-color);
+}
+.modal-content .checkbox-group input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border-color);
+    border-radius: 4px;
+    background-color: #2a2a2a;
+    cursor: pointer;
+    position: relative;
+    margin-right: 10px;
+    transition: all 0.2s ease;
+}
+
+.modal-content .checkbox-group input[type="checkbox"]:checked {
+    background-color: var(--accent-color);
+    border-color: var(--accent-color);
+    box-shadow: 0 0 8px rgba(99, 93, 255, 0.5);
+}
+
+.modal-content .checkbox-group input[type="checkbox"]:checked::before {
+    content: '\2713'; /* Checkmark character */
+    display: block;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 14px;
+    color: white;
+}
+
+.modal-content .info {
+    font-size: 0.75em; /* Slightly smaller info text */
+    margin-top: 8px; /* Adjusted margin */
+    margin-bottom: 0;
+}
+
+/* Ingestion Status Messages */
+.modal-content #ingestion-status-messages {
+    background-color: #0d0d0d; /* Even darker background for logs */
+    border: 1px solid rgba(99, 93, 255, 0.3); /* Border with accent color */
+    box-shadow: inset 0 0 10px rgba(99, 93, 255, 0.15); /* Inner glow for logs */
+    max-height: 200px; /* Slightly reduced max height for compactness */
+    font-family: 'JetBrains Mono', monospace; /* Monospaced font for logs */
+    font-size: 0.85em; /* Smaller font for logs */
+    line-height: 1.4;
+    padding: 1rem;
+}
+
+.modal-content .status-message {
+    padding: 3px 0; /* Reduced padding */
+    margin-bottom: 5px; /* Reduced margin */
+    border-bottom: 1px dotted rgba(51, 51, 51, 0.5); /* Dotted border for subtle separation */
+}
+
+/* Progress Bar */
+.modal-content #ingestionProgressBarContainer {
+    background-color: #222;
+    border: 1px solid var(--border-color);
+    box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.3);
+    height: 28px; /* Slightly taller progress bar */
+}
+.modal-content #ingestionProgressBar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-color) 0%, rgba(99, 93, 255, 0.7) 100%); /* Gradient for progress */
+    box-shadow: 0 0 10px rgba(99, 93, 255, 0.6); /* Glow on the bar itself */
+    font-weight: 500;
+}
+
+/* Submit Button */
+.modal-content button[type="submit"] {
+    font-size: 1.2em; /* Larger button text */
+    padding: 14px 25px; /* More padding */
+    border-radius: 10px; /* Slightly more rounded button */
+    background: linear-gradient(145deg, var(--button-background) 0%, var(--button-hover-background) 100%); /* Gradient */
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4), 0 0 15px rgba(99, 93, 255, 0.4); /* Button shadow and subtle glow */
+    transition: all 0.2s ease-in-out;
+}
+
+.modal-content button[type="submit"]:hover:not(:disabled) {
+    transform: translateY(-3px) scale(1.02); /* More dynamic hover */
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), 0 0 20px rgba(99, 93, 255, 0.6); /* Enhanced hover glow */
+}
+
+.modal-content button[type="submit"]:active {
+    transform: translateY(0); /* Press effect */
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+}
+
+.modal-content button[type="submit"]:disabled {
+    background: #333; /* Darker disabled background */
+    color: var(--muted-text);
+    box-shadow: none;
+    transform: translateY(0);
+    cursor: not-allowed;
+}
+
+/* Close button specific style for sleekness */
+.modal-content .close-button {
+    font-size: 2em; /* Slightly smaller for sleekness */
+    color: var(--muted-text);
+    top: 20px; /* Adjusted position */
+    right: 20px;
+    border-radius: 50%;
+    width: 35px;
+    height: 35px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0.2);
+    transition: background-color 0.2s, color 0.2s, transform 0.2s;
+}
+
+.modal-content .close-button:hover {
+    background-color: var(--border-color);
+    color: var(--text-color);
+    transform: rotate(90deg); /* Futuristic spin effect */
+}
+
+/* Remove old tab-related styles no longer needed if only one panel */
+/* If .ingestion-tabs, .tab-button, .tab-content (except for primary one) are removed, remove their styles. */
+.ingestion-tabs {
+    /* This rule will likely be removed if the div.ingestion-tabs is gone */
+    display: none; /* Hide if no longer used */
+}
+
+.tab-button {
+    /* This rule will likely be removed if no tab buttons exist */
+    display: none; /* Hide if no longer used */
+}
+/* Ensure the primary content is visible by default without 'active' class from a tab system */
+#ingest-new-tab {
+    display: block; /* Ensure it's always visible now that it's the only panel */
+    padding: 0; /* Remove padding if added for tab content */
+}
