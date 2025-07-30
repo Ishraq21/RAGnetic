@@ -6,7 +6,7 @@ import json
 import asyncio
 from typing import List, Optional, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks, Query, File, UploadFile
 
 from app.core.config import get_path_settings, get_api_key
 from app.core.security import get_http_api_key, PermissionChecker, \
@@ -26,6 +26,7 @@ from langchain_qdrant import Qdrant
 from langchain_pinecone import Pinecone as PineconeLangChain
 from langchain_mongodb import MongoDBAtlasVectorSearch
 from pinecone import Pinecone as PineconeClient
+from pathlib import Path
 
 # IMPORTS for connection checks
 from sqlalchemy import create_engine, text
@@ -38,6 +39,7 @@ logger = logging.getLogger("ragnetic")
 _APP_PATHS = get_path_settings()
 _AGENTS_DIR = _APP_PATHS["AGENTS_DIR"]
 _VECTORSTORE_DIR = _APP_PATHS["VECTORSTORE_DIR"]
+_DATA_DIR = _APP_PATHS["DATA_DIR"]
 
 # --- API v1 Router for Agents ---
 router = APIRouter(prefix="/api/v1/agents", tags=["Agents API"])
@@ -329,3 +331,38 @@ async def inspect_agent_api(
         validation_report=validation_report
     )
 
+
+
+
+@router.post("/upload-file", summary="Upload a local file for ingestion", response_model=Dict[str, str])
+async def upload_file_for_ingestion(
+    file: UploadFile = File(..., description="The file to upload."),
+    current_user: User = Depends(PermissionChecker(["agent:create", "agent:update"]))
+) -> Dict[str, str]:
+    """
+    Receives a file upload, saves it to a temporary location, and returns its server path.
+    This path can then be used in the agent's data source configuration for 'local' type.
+    Requires 'agent:create' or 'agent:update' permission.
+    """
+    upload_dir = _DATA_DIR / "uploaded_temp" # Temporary directory for uploads
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    # Sanitize filename to prevent directory traversal
+    filename = Path(file.filename).name
+    file_location = upload_dir / filename
+    print(f"Uploading {filename} to {file_location}")
+
+    try:
+        with open(file_location, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        logger.info(f"Successfully uploaded file: {file_location}")
+        # Return the absolute path as expected by the frontend
+        return {"file_path": str(file_location.resolve())}
+    except Exception as e:
+        logger.error(f"Error uploading file {filename}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not upload file: {e}"
+        )
+    finally:
+        await file.close()

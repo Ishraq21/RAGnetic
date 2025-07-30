@@ -32,6 +32,66 @@
         </div>
     </div>
 
+    <div id="ingestion-modal" class="modal">
+        <div class="modal-content large-modal">
+            <span class="close-button" id="close-ingestion-modal">&times;</span>
+            <h2>Document & Data Ingestion</h2>
+            <form id="ingestion-form">
+                <div class="form-group">
+                    <label for="ingestionAgentName">Select Agent (Knowledge Base):</label>
+                    <select id="ingestionAgentName" name="agentName" required>
+                        <option value="">Loading agents...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="ingestionSourceType">Source Type:</label>
+                    <select id="ingestionSourceType" name="sourceType" required>
+                        <option value="local_upload">Local File Upload (via browser)</option>
+                        <option value="local">Local File Path (on server)</option>
+                        <option value="url">Web URL</option>
+                        <option value="db">Database (SQL)</option>
+                        <option value="code_repository">Code Repository (Git)</option>
+                        <option value="gdoc">Google Drive</option>
+                        <option value="api">REST API</option>
+                        <option value="web_crawler">Web Crawler</option>
+                        </select>
+                </div>
+
+                <div id="ingestion-source-fields">
+                    <div class="form-group file-upload-group">
+                        <label for="fileInput">Choose File(s) from your computer:</label>
+                        <input type="file" id="fileInput" name="fileInput" multiple>
+                        <p class="info">Select one or more files to upload directly from your local machine. Supported types include PDF, DOCX, CSV, TXT, Jupyter Notebooks, Parquet files, and IaC files (YAML/Terraform).</p>
+                    </div>
+                </div>
+
+                <div class="checkbox-group">
+                    <input type="checkbox" id="reproducibleIds" name="reproducibleIds" checked>
+                    <label for="reproducibleIds">Use Reproducible IDs (Consistent chunk hashing)</label>
+                </div>
+                 <div class="checkbox-group">
+                    <input type="checkbox" id="parallelIngestion" name="parallelIngestion" checked>
+                    <label for="parallelIngestion">Enable Parallel Ingestion (for directories, etc.)</label>
+                </div>
+                 <div class="form-group" id="numWorkersGroup" style="display: none;">
+                    <label for="numIngestionWorkers">Number of Parallel Workers (defaults to CPU count):</label>
+                    <input type="number" id="numIngestionWorkers" name="numIngestionWorkers" min="1">
+                </div>
+
+
+                <button type="submit" id="startIngestionBtn">Start Ingestion</button>
+            </form>
+
+            <div id="ingestion-status-messages">
+                <p class="info-msg">Real-time ingestion progress and logs will appear here:</p>
+            </div>
+
+            <div id="ingestionProgressBarContainer">
+                <div id="ingestionProgressBar"></div>
+            </div>
+        </div>
+    </div>
     <aside id="chat-history-sidebar">
         <div class="sidebar-top">
             <button id="new-chat-btn">
@@ -43,6 +103,10 @@
                 <option value="{{ a.name }}" {% if a.name == agent %}selected{% endif %}>{{ a.display_name }}</option>
                 {% endfor %}
             </select>
+            <button id="open-ingestion-modal-btn">
+                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-database"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/><path d="M3 19A9 3 0 0 0 21 19"/></svg>
+                <span>Ingest Data</span>
+            </button>
         </div>
         <h3 class="history-heading">Recent</h3>
         <ul id="history-list"></ul>
@@ -66,6 +130,9 @@
         </div>
     </div>
     <script>
+        const API_BASE_URL = window.location.origin + '/api/v1'; // Moved to top for global access
+        const WS_URL = 'ws://' + window.location.host + '/ws'; // Moved to top for global access
+
         const agentSelect = document.getElementById('agent-select');
         const messagesDiv = document.getElementById('messages');
         const inputField = document.getElementById('query-input');
@@ -87,6 +154,20 @@
 
         const logoutBtn = document.getElementById('logout-btn');
 
+        // NEW: Ingestion Modal elements
+        const ingestionModal = document.getElementById('ingestion-modal');
+        const openIngestionModalBtn = document.getElementById('open-ingestion-modal-btn');
+        const closeIngestionModalBtn = document.getElementById('close-ingestion-modal');
+        const ingestionForm = document.getElementById('ingestion-form');
+        const ingestionAgentNameSelect = document.getElementById('ingestionAgentName');
+        const ingestionSourceTypeSelect = document.getElementById('ingestionSourceType');
+        const ingestionSourceFieldsDiv = document.getElementById('ingestion-source-fields');
+        const ingestionStatusMessagesDiv = document.getElementById('ingestion-status-messages');
+        const ingestionProgressBar = document.getElementById('ingestionProgressBar');
+        const startIngestionBtn = document.getElementById('startIngestionBtn');
+        const parallelIngestionCheckbox = document.getElementById('parallelIngestion');
+        const numWorkersGroup = document.getElementById('numWorkersGroup');
+        const numIngestionWorkersInput = document.getElementById('numIngestionWorkers');
 
         let agent, thread_id, socket;
         let confirmCallback = null;
@@ -252,7 +333,8 @@
                 messagesDiv.innerHTML = '';
                 history.forEach(msg => { if (msg.type === 'human') appendUserMessage(msg.content); else if (msg.type === 'ai') { const agentMsgBubble = createAgentMessageBubble(); agentMsgBubble.dataset.rawMarkdown = msg.content; const contentDiv = agentMsgBubble.querySelector('.content'); contentDiv.innerHTML = marked.parse(msg.content); agentMsgBubble.dataset.streaming = 'false'; renderCodeblocks(contentDiv); renderMath(contentDiv); } });
                 setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 100);
-            } catch (error) {
+            }
+            catch (error) {
                 console.error("Failed to fetch history:", error);
                 showToast("Could not connect to server to load session.", true);
             }
@@ -464,6 +546,412 @@
         modalConfirmBtn.addEventListener('click', () => { if (confirmCallback) confirmCallback(); confirmationModal.style.display = 'none'; confirmCallback = null; });
         inputField.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleFormSubmit(); } });
         inputField.addEventListener('input', () => { inputField.style.height = 'auto'; inputField.style.height = `${inputField.scrollHeight}px`; });
+
+
+        // === NEW INGESTION MODAL LOGIC ===
+        openIngestionModalBtn.addEventListener('click', async () => {
+            if (!loggedInUserToken || !loggedInDbUserId) {
+                showToast("Please log in to ingest data.", true);
+                window.location.href = '/login';
+                return;
+            }
+            await loadIngestionAgents(agentSelect.value); // Pass currently selected agent
+            renderIngestionSourceFields(ingestionSourceTypeSelect.value); // Render fields for default type
+            ingestionModal.style.display = 'flex'; // Show modal
+        });
+
+        closeIngestionModalBtn.addEventListener('click', () => {
+            ingestionModal.style.display = 'none'; // Hide modal
+            ingestionForm.reset(); // Reset the form fields
+            ingestionStatusMessagesDiv.innerHTML = '<p class="info-msg">Real-time ingestion progress and logs will appear here:</p>'; // Clear messages
+            ingestionProgressBar.style.width = '0%';
+            ingestionProgressBar.textContent = '';
+            startIngestionBtn.disabled = false;
+            startIngestionBtn.textContent = "Start Ingestion";
+        });
+
+        ingestionSourceTypeSelect.addEventListener('change', (event) => {
+            renderIngestionSourceFields(event.target.value);
+        });
+
+        parallelIngestionCheckbox.addEventListener('change', (event) => {
+            if (['local', 'code_repository', 'directory', 'web_crawler', 'local_upload'].includes(ingestionSourceTypeSelect.value)) {
+                numWorkersGroup.style.display = event.target.checked ? 'block' : 'none';
+            }
+        });
+
+        async function loadIngestionAgents(currentChatAgentName) { // Accept currentChatAgentName
+            if (!loggedInUserToken) { // Explicit check before fetch
+                addIngestionStatusMessage('Authentication token missing. Cannot load agents.', 'error');
+                return; // Stop execution
+            }
+            try {
+                const response = await fetch(`${API_BASE_URL}/agents`, {
+                    headers: { 'X-API-Key': loggedInUserToken }
+                });
+                if (response.ok) {
+                    const agents = await response.json();
+                    ingestionAgentNameSelect.innerHTML = '<option value="">-- Select an Agent --</option>';
+                    agents.forEach(agentItem => {
+                        const option = document.createElement('option');
+                        option.value = agentItem.name;
+                        option.textContent = agentItem.display_name || agentItem.name;
+                        ingestionAgentNameSelect.appendChild(option);
+                    });
+                    if (agents.length > 0) {
+                        // Pre-select the current chat agent if available, otherwise first agent
+                        ingestionAgentNameSelect.value = currentChatAgentName || agents[0].name;
+                    }
+                } else {
+                    addIngestionStatusMessage(`Error loading agents: ${response.status} - ${response.statusText}`, 'error');
+                    console.error('Failed to load agents for ingestion modal:', response.status, response.statusText);
+                }
+            } catch (error) {
+                addIngestionStatusMessage('Network error while loading agents for ingestion. Check server connection.', 'error');
+                console.error('Network error during ingestion agent load:', error);
+            }
+        }
+
+        // Helper for ingestion modal status messages
+        function addIngestionStatusMessage(message, type = 'info') {
+            const p = document.createElement('p');
+            p.className = `status-message ${type}-msg`;
+            p.textContent = message;
+            ingestionStatusMessagesDiv.appendChild(p);
+            ingestionStatusMessagesDiv.scrollTop = ingestionStatusMessagesDiv.scrollHeight;
+        }
+
+        function renderIngestionSourceFields(sourceType) {
+            ingestionSourceFieldsDiv.innerHTML = '';
+            let fieldsHtml = '';
+            numWorkersGroup.style.display = 'none'; // Hide by default
+
+            switch (sourceType) {
+                case 'local_upload':
+                    fieldsHtml = `
+                        <div class="form-group file-upload-group">
+                            <label for="fileInput">Choose File(s) from your computer:</label>
+                            <input type="file" id="fileInput" name="fileInput" multiple required>
+                            <p class="info">Select one or more files to upload directly from your local machine. Supported types include PDF, DOCX, CSV, TXT, Jupyter Notebooks, Parquet files, and IaC files (YAML/Terraform).</p>
+                        </div>
+                    `;
+                    numWorkersGroup.style.display = parallelIngestionCheckbox.checked ? 'block' : 'none';
+                    break;
+                case 'local':
+                    fieldsHtml = `
+                        <div class="form-group file-upload-group">
+                            <label for="filePath">File Path (relative to project root):</label>
+                            <input type="text" id="filePath" name="filePath" placeholder="e.g., data/my_documents/doc.txt" required>
+                            <p class="info">Ensure this path is within your RAGnetic project's configured allowed data directories.</p>
+                        </div>
+                    `;
+                    numWorkersGroup.style.display = parallelIngestionCheckbox.checked ? 'block' : 'none';
+                    break;
+                case 'url':
+                case 'web_crawler':
+                    fieldsHtml = `
+                        <div class="form-group">
+                            <label for="urlPath">URL:</label>
+                            <input type="url" id="urlPath" name="urlPath" placeholder="e.g., https://example.com/docs" required>
+                        </div>
+                    `;
+                    if (sourceType === 'web_crawler') {
+                        fieldsHtml += `
+                            <div class="form-group">
+                                <label for="maxDepth">Max Crawl Depth:</label>
+                                <input type="number" id="maxDepth" name="maxDepth" value="2" min="1">
+                            </div>
+                        `;
+                    }
+                    numWorkersGroup.style.display = parallelIngestionCheckbox.checked ? 'block' : 'none';
+                    break;
+                case 'db':
+                    fieldsHtml = `
+                        <div class="form-group">
+                            <label for="dbConnectionString">Database Connection String:</label>
+                            <input type="text" id="dbConnectionString" name="dbConnectionString" placeholder="e.g., sqlite:///data.db or postgresql://user:pass@host:port/dbname" required>
+                            <p class="info">This must be a connection string configured in your server's .ragnetic/config.ini or .env.</p>
+                        </div>
+                    `;
+                    break;
+                case 'code_repository':
+                    fieldsHtml = `
+                        <div class="form-group">
+                            <label for="repoPath">Repository URL or Local Path:</label>
+                            <input type="text" id="repoPath" name="repoPath" placeholder="e.g., https://github.com/org/repo.git or /local/path/to/repo" required>
+                            <p class="info">For local paths, ensure it's within allowed data directories.</p>
+                        </div>
+                    `;
+                    numWorkersGroup.style.display = parallelIngestionCheckbox.checked ? 'block' : 'none';
+                    break;
+                case 'gdoc':
+                    fieldsHtml = `
+                        <div class="form-group">
+                            <label for="gdocFolderId">Google Drive Folder ID (optional):</label>
+                            <input type="text" id="gdocFolderId" name="gdocFolderId" placeholder="Folder ID">
+                        </div>
+                        <div class="form-group">
+                            <label for="gdocDocumentIds">Google Drive Document IDs (comma-separated, optional):</label>
+                            <input type="text" id="gdocDocumentIds" name="gdocDocumentIds" placeholder="doc_id1,doc_id2">
+                        </div>
+                        <div class="form-group">
+                            <label for="gdocFileTypes">File Types (comma-separated, optional, e.g., 'document', 'spreadsheet'):</label>
+                            <input type="text" id="gdocFileTypes" name="gdocFileTypes" placeholder="document,spreadsheet">
+                            <p class="info">Ensure Google Drive API credentials are configured on the server ('ragnetic auth gdrive').</p>
+                        </div>
+                    `;
+                    break;
+                case 'api':
+                    fieldsHtml = `
+                        <div class="form-group">
+                            <label for="apiUrl">API Endpoint URL:</label>
+                            <input type="url" id="apiUrl" name="apiUrl" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="apiMethod">Method:</label>
+                            <select id="apiMethod" name="apiMethod">
+                                <option value="GET">GET</option>
+                                <option value="POST">POST</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="apiHeaders">Headers (JSON string, optional):</label>
+                            <textarea id="apiHeaders" name="apiHeaders" rows="3" placeholder='{"Authorization": "Bearer token"}'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="apiParams">Parameters (JSON string for GET, optional):</label>
+                            <textarea id="apiParams" name="apiParams" rows="3" placeholder='{"query": "value"}'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="apiPayload">Payload (JSON string for POST, optional):</label>
+                            <textarea id="apiPayload" name="apiPayload" rows="5" placeholder='{"data": "value"}'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="jsonPointer">JSON Pointer (optional, e.g., '/items/0'):</label>
+                            <input type="text" id="jsonPointer" name="jsonPointer" placeholder="/path/to/records">
+                            <p class="info">JSON Pointer extracts specific data from the API response.</p>
+                        </div>
+                    `;
+                    break;
+                default:
+                    fieldsHtml = `<p class="info-msg">Select a source type to configure its specific ingestion options.</p>`;
+            }
+            ingestionSourceFieldsDiv.innerHTML = fieldsHtml;
+        }
+
+        // Ingestion form submission
+        ingestionForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            ingestionStatusMessagesDiv.innerHTML = '<p class="info-msg">Ingestion process started:</p>'; // Clear and reset
+            ingestionProgressBar.style.width = '0%';
+            ingestionProgressBar.textContent = '';
+            startIngestionBtn.disabled = true;
+            startIngestionBtn.textContent = "Ingesting...";
+
+            const selectedAgentName = ingestionAgentNameSelect.value;
+            const sourceType = ingestionSourceTypeSelect.value;
+            const reproducibleIds = document.getElementById('reproducibleIds').checked;
+            const parallelIngestion = parallelIngestionCheckbox.checked;
+            const numIngestionWorkers = numIngestionWorkersInput.value ? parseInt(numIngestionWorkersInput.value) : undefined;
+
+            let sourcesToAdd = []; // This will hold the new source objects for the agent config
+
+            try {
+                if (!loggedInUserToken || !loggedInDbUserId) {
+                    throw new Error('Not authenticated. Please log in.');
+                }
+                if (!selectedAgentName) {
+                    throw new Error('Please select an agent.');
+                }
+
+                if (sourceType === 'local_upload') {
+                    const files = document.getElementById('fileInput').files;
+                    if (files.length === 0) throw new Error('No files selected for upload.');
+
+                    addIngestionStatusMessage(`Uploading ${files.length} file(s)...`, 'info');
+                    // Reset progress for new upload attempt
+                    ingestionProgressBar.style.width = '0%';
+                    ingestionProgressBar.textContent = '';
+
+                    for (let i = 0; i < files.length; i++) {
+                        const file = files[i];
+                        const formData = new FormData();
+                        formData.append('file', file);
+
+                        // Simulate progress for local file upload (client-side only)
+                        const xhr = new XMLHttpRequest();
+                        xhr.open('POST', `${API_BASE_URL}/agents/upload-file`, true); // Corrected URL
+                        xhr.setRequestHeader('X-API-Key', loggedInUserToken);
+
+                        xhr.upload.onprogress = (e) => {
+                            if (e.lengthComputable) {
+                                const percentComplete = (e.loaded / e.total) * 100;
+                                ingestionProgressBar.style.width = percentComplete + '%';
+                                ingestionProgressBar.textContent = `Uploading: ${percentComplete.toFixed(0)}%`;
+                            }
+                        };
+
+                        const uploadPromise = new Promise((resolve, reject) => {
+                            xhr.onload = () => {
+                                if (xhr.status >= 200 && xhr.status < 300) {
+                                    resolve(JSON.parse(xhr.responseText));
+                                } else {
+                                    let errorDetail = xhr.responseText;
+                                    try { errorDetail = JSON.parse(xhr.responseText).detail; } catch (e) {}
+                                    reject(new Error(`Server responded with status ${xhr.status}: ${errorDetail || xhr.statusText}`));
+                                }
+                            };
+                            xhr.onerror = () => reject(new Error('Network error during file upload.'));
+                            xhr.send(formData);
+                        });
+
+                        const uploadResult = await uploadPromise;
+                        sourcesToAdd.push({ type: 'local', path: uploadResult.file_path }); // Convert uploaded path to 'local' source type
+                        addIngestionStatusMessage(`Uploaded '${file.name}' to '${uploadResult.file_path}'`, 'success');
+                    }
+                    ingestionProgressBar.textContent = 'Uploads Complete!';
+                    ingestionProgressBar.style.width = '100%';
+                } else {
+                    // For other source types, gather data as a single source object
+                    let newSource = {};
+                    switch (sourceType) {
+                        // Removed specific file types from this switch statement
+                        case 'local':
+                            const filePath = document.getElementById('filePath').value;
+                            if (!filePath) throw new Error('File Path is required.');
+                            newSource = { type: sourceType, path: filePath };
+                            break;
+                        case 'url':
+                        case 'web_crawler':
+                            const urlPath = document.getElementById('urlPath').value;
+                            const maxDepth = document.getElementById('maxDepth') ? parseInt(document.getElementById('maxDepth').value) : undefined;
+                            if (!urlPath) throw new Error('URL is required.');
+                            newSource = { type: sourceType, url: urlPath };
+                            if (sourceType === 'web_crawler' && maxDepth !== undefined) {
+                                newSource.max_depth = maxDepth;
+                            }
+                            break;
+                        case 'db':
+                            const dbConnectionString = document.getElementById('dbConnectionString').value;
+                            if (!dbConnectionString) throw new Error('Database connection string is required.');
+                            newSource = { type: 'db', db_connection: dbConnectionString };
+                            break;
+                        case 'code_repository':
+                            const repoPath = document.getElementById('repoPath').value;
+                            if (!repoPath) throw new Error('Repository path is required.');
+                            newSource = { type: 'code_repository', path: repoPath };
+                            break;
+                        case 'gdoc':
+                            const gdocFolderId = document.getElementById('gdocFolderId').value;
+                            const gdocDocumentIds = document.getElementById('gdocDocumentIds').value;
+                            const gdocFileTypes = document.getElementById('gdocFileTypes').value;
+                            if (!gdocFolderId && !gdocDocumentIds) throw new Error('Either Folder ID or Document IDs are required for Google Drive.');
+                            newSource = {
+                                type: 'gdoc',
+                                folder_id: gdocFolderId || undefined,
+                                document_ids: gdocDocumentIds ? gdocDocumentIds.split(',').map(id => id.trim()) : undefined,
+                                file_types: gdocFileTypes ? gdocFileTypes.split(',').map(type => type.trim()) : undefined
+                            };
+                            break;
+                        case 'api':
+                            const apiUrl = document.getElementById('apiUrl').value;
+                            const apiMethod = document.getElementById('apiMethod').value;
+                            const apiHeaders = document.getElementById('apiHeaders').value;
+                            const apiParams = document.getElementById('apiParams').value;
+                            const apiPayload = document.getElementById('apiPayload').value;
+                            const jsonPointer = document.getElementById('jsonPointer').value;
+                            if (!apiUrl) throw new Error('API URL is required.');
+                            newSource = {
+                                type: 'api',
+                                url: apiUrl,
+                                method: apiMethod,
+                                headers: apiHeaders ? JSON.parse(apiHeaders) : undefined,
+                                params: apiParams ? JSON.parse(apiParams) : undefined,
+                                payload: apiPayload ? JSON.parse(apiPayload) : undefined,
+                                json_pointer: jsonPointer || undefined
+                            };
+                            break;
+                        default:
+                            throw new Error('Unsupported source type selected.');
+                    }
+                    sourcesToAdd.push(newSource);
+                }
+
+                // Fetch existing agent config to merge new source
+                const existingAgentResponse = await fetch(`${API_BASE_URL}/agents/${selectedAgentName}`, {
+                    headers: { 'X-API-Key': loggedInUserToken }
+                });
+                if (!existingAgentResponse.ok) {
+                    const errorData = await existingAgentResponse.json();
+                    throw new Error(`Failed to fetch existing agent config: ${errorData.detail || existingAgentResponse.statusText}`);
+                }
+                const existingAgentConfig = await existingAgentResponse.json();
+
+                // Construct the updated agent config payload
+                // Use a deep clone and then carefully merge/overwrite
+                let agentConfigPayload = JSON.parse(JSON.stringify(existingAgentConfig)); // Deep clone to avoid mutating original or losing nested objects
+
+                // Overwrite specific fields that can be changed via this modal
+                agentConfigPayload.reproducible_ids = reproducibleIds;
+                agentConfigPayload.scaling = {
+                    parallel_ingestion: parallelIngestion,
+                    num_ingestion_workers: numIngestionWorkers
+                };
+
+                // Merge sources, ensuring no duplicates based on type and identifier
+                const mergedSources = [];
+                const existingSourcesMap = new Map();
+
+                // Add existing sources to map and merged list
+                (existingAgentConfig.sources || []).forEach(src => {
+                    const identifier = src.path || src.url || src.db_connection;
+                    if (identifier) {
+                        existingSourcesMap.set(`${src.type}-${identifier}`, src);
+                    }
+                    mergedSources.push(src); // Add all existing sources first
+                });
+
+                // Add new sources, avoiding duplicates
+                sourcesToAdd.forEach(newSrc => {
+                    const identifier = newSrc.path || newSrc.url || newSrc.db_connection;
+                    if (identifier && !existingSourcesMap.has(`${newSrc.type}-${identifier}`)) {
+                        mergedSources.push(newSrc);
+                    } else if (identifier) {
+                        addIngestionStatusMessage(`Warning: Source '${newSrc.type}' with identifier '${identifier}' already exists. Skipping addition.`, 'warn');
+                    }
+                });
+                agentConfigPayload.sources = mergedSources;
+
+                // Send the API request to trigger ingestion
+                addIngestionStatusMessage(`Sending ingestion request to backend for agent '${selectedAgentName}'...`, 'info');
+                const response = await fetch(`${API_BASE_URL}/agents/${selectedAgentName}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': loggedInUserToken
+                    },
+                    body: JSON.stringify(agentConfigPayload)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(`API request to trigger ingestion failed: ${errorData.detail || response.statusText}`);
+                }
+
+                const result = await response.json();
+                addIngestionStatusMessage(`Ingestion triggered successfully for agent '${selectedAgentName}'. Status: ${result.status}.`, 'success');
+                ingestionProgressBar.style.width = '100%';
+                ingestionProgressBar.textContent = 'Ingestion Triggered!';
+
+            } catch (error) {
+                addIngestionStatusMessage(`Ingestion process error: ${error.message}`, 'error');
+                console.error('Ingestion process error:', error);
+                ingestionProgressBar.style.width = '0%'; // Reset progress on failure
+                ingestionProgressBar.textContent = '';
+                startIngestionBtn.disabled = false;
+                startIngestionBtn.textContent = "Start Ingestion";
+            }
+        });
 
     </script>
 </body>
