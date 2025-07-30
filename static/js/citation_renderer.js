@@ -2,149 +2,95 @@ window.citationRenderer = (function() {
     const CITATION_HIGHLIGHT_CLASS = 'citation-marker';
     const CITATION_POPUP_CLASS = 'citation-popup';
 
-    // This is a temporary cache for document snippets. In a production system,
-    // you might fetch these on demand via an API endpoint that provides snippets
-    // based on temp_doc_id, doc_name, and page.
-    let documentSnippetsCache = {}; // Key: temp_doc_id_page, Value: {content: "...", doc_name: "...", page: N}
+    // A simple cache to avoid re-fetching snippets for the same citation.
+    const documentSnippetsCache = {};
 
     function init() {
-        // Event delegation for dynamically added messages
-        document.getElementById('messages').addEventListener('click', handleCitationClick);
-        document.getElementById('messages').addEventListener('mouseover', handleCitationHover);
-        document.getElementById('messages').addEventListener('mouseout', handleCitationOut);
-        console.log("Citation Renderer initialized.");
+        const messagesContainer = document.getElementById('messages');
+        if (messagesContainer) {
+            messagesContainer.addEventListener('click', handleCitationClick);
+            messagesContainer.addEventListener('mouseover', handleCitationHover);
+            messagesContainer.addEventListener('mouseout', handleCitationOut);
+            console.log("Citation Renderer initialized.");
+        }
     }
 
     /**
-     * Renders citations in a given message element based on its stored meta data.
-     * This should be called after a message's content is rendered (e.g., after marked.parse).
-     *
-     * @param {HTMLElement} messageElement The DOM element containing the AI message.
-     * @param {Array<Object>} citations A list of citation objects from the message's meta.
+     * Finds and replaces citation markers in a message element's HTML with interactive spans.
+     * This method is more robust than using character offsets.
+     * @param {HTMLElement} messageElement - The DOM element containing the AI message.
+     * @param {Array<Object>} citations - A list of citation objects from the message's metadata.
      */
     function renderCitations(messageElement, citations) {
         if (!citations || citations.length === 0) {
             return;
         }
 
-        let contentHtml = messageElement.querySelector('.content').innerHTML;
-        let offset = 0; // Keep track of offset due to HTML insertions
+        const contentElement = messageElement.querySelector('.content');
+        if (!contentElement) return;
 
-        // Sort citations by start_char to avoid issues with offset
-        citations.sort((a, b) => a.start_char - b.start_char);
+        let contentHtml = contentElement.innerHTML;
 
         citations.forEach(citation => {
-            const markerText = citation.marker_text;
-            const docName = citation.doc_name;
-            const page = citation.page;
-            const tempDocId = citation.temp_doc_id;
-            const originalStart = citation.start_char;
-            const originalEnd = citation.end_char;
+            const markerText = citation.text; // The full text of the citation marker, e.g., "[↩:doc.pdf:1]"
 
-            if (!markerText || originalStart === undefined || originalEnd === undefined) {
-                console.warn("Invalid citation data, skipping:", citation);
-                return;
-            }
-
-            // Construct data attributes for lookup
-            let dataAttrs = `data-doc-name="${docName || ''}"`;
-            if (page !== null) dataAttrs += ` data-page="${page}"`;
-            if (tempDocId) dataAttrs += ` data-temp-doc-id="${tempDocId}"`;
+            // Construct the replacement HTML with data attributes for the popup
+            let dataAttrs = `data-doc-name="${citation.doc_name || ''}"`;
+            if (citation.page_number) dataAttrs += ` data-page="${citation.page_number}"`;
+            if (citation.temp_doc_id) dataAttrs += ` data-temp-doc-id="${citation.temp_doc_id}"`;
 
             const replacementHtml = `<span class="${CITATION_HIGHLIGHT_CLASS}" ${dataAttrs}>${markerText}</span>`;
 
-            // Insert the span into the HTML string, adjusting for previous insertions
-            const currentStart = originalStart + offset;
-            const currentEnd = originalEnd + offset;
-
-            if (currentEnd > contentHtml.length) {
-                console.warn(`Citation marker bounds out of range for "${markerText}". HTML length: ${contentHtml.length}, start: ${currentStart}, end: ${currentEnd}`);
-                return;
-            }
-
-            contentHtml = contentHtml.substring(0, currentStart) +
-                          replacementHtml +
-                          contentHtml.substring(currentEnd);
-
-            // Update offset based on the length of the HTML inserted
-            offset += (replacementHtml.length - markerText.length);
+            // Replace all occurrences of the marker text with the interactive span
+            contentHtml = contentHtml.replaceAll(markerText, replacementHtml);
         });
 
-        messageElement.querySelector('.content').innerHTML = contentHtml;
+        contentElement.innerHTML = contentHtml;
     }
 
     function handleCitationClick(event) {
-        const target = event.target;
-        if (target.classList.contains(CITATION_HIGHLIGHT_CLASS)) {
-            // Future: Implement deep-linking or more complex pop-up.
-            // For now, just logging click.
+        const target = event.target.closest(`.${CITATION_HIGHLIGHT_CLASS}`);
+        if (target) {
             console.log("Citation clicked:", target.dataset);
-            showCitationPopup(target);
+            // Future functionality can be added here, like pinning the popup.
         }
     }
 
     function handleCitationHover(event) {
-        const target = event.target;
-        if (target.classList.contains(CITATION_HIGHLIGHT_CLASS)) {
+        const target = event.target.closest(`.${CITATION_HIGHLIGHT_CLASS}`);
+        if (target) {
             showCitationPopup(target);
         }
     }
 
     function handleCitationOut(event) {
-        const target = event.target;
-        if (target.classList.contains(CITATION_HIGHLIGHT_CLASS)) {
+        const target = event.target.closest(`.${CITATION_HIGHLIGHT_CLASS}`);
+        if (target) {
             hideAllCitationPopups();
         }
     }
 
-    function showCitationPopup(citationMarkerElement) {
-        hideAllCitationPopups(); // Hide any other open popups
+    function showCitationPopup(markerElement) {
+        hideAllCitationPopups(); // Ensure only one popup is visible at a time
 
-        const docName = citationMarkerElement.dataset.docName;
-        const page = citationMarkerElement.dataset.page;
-        const tempDocId = citationMarkerElement.dataset.tempDocId;
+        const { docName, page, tempDocId } = markerElement.dataset;
+        const cacheKey = `${tempDocId || 'perm'}_${docName}_${page || 'all'}`;
 
-        // Construct a unique key for the cache
-        const cacheKey = `${tempDocId || 'perm'}_${docName || 'unknown'}_${page || 'no-page'}`;
+        // Create and display the popup immediately with a "Loading..." state
+        const popup = createAndDisplayPopup(markerElement, 'Fetching snippet...', docName, page, true);
 
-        let snippetContent = `Fetching snippet for ${docName}`;
-        if (page) snippetContent += ` (Page ${page})`;
-        snippetContent += '...';
-
-        const existingSnippet = documentSnippetsCache[cacheKey];
-
-        if (existingSnippet) {
-            snippetContent = existingSnippet.content;
-            createAndDisplayPopup(citationMarkerElement, snippetContent, docName, page);
+        // Fetch from cache or API
+        if (documentSnippetsCache[cacheKey]) {
+            updatePopupContent(popup, documentSnippetsCache[cacheKey]);
         } else {
-            // Show a "Loading..." popup immediately
-            createAndDisplayPopup(citationMarkerElement, snippetContent, docName, page, true);
-            // Fetch snippet from backend API
             fetchCitationSnippet(tempDocId, docName, page)
                 .then(snippet => {
-                    documentSnippetsCache[cacheKey] = {
-                        content: snippet,
-                        doc_name: docName,
-                        page: page
-                    };
-                    // Update the popup with actual content
-                    if (citationMarkerElement.nextElementSibling &&
-                        citationMarkerElement.nextElementSibling.classList.contains(CITATION_POPUP_CLASS)) {
-                        citationMarkerElement.nextElementSibling.querySelector('.popup-content').textContent = snippet;
-                    } else {
-                        // If popup was hidden/removed due to quick mouse movement, re-display
-                        createAndDisplayPopup(citationMarkerElement, snippet, docName, page);
-                    }
+                    documentSnippetsCache[cacheKey] = snippet;
+                    updatePopupContent(popup, snippet);
                 })
                 .catch(error => {
                     console.error("Error fetching citation snippet:", error);
-                    const errorMessage = `Failed to load snippet for ${docName}.`;
-                     if (citationMarkerElement.nextElementSibling &&
-                        citationMarkerElement.nextElementSibling.classList.contains(CITATION_POPUP_CLASS)) {
-                        citationMarkerElement.nextElementSibling.querySelector('.popup-content').textContent = errorMessage;
-                    } else {
-                        createAndDisplayPopup(citationMarkerElement, errorMessage, docName, page);
-                    }
+                    updatePopupContent(popup, `Failed to load snippet: ${error.message}`);
                 });
         }
     }
@@ -153,24 +99,22 @@ window.citationRenderer = (function() {
         const popup = document.createElement('div');
         popup.className = CITATION_POPUP_CLASS;
 
-        const header = document.createElement('div');
-        header.className = 'popup-header';
-        header.textContent = `${docName || 'Document'}${page ? ` (Page ${page})` : ''}`;
-        popup.appendChild(header);
+        popup.innerHTML = `
+            <div class="popup-header">${docName || 'Document'}${page ? ` (Page ${page})` : ''}</div>
+            <div class="popup-content ${isLoading ? 'loading' : ''}">${content}</div>
+        `;
 
-        const contentDiv = document.createElement('div');
-        contentDiv.className = 'popup-content';
-        contentDiv.textContent = content;
-        if (isLoading) contentDiv.classList.add('loading');
-        popup.appendChild(contentDiv);
-
-        // Position the popup
-        // Append it as a sibling to the marker, for easier positioning
         markerElement.parentNode.insertBefore(popup, markerElement.nextSibling);
+        return popup;
+    }
 
-        // Basic positioning (adjust as needed with CSS)
-        // You might need to calculate more precise position based on markerElement's rect
-        // For simplicity, CSS will handle absolute positioning relative to the message bubble.
+    function updatePopupContent(popupElement, newContent) {
+        if (!popupElement) return;
+        const contentDiv = popupElement.querySelector('.popup-content');
+        if (contentDiv) {
+            contentDiv.textContent = newContent;
+            contentDiv.classList.remove('loading');
+        }
     }
 
     function hideAllCitationPopups() {
@@ -178,56 +122,40 @@ window.citationRenderer = (function() {
     }
 
     async function fetchCitationSnippet(tempDocId, docName, page) {
-        // This is a placeholder for a new API endpoint you'd create in app/main.py
-        // This endpoint would retrieve a small snippet of the document content
-        // based on temp_doc_id, doc_name, and page.
-        // For now, it returns a dummy snippet.
-        const apiUrl = `${API_BASE_URL}/chat/citation-snippet`; // Example API endpoint
-
+        const apiUrl = `${API_BASE_URL}/chat/citation-snippet`;
         const params = new URLSearchParams({
             doc_name: docName,
-            page: page || '', // Send empty string if no page
-            temp_doc_id: tempDocId || '' // Send empty string if no temp_doc_id (for permanent docs)
         });
 
-        // In a real scenario, you'd send `temp_doc_id` or `doc_name` to identify the source.
-        // For simplicity, this mock returns a generic snippet.
-        // You might need to add current_user.id and current_thread_id to API request if needed for backend lookup.
+        if (page) params.append('page', page);
+        if (tempDocId) params.append('temp_doc_id', tempDocId);
 
         try {
-            // For now, return a dummy string.
-            // In Phase 3, Step 5, we will create the backend endpoint to fetch real snippets.
-            return `Snippet from '${docName}' ${page ? `(page ${page})` : ''}. This is a placeholder snippet.`;
-            /*
             const response = await fetch(`${apiUrl}?${params.toString()}`, {
                 headers: { 'X-API-Key': loggedInUserToken }
             });
+
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                const errorData = await response.json().catch(() => ({ detail: `HTTP Error ${response.status}` }));
+                throw new Error(errorData.detail);
             }
+
             const data = await response.json();
-            return data.snippet; // Assume API returns { "snippet": "..." }
-            */
+            return data.snippet; // Expects API to return { "snippet": "..." }
         } catch (error) {
             console.error("Error fetching citation snippet:", error);
             throw error;
         }
     }
 
-
-    // Public methods
+    // Public API for the module
     return {
         init: init,
         renderCitations: renderCitations,
-        // Expose fetchCitationSnippet for testing or direct use if needed
-        fetchCitationSnippet: fetchCitationSnippet
     };
-
 })();
 
-// Initialize the citationRenderer module when the DOM is ready
+// Initialize the module when the DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
-    if (window.citationRenderer) {
-        window.citationRenderer.init();
-    }
+    window.citationRenderer?.init();
 });
