@@ -1,7 +1,9 @@
+# app/agents/agent_graph.py
+
 import os
 import logging
 from pathlib import Path
-from typing import List, TypedDict, Annotated, Optional
+from typing import List, TypedDict, Annotated, Optional, Dict, Any
 from operator import add
 import time
 import uuid
@@ -18,9 +20,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
 from langchain_huggingface.llms import HuggingFacePipeline as LCHuggingFacePipeline
 from transformers import AutoTokenizer, pipeline
-from huggingface_hub import InferenceClient
-from langchain_community.llms.huggingface_text_gen_inference import HuggingFaceTextGenInference
-
 
 from app.schemas.agent import AgentConfig
 
@@ -32,7 +31,7 @@ from langchain_ollama import ChatOllama
 from ollama import ResponseError
 
 # Local application imports
-from app.tools.retriever_tool import get_retriever_tool
+from app.tools.retriever_tool import get_retriever_tool  # This import will stay the same
 from app.core.config import get_api_key, get_llm_model, get_path_settings
 from app.core.cost_calculator import calculate_cost, count_tokens
 from app.db.dao import save_conversation_metrics_sync
@@ -43,6 +42,7 @@ from app.training.model_manager import FineTunedModelManager
 logger = logging.getLogger(__name__)
 logger = logging.getLogger("ragnetic")
 metrics_logger = logging.getLogger("ragnetic.metrics")
+
 
 class AgentState(TypedDict):
     """
@@ -63,7 +63,9 @@ class AgentState(TypedDict):
     total_tokens: int
     estimated_cost_usd: float
     retrieved_chunk_ids: List[str]
-    # session_id removed from TypedDict as it's passed via config directly
+    temp_document_ids: List[str]
+    retrieved_documents_meta_for_citation: List[
+        Dict[str, Any]]
 
 
 async def call_model(state: AgentState, config: RunnableConfig):
@@ -74,6 +76,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
     """
     sync_engine_connection = None
     embedding_cost_usd = 0.0
+    retrieved_documents_meta_for_citation: List[Dict[str, Any]] = []  # Initialize for this scope
     try:
         start_time = time.perf_counter()
         agent_config = state['agent_config']
@@ -86,13 +89,16 @@ async def call_model(state: AgentState, config: RunnableConfig):
         # In a chat context, the agent name from config might be more reliable
         agent_name_from_config = config['configurable'].get("agent_name", agent_config.name)
 
+        temp_document_ids = state.get("temp_document_ids", [])
+        if temp_document_ids:
+            logger.info(f"[{request_id}] Found {len(temp_document_ids)} temporary documents for retrieval.")
+
         logger.debug(f"[call_model] Session ID from config: {session_id}")
         logger.debug(f"[call_model] Request ID from config/state: {request_id}")
         logger.debug(f"[call_model] Agent Name from config/state: {agent_name_from_config}")
 
-        if session_id is None:  # Add a warning if session_id is still None
+        if session_id is None:
             logger.warning(f"[call_model] Session ID is None for request {request_id}. Metrics will be unlinked.")
-
 
         if not messages:
             logger.error("State has no messages. Cannot proceed.")
@@ -109,33 +115,54 @@ async def call_model(state: AgentState, config: RunnableConfig):
         retrieved_chunk_ids = []
         retrieved_docs = []
 
-        embedding_model_name = agent_config.embedding_model  # Get embedding model name
-
+        embedding_model_name = agent_config.embedding_model
 
         t0 = time.perf_counter()
         if "retriever" in agent_config.tools:
             try:
-                # Calculate embedding tokens for the query
                 embedding_tokens = count_tokens(query, embedding_model_name)
                 logger.info(f"[call_model] Embedding query: '{query[:50]}...'")
                 logger.info(f"[call_model] Embedding model used: {embedding_model_name}")
                 logger.info(f"[call_model] Calculated embedding tokens: {embedding_tokens}")
 
-                # Calculate embedding cost using the enhanced calculate_cost function
                 embedding_cost_usd = calculate_cost(
                     embedding_model_name=embedding_model_name,
                     embedding_tokens=embedding_tokens
                 )
                 logger.info(f"[call_model] Calculated embedding cost: ${embedding_cost_usd:.6f}")
                 logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
-                retriever_tool = get_retriever_tool(agent_config)
-                retrieved_docs = await asyncio.to_thread(retriever_tool.invoke, {"input": query})
+
+                retriever_tool = await get_retriever_tool(agent_config)
+                tool_input = {"query": query, "temp_document_ids": temp_document_ids}
+                retrieved_docs = await retriever_tool.ainvoke(tool_input)
                 if isinstance(retrieved_docs, str):
                     retrieved_docs_str = retrieved_docs
                     logger.error(f"Retriever tool returned an error string: {retrieved_docs}")
                 elif retrieved_docs:
-                    retrieved_docs_str = "\n\n".join([doc.page_content for doc in retrieved_docs])
-                    retrieved_chunk_ids = [doc.id for doc in retrieved_docs if hasattr(doc, 'id')]
+                    retrieved_docs_str = ""
+                    retrieved_documents_meta_for_citation = []  # Reset for current run
+                    for doc in retrieved_docs:
+                        doc_name = doc.metadata.get('doc_name', 'Unknown Document')
+                        page_number = doc.metadata.get('page_number')
+                        # Use temp_doc_id for unique identification, but display name/page for LLM readability
+                        temp_doc_id = doc.metadata.get('temp_doc_id')
+
+                        source_info = f"Source: '{doc_name}'"
+                        if page_number:
+                            source_info += f" Page: {page_number}"
+                        if temp_doc_id:
+                            source_info += f" (ID: {temp_doc_id[:8]}...)"  # Short ID for debug/backend tracing
+
+                        retrieved_docs_str += f"Document Content ({source_info}):\n{doc.page_content}\n\n"
+
+                        # Store metadata for later citation extraction in main.py/websocket_chat
+                        retrieved_documents_meta_for_citation.append(doc.metadata)
+
+                        # Use temp_doc_id and chunk_index for unique retrieved_chunk_ids
+                        retrieved_chunk_ids.append(f"{temp_doc_id}_{doc.metadata.get('chunk_index', '')}"
+                                                   if temp_doc_id else str(
+                            uuid.uuid4()))  # Fallback to UUID if no temp_doc_id
+
                     logger.info(f"Successfully retrieved {len(retrieved_docs)} documents.")
                 else:
                     retrieved_docs_str = "No documents were found matching the query."
@@ -157,7 +184,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
 
         else:
             logger.info("Using default system prompt.")
-            context_section = f"<context>\n<retrieved_documents>\n{retrieved_docs_str}\n</retrieved_documents>\n</context>"
+            # MODIFIED: Enhanced system prompt with clear citation instructions
             system_prompt_content = f"""You are RAGnetic, a professional AI assistant. Your behavior and personality are defined by the user's custom instructions below.
                                    ---
                                    **USER'S CUSTOM INSTRUCTIONS (Your Persona):**
@@ -166,8 +193,13 @@ async def call_model(state: AgentState, config: RunnableConfig):
                                    Your primary goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
                                    **General Instructions:**
                                    1.  Synthesize an answer from the information given in the "SOURCES" section below.
-                                   2.  Do not refer to "the context provided" or "the information I have." Respond directly and authoritatively.
-                                   3.  If the sources indicate an error or that no documents were found, inform the user of this fact.
+                                   2.  If information from a document is used, **you MUST cite the source inline**.
+                                       Use the format: `[↩:OriginalFileName.ext:PageNumber]` or `[↩:OriginalFileName.ext]` if page number is not available.
+                                       Example: "The report indicates a 15% increase in sales [↩:Q4_Report.pdf:2]."
+                                       Example: "The new policy was outlined [↩:Policy_Doc.docx]."
+                                       For code files or CSVs, if no page number, just use the filename.
+                                   3.  Do not refer to "the context provided" or "the information I have." Respond directly and authoritatively.
+                                   4.  If the sources indicate an error or that no documents were found, inform the user of this fact.
                                    **Instructions for Formatting:**
                                    - Use Markdown for all your responses.
                                    - Use headings (`##`, `###`) to structure main topics.
@@ -190,7 +222,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
 
                                    **SOURCES:**
                                    ---
-                                   {context_section}
+                                   {retrieved_docs_str}
                                    ---
                                    Based on the sources and your persona, please answer the user's query.
                                 """
@@ -223,10 +255,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
                     base_llm_model = init_chat_model(model_name, model_provider=provider, streaming=True,
                                                      api_key=api_key, **model_kwargs)
 
-        final_llm_model_raw_hf = None  # This will hold the raw transformers model (e.g., LlamaForCausalLM)
-        final_tokenizer_hf = None  # This will hold the transformers tokenizer
+        final_llm_model_raw_hf = None
+        final_tokenizer_hf = None
 
-        # Use the fine_tuned_model_id if specified
         if agent_config.fine_tuned_model_id:
             logger.info(f"Fine-tuned model ID specified: {agent_config.fine_tuned_model_id}. Attempting to load.")
             _APP_PATHS = get_path_settings()
@@ -253,9 +284,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 adapter_path_from_db = adapter_record['adapter_path']
                 base_model_name_from_db = adapter_record['base_model_name']
 
-                # Load the fine-tuned model (raw transformers model)
                 loaded_ft_model_and_tokenizer = await asyncio.to_thread(
-                    model_manager.load_adapter,  # model_manager.load_adapter returns the HF model
+                    model_manager.load_adapter,
                     adapter_path_from_db,
                     base_model_name_from_db
                 )
@@ -269,17 +299,13 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 else:
                     logger.error(
                         f"Failed to load fine-tuned model '{agent_config.fine_tuned_model_id}'. Cannot proceed without it.")
-                    # Raise an error or fall back to a default strategy if fine-tuned model is mandatory
                     raise RuntimeError(f"Failed to load mandatory fine-tuned model {agent_config.fine_tuned_model_id}.")
 
-        # Now, based on whether a fine-tuned model was loaded, determine the final model to use.
-        # If a fine-tuned model was successfully loaded, create a ChatHuggingFace instance from it.
         if agent_config.fine_tuned_model_id:
             logger.info(f"Fine-tuned model ID specified: {agent_config.fine_tuned_model_id}. Loading adapter…")
             paths = get_path_settings()
             manager = FineTunedModelManager(Path(paths["FINE_TUNED_MODELS_BASE_DIR"]))
 
-            # fetch record from DB
             from app.db.models import fine_tuned_models_table
             from sqlalchemy import select
             with get_sync_db_engine().connect() as conn:
@@ -294,7 +320,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
             adapter_path = row.adapter_path
             base_name = row.base_model_name
 
-            # load HF adapter
             loaded = await asyncio.to_thread(manager.load_adapter, adapter_path, base_name)
             if not loaded:
                 raise RuntimeError(f"Failed to load fine-tuned model {agent_config.fine_tuned_model_id}")
@@ -303,7 +328,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
             final_tokenizer_hf = AutoTokenizer.from_pretrained(adapter_path)
             logger.info("Adapter + tokenizer loaded, building pipeline…")
 
-            # build a sync-only transformers Pipeline
             hf_pipeline_instance = pipeline(
                 "text-generation",
                 model=final_llm_model_raw_hf,
@@ -313,10 +337,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 return_full_text=False,
             )
 
-            # wrap in LangChain’s HuggingFacePipeline
             langchain_hf_llm_instance = LCHuggingFacePipeline(pipeline=hf_pipeline_instance)
 
-            # turn off streaming (no async_client)
             chat_hf_kwargs = model_kwargs.copy()
             chat_hf_kwargs["streaming"] = False
 
@@ -327,7 +349,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
             logger.info("Wrapped fine-tuned HF model with ChatHuggingFace (sync mode).")
 
         else:
-            # no fine-tune → use your base ChatOllama / OpenAI / Claude / Google logic
             logger.info("No fine-tuned model; using base LLM")
             if model_name.startswith("ollama/"):
                 final_llm_model = ChatOllama(model=model_name.split("/", 1)[1], **model_kwargs)
@@ -339,7 +360,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 if provider == "google":
                     final_llm_model = ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, **model_kwargs)
                 else:
-                    # note: for openai you can still stream
                     openai_kwargs = model_kwargs.copy()
                     if provider == "openai" and openai_kwargs.get("streaming", True):
                         openai_kwargs["stream_usage"] = True
@@ -349,7 +369,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
                         final_llm_model = init_chat_model(model_name, model_provider=provider,
                                                           streaming=True, api_key=api_key, **model_kwargs)
 
-        # bind your tools
         model_with_tools = final_llm_model.bind_tools(tools)
         logger.info("Invoking the LLM (sync pipeline wrapped in thread)…")
 
@@ -368,22 +387,19 @@ async def call_model(state: AgentState, config: RunnableConfig):
         generation_time = time.perf_counter() - t1
         logger.info("Model invocation successful.")
 
-        # --- Debugging: Log all relevant response attributes ---
-        logger.debug(f"[call_model] Raw LLM response: {response}")  # Log the full response object
+        logger.debug(f"[call_model] Raw LLM response: {response}")
         logger.debug(f"[call_model] Raw LLM response metadata: {response.response_metadata}")
         logger.debug(f"[call_model] Raw LLM usage_metadata: {getattr(response, 'usage_metadata', {})}")
 
         prompt_tokens = 0
         completion_tokens = 0
 
-        # Prioritize usage_metadata from AIMessage object (LangChain standard)
         if hasattr(response, 'usage_metadata') and response.usage_metadata:
             prompt_tokens = response.usage_metadata.get("input_tokens", 0)
             completion_tokens = response.usage_metadata.get("output_tokens", 0)
             logger.debug(
                 f"[call_model] Retrieved tokens from usage_metadata: input={prompt_tokens}, output={completion_tokens}")
 
-        # Fallback to response_metadata.token_usage (older LangChain or non-standard)
         if not prompt_tokens and not completion_tokens:
             token_usage_from_metadata = response.response_metadata.get("token_usage", {})
             if token_usage_from_metadata:
@@ -392,7 +408,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 logger.debug(
                     f"[call_model] Retrieved tokens from response_metadata.token_usage: input={prompt_tokens}, output={completion_tokens}")
 
-        # If still no tokens, use estimation (last resort)
         if not prompt_tokens and not completion_tokens:
             logger.warning("[call_model] No explicit token usage found in metadata. Estimating tokens using fallback.")
 
@@ -406,13 +421,11 @@ async def call_model(state: AgentState, config: RunnableConfig):
             logger.debug(
                 f"[call_model] Estimated prompt_tokens: {prompt_tokens}, completion_tokens: {completion_tokens}")
 
-        # Calculate total LLM cost based on derived tokens
         llm_cost_usd = calculate_cost(
             llm_model_name=agent_config.llm_model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens
         )
-        # Sum LLM cost and embedding cost for total estimated_cost_usd
         total_estimated_cost_usd = llm_cost_usd + embedding_cost_usd
 
         state.update({
@@ -424,7 +437,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
             "estimated_cost_usd": total_estimated_cost_usd,
-            "retrieved_chunk_ids": retrieved_chunk_ids
+            "retrieved_chunk_ids": retrieved_chunk_ids,
+            "retrieved_documents_meta_for_citation": retrieved_documents_meta_for_citation
         })
 
         current_timestamp = datetime.utcnow()
@@ -434,7 +448,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "session_id": session_id,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,  # Ensure total_tokens here as well
+            "total_tokens": prompt_tokens + completion_tokens,
             "retrieval_time_s": retrieval_time,
             "generation_time_s": generation_time,
             "estimated_cost_usd": llm_cost_usd,
@@ -454,7 +468,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "total_duration_s": state["total_duration_s"],
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,  # Ensure total_tokens here as well
+            "total_tokens": prompt_tokens + completion_tokens,
             "estimated_cost_usd": total_estimated_cost_usd,
             "embedding_cost_usd": embedding_cost_usd,
             "embedding_model_name": embedding_model_name,
@@ -482,6 +496,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
     finally:
         if sync_engine_connection:
             sync_engine_connection.close()
+
 
 def should_continue(state: AgentState) -> str:
     """Routes to the tool node if the model requests it, otherwise ends."""

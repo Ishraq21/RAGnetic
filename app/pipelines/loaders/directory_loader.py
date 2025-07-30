@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _PATH_SETTINGS = get_path_settings()
 _PROJECT_ROOT_FROM_CONFIG = _PATH_SETTINGS["PROJECT_ROOT"]
 _ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"]
-logger.info(
+logger.debug(
     f"Loaded allowed data directories for directory loader from central config: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
 
 
@@ -134,7 +134,7 @@ Optional[Document]:  # MODIFIED: Added source parameter
                     "load_timestamp": datetime.now().isoformat(),  # Add load timestamp
                 }
                 # Add general source info if available from the DataSource object
-                if source:  # NEW: Add info from DataSource object for lineage
+                if source:
                     metadata["source_type_config"] = source.model_dump()  # Store entire DataSource config
                     if source.url: metadata["source_url"] = source.url
                     if source.db_connection: metadata["source_db_connection"] = source.db_connection

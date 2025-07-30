@@ -20,6 +20,8 @@
   <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="stylesheet" href="{{ url_for('static', path='css/style.css') }}">
     <script src="{{ url_for('static', path='js/ingestion_modal_logic.js') }}"></script>
+    <script src="{{ url_for('static', path='js/chat_quick_upload.js') }}"></script>
+    <script src="{{ url_for('static', path='js/citation_renderer.js') }}"></script>
 </head>
 <body>
     <div id="toast-notification"></div>
@@ -57,12 +59,17 @@
     </aside>
     <div id="chat-container">
         <div id="messages"></div>
+        <div id="quickUploadFileList" class="attachment-list"></div>
         <div id="input-form-container">
             <div id="typing-indicator" style="opacity: 0; display:none;">
                 <div class="pulsing-dot"></div>
                 <span>RAGnetic is thinking...</span>
             </div>
             <form id="input-form" onsubmit="handleFormSubmit(event)">
+                <button type="button" id="quickUploadBtn" title="Attach file">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+                </button>
+                <input type="file" id="quickUploadFileInput" multiple style="display: none;">
                 <textarea name="query" id="query-input" placeholder="Ask RAGnetic…" rows="1"></textarea>
                 <button type="submit" id="send-stop-btn">
                     <span id="send-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" /></svg></span>
@@ -72,468 +79,806 @@
             <p class="disclaimer-text">RAGnetic can make mistakes. Double check your source.</p>
         </div>
     </div>
-    <script>
-        // These are global variables used by ingestion_modal_logic.js
-        const API_BASE_URL = window.location.origin + '/api/v1';
-        const WS_URL = 'ws://' + window.location.host + '/ws';
-        let loggedInUserToken = localStorage.getItem('ragnetic_user_token');
-        let loggedInDbUserId = localStorage.getItem('ragnetic_db_user_id');
+<script>
+    // These are global variables used by ingestion_modal_logic.js and other modules
+    const API_BASE_URL = window.location.origin + '/api/v1';
+    const WS_URL = 'ws://' + window.location.host + '/ws';
+    let loggedInUserToken = localStorage.getItem('ragnetic_user_token');
+    let loggedInDbUserId = localStorage.getItem('ragnetic_db_user_id');
 
-        const agentSelect = document.getElementById('agent-select');
-        const messagesDiv = document.getElementById('messages');
-        const inputField = document.getElementById('query-input');
-        const sendStopButton = document.getElementById('send-stop-btn');
-        const sendIcon = document.getElementById('send-icon');
-        const stopIcon = document.getElementById('stop-icon');
-        const typingIndicator = document.getElementById('typing-indicator');
-        const newChatButton = document.getElementById('new-chat-btn');
-        const toastNotification = document.getElementById('toast-notification');
-        const confirmationModal = document.getElementById('confirmation-modal');
-        const modalText = document.getElementById('modal-text');
-        const modalConfirmBtn = document.getElementById('modal-confirm-btn');
-        const modalCancelBtn = document.getElementById('modal-cancel-btn');
+    const agentSelect = document.getElementById('agent-select');
+    const messagesDiv = document.getElementById('messages');
+    const inputField = document.getElementById('query-input');
+    const sendStopButton = document.getElementById('send-stop-btn');
+    const sendIcon = document.getElementById('send-icon');
+    const stopIcon = document.getElementById('stop-icon');
+    const typingIndicator = document.getElementById('typing-indicator');
+    const newChatButton = document.getElementById('new-chat-btn');
+    const toastNotification = document.getElementById('toast-notification');
+    const confirmationModal = document.getElementById('confirmation-modal');
+    const modalText = document.getElementById('modal-text');
+    const modalConfirmBtn = document.getElementById('modal-confirm-btn');
+    const modalCancelBtn = document.getElementById('modal-cancel-btn');
 
-        const historySidebar = document.getElementById('chat-history-sidebar');
-        const chatContainer = document.getElementById('chat-container');
-        const historyList = document.getElementById('history-list');
-        const logoutBtn = document.getElementById('logout-btn');
+    const historySidebar = document.getElementById('chat-history-sidebar');
+    const chatContainer = document.getElementById('chat-container');
+    const historyList = document.getElementById('history-list');
+    const logoutBtn = document.getElementById('logout-btn');
 
-        // Ingestion Modal elements (main container and trigger button)
-        const ingestionModal = document.getElementById('ingestion-modal');
-        const openIngestionModalBtn = document.getElementById('open-ingestion-modal-btn');
+    // Ingestion Modal elements (main container and trigger button)
+    const ingestionModal = document.getElementById('ingestion-modal');
+    const openIngestionModalBtn = document.getElementById('open-ingestion-modal-btn');
+
+    // Quick Upload Elements (from chat_quick_upload.js context, accessed globally here)
+    const quickUploadBtn = document.getElementById('quickUploadBtn');
+    const quickUploadFileInput = document.getElementById('quickUploadFileInput');
+    const quickUploadFileList = document.getElementById('quickUploadFileList');
 
 
-        let agent, thread_id, socket;
-        let confirmCallback = null;
-        let isGenerating = false;
-        const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+    let agent, thread_id, socket;
+    let confirmCallback = null;
+    let isGenerating = false;
+    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
 
-        const svgs = {
-            copy: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M7.5 3a.75.75 0 00-.75.75v13.5a.75.75 0 00.75.75h9a.75.75 0 00.75-.75V3.75A.75.75 0 0016.5 3h-9zM8.25 4.5h7.5v12h-7.5V4.5z" /><path d="M6 1.5a.75.75 0 00-.75.75V16.5a.75.75 0 00.75.75h.008a.75.75 0 00.75-.75V2.25A.75.75 0 006.008 1.5H6z" /></svg>`,
-            copied: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clip-rule="evenodd" /></svg>`,
-            copyCode: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/></svg>`,
-            copiedCode: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 010-1.06.733.733 0 011.047 0l3.052 3.093 5.4-6.425a.247.247 0 01.02-.022z"/></svg>`
+    const svgs = {
+        copy: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M7.5 3a.75.75 0 00-.75.75v13.5a.75.75 0 00.75.75h9a.75.75 0 00.75-.75V3.75A.75.75 0 0016.5 3h-9zM8.25 4.5h7.5v12h-7.5V4.5z" /><path d="M6 1.5a.75.75 0 00-.75.75V16.5a.75.75 0 00.75.75h.008a.75.75 0 00.75-.75V2.25A.75.75 0 006.008 1.5H6z" /></svg>`,
+        copied: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clip-rule="evenodd" /></svg>`,
+        copyCode: `<svg xmlns="http://www.w3.org="2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/></svg>`,
+        copiedCode: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 010-1.06.733.733 0 011.047 0l3.052 3.093 5.4-6.425a.247.247 0 01.02-.022z"/></svg>`
+    };
+    function renderMath(element) { if (window.MathJax) { window.MathJax.typesetPromise(element ? [element] : []).catch((err) => console.error('MathJax typesetting error:', err)); } }
+    function showToast(message, isError = false) { toastNotification.textContent = message; toastNotification.className = isError ? 'error' : 'success'; toastNotification.style.display = 'block'; setTimeout(() => { toastNotification.style.display = 'none'; }, 4000); }
+    function scrollToBottom() { window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }); }
+    // MODIFIED: setGeneratingState now also disables/enables quickUploadBtn
+    function setGeneratingState(generating) {
+        isGenerating = generating;
+        sendIcon.style.display = generating ? 'none' : 'inline';
+        stopIcon.style.display = generating ? 'inline' : 'none';
+        inputField.disabled = generating;
+        sendStopButton.classList.toggle('stop-active', generating);
+        quickUploadBtn.disabled = generating; // NEW: Disable/enable quick upload button
+        if (!generating) {
+            typingIndicator.style.display = 'none';
+            inputField.focus();
+        }
+    }
+    function renderEmptyState() { messagesDiv.innerHTML = `<div id="empty-state"><h1>RAG<span>netic</span></h1><p>Your on-premise AI assistant. Select an agent and ask a question to begin.</p></div>`; }
+
+    function setupChatEnvironment() {
+        const savedAgent = localStorage.getItem('ragnetic_agent');
+        if (savedAgent) {
+            agentSelect.value = savedAgent;
+        }
+        agent = agentSelect.value;
+        thread_id = localStorage.getItem('ragnetic_thread_id');
+
+        if (thread_id) {
+            loadHistory(agent, thread_id, loggedInDbUserId);
+        } else {
+            renderEmptyState();
+        }
+        fetchChatSessions(agent);
+        openWebSocket();
+    }
+
+    function openWebSocket(onOpenCallback) {
+        if (socket && socket.readyState !== WebSocket.CLOSED) { socket.close(1000, "Starting new session"); }
+        let wsUrl = `${protocol}://${location.host}/ws`;
+        if (loggedInUserToken) {
+            wsUrl += `?api_key=${loggedInUserToken}`;
+        }
+        socket = new WebSocket(wsUrl);
+        socket.onopen = () => { sendStopButton.disabled = false; quickUploadBtn.disabled = false; if (onOpenCallback) { onOpenCallback(); } }; // NEW: Enable quickUploadBtn on open
+        socket.onerror = (event) => { console.error("WebSocket error:", event); showToast("Connection error. Check console for details.", true); };
+        socket.onclose = (event) => {
+            sendStopButton.disabled = true;
+            quickUploadBtn.disabled = true; // NEW: Disable quickUploadBtn on close
+            if (isGenerating) setGeneratingState(false);
+            if (event.code === 1008) { showToast("Connection rejected: Invalid or missing API Key.", true); }
+            else if (event.code !== 1000) { showToast(`WebSocket disconnected: Code ${event.code}`, true); }
+            else {
+                // If not logged in, redirect to login page
+                if (!loggedInUserToken || !loggedInDbUserId) {
+                    window.location.href = '/login';
+                }
+            }
         };
-        function renderMath(element) { if (window.MathJax) { window.MathJax.typesetPromise(element ? [element] : []).catch((err) => console.error('MathJax typesetting error:', err)); } }
-        function showToast(message, isError = false) { toastNotification.textContent = message; toastNotification.className = isError ? 'error' : 'success'; toastNotification.style.display = 'block'; setTimeout(() => { toastNotification.style.display = 'none'; }, 4000); }
-        function scrollToBottom() { window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }); }
-        function setGeneratingState(generating) { isGenerating = generating; sendIcon.style.display = generating ? 'none' : 'inline'; stopIcon.style.display = generating ? 'inline' : 'none'; inputField.disabled = generating; sendStopButton.classList.toggle('stop-active', generating); if (!generating) { typingIndicator.style.display = 'none'; inputField.focus(); } }
-        function renderEmptyState() { messagesDiv.innerHTML = `<div id="empty-state"><h1>RAG<span>netic</span></h1><p>Your on-premise AI assistant. Select an agent and ask a question to begin.</p></div>`; }
-
-        function setupChatEnvironment() {
-            const savedAgent = localStorage.getItem('ragnetic_agent');
-            if (savedAgent) {
-                agentSelect.value = savedAgent;
-            }
-            agent = agentSelect.value;
-            thread_id = localStorage.getItem('ragnetic_thread_id');
-
-            if (thread_id) {
-                loadHistory(agent, thread_id, loggedInDbUserId);
-            } else {
-                renderEmptyState();
-            }
-            fetchChatSessions(agent);
-            openWebSocket();
-        }
-
-        function openWebSocket(onOpenCallback) {
-            if (socket && socket.readyState !== WebSocket.CLOSED) { socket.close(1000, "Starting new session"); }
-            let wsUrl = `${protocol}://${location.host}/ws`;
-            if (loggedInUserToken) {
-                wsUrl += `?api_key=${loggedInUserToken}`;
-            }
-            socket = new WebSocket(wsUrl);
-            socket.onopen = () => { sendStopButton.disabled = false; if (onOpenCallback) { onOpenCallback(); } };
-            socket.onerror = (event) => { console.error("WebSocket error:", event); showToast("Connection error. Check console for details.", true); };
-            socket.onclose = (event) => {
-                sendStopButton.disabled = true;
-                if (isGenerating) setGeneratingState(false);
-                if (event.code === 1008) { showToast("Connection rejected: Invalid or missing API Key.", true); }
-                else if (event.code !== 1000) { showToast(`WebSocket disconnected: Code ${event.code}`, true); }
-                else {
-                    // Normal closure (1000) implies a logout or intentional refresh
-                    // If not logged in, redirect to login page
-                    if (!loggedInUserToken || !loggedInDbUserId) {
-                        window.location.href = '/login';
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.token) { typingIndicator.style.display = 'none'; appendAgentToken(data.token); }
+            if (data.done) {
+                setGeneratingState(false);
+                if (data.user_id && data.user_id !== loggedInDbUserId) {
+                    loggedInDbUserId = data.user_id;
+                    localStorage.setItem('ragnetic_db_user_id', loggedInDbUserId);
+                }
+                thread_id = data.thread_id;
+                 setTimeout(() => {
+                    localStorage.setItem('ragnetic_thread_id', thread_id);
+                    localStorage.setItem('ragnetic_agent', agent);
+                }, 10);
+                fetchChatSessions(agent);
+                const lastMessage = messagesDiv.lastElementChild;
+                if (lastMessage && lastMessage.classList.contains('agent')) {
+                    lastMessage.dataset.streaming = 'false';
+                    renderCodeblocks(lastMessage);
+                    renderMath(lastMessage);
+                    // Render citations for the final AI message
+                    // Check if window.citationRenderer is defined and renderCitations is a function
+                    if (data.citations && window.citationRenderer && typeof window.citationRenderer.renderCitations === 'function') {
+                        window.citationRenderer.renderCitations(lastMessage, data.citations);
                     }
                 }
-            };
-            socket.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (data.token) { typingIndicator.style.display = 'none'; appendAgentToken(data.token); }
-                if (data.done) {
-                    setGeneratingState(false);
-                    if (data.user_id && data.user_id !== loggedInDbUserId) {
-                        loggedInDbUserId = data.user_id;
-                        localStorage.setItem('ragnetic_db_user_id', loggedInDbUserId);
-                    }
-                    thread_id = data.thread_id;
-                     setTimeout(() => {
-                        localStorage.setItem('ragnetic_thread_id', thread_id);
-                        localStorage.setItem('ragnetic_agent', agent);
-                    }, 10);
-                    fetchChatSessions(agent);
-                    const lastMessage = messagesDiv.lastElementChild;
-                    if (lastMessage && lastMessage.classList.contains('agent')) { lastMessage.dataset.streaming = 'false'; renderCodeblocks(lastMessage); renderMath(lastMessage); }
 
-                }
-            };
-        }
-        function handleFormSubmit(event) { if (event) event.preventDefault(); if (isGenerating) { socket.send(JSON.stringify({ type: 'interrupt' })); setGeneratingState(false); } else { sendMessage(); } }
-        function sendMessage() {
-            if (!loggedInUserToken || !loggedInDbUserId) {
-                showToast("Please log in to chat.", true);
-                return;
             }
-            const query = inputField.value.trim();
-            if (!query) return;
+        };
+    }
+    function handleFormSubmit(event) {
+        if (event) event.preventDefault(); // Prevent default form submission
+        if (isGenerating) {
+            // If currently generating, the button becomes a stop button
+            socket.send(JSON.stringify({ type: 'interrupt' })); // Send interrupt signal
+            setGeneratingState(false); // Update UI to stop state
+        } else {
+            // Otherwise, send the message (and trigger file uploads if any)
+            sendMessage();
+        }
+    }
 
-            const payload = { agent, user_id: parseInt(loggedInDbUserId), thread_id, query };
-            const message = { type: 'query', payload: payload };
-            const doSend = () => {
-                socket.send(JSON.stringify(message));
-                const emptyState = document.getElementById('empty-state');
-                if (emptyState) emptyState.remove();
-                appendUserMessage(query);
-                setGeneratingState(true);
-                typingIndicator.style.opacity = '1';
-                typingIndicator.style.display = 'flex';
-                scrollToBottom();
-                inputField.value = '';
-                inputField.style.height = 'auto';
-            };
-            if (!socket || socket.readyState !== WebSocket.OPEN) {
-                showToast("Connecting... Please try again shortly.");
-                openWebSocket(doSend);
-            } else {
-                doSend();
-            }
+    /**
+     * Handles sending the user's message and attached files.
+     * This function now manages the sequence of file uploads and then sending the chat query.
+     */
+    async function sendMessage() {
+        if (!loggedInUserToken || !loggedInDbUserId) {
+            showToast("Please log in to chat.", true);
+            return;
         }
-        function appendUserMessage(text) { const msg = document.createElement('div'); msg.className = 'message user'; msg.textContent = text; messagesDiv.appendChild(msg); scrollToBottom(); }
-        function createAgentMessageBubble() { const bubble = document.createElement('div'); bubble.className = 'message agent'; const contentDiv = document.createElement('div'); contentDiv.className = 'content'; bubble.appendChild(contentDiv); const copyBtn = document.createElement('button'); copyBtn.className = 'copy-btn'; copyBtn.innerHTML = svgs.copy; copyBtn.onclick = (e) => { const rawMarkdown = e.currentTarget.closest('.message.agent').dataset.rawMarkdown; if (rawMarkdown) { navigator.clipboard.writeText(rawMarkdown).then(() => { e.currentTarget.innerHTML = svgs.copied; setTimeout(() => { e.currentTarget.innerHTML = svgs.copy; }, 2000); }); } }; bubble.appendChild(copyBtn); bubble.dataset.rawMarkdown = ''; messagesDiv.appendChild(bubble); return bubble; }
-        function renderCodeblocks(scopeElement) {
-            scopeElement.querySelectorAll('pre > code').forEach((codeBlock) => {
-                const pre = codeBlock.parentElement;
-                if (pre.querySelector('.code-header')) return;
-                const lang = codeBlock.className.split('-')[1] || 'text';
-                const header = document.createElement('div');
-                header.className = 'code-header';
-                const langSpan = document.createElement('span');
-                langSpan.textContent = lang;
-                const copyBtn = document.createElement('button');
-                copyBtn.className = 'code-copy-btn';
-                copyBtn.innerHTML = svgs.copyCode;
-                copyBtn.onclick = () => {
-                    navigator.clipboard.writeText(codeBlock.textContent).then(() => {
-                        copyBtn.innerHTML = svgs.copiedCode;
-                        setTimeout(() => {
-                            copyBtn.innerHTML = svgs.copyCode;
-                        }, 2000);
-                    });
-                };
-                header.appendChild(langSpan);
-                header.appendChild(copyBtn);
-                pre.insertBefore(header, codeBlock);
-            });
-        }
-        function appendAgentToken(token) { let lastMessage = messagesDiv.lastElementChild; if (!lastMessage || !lastMessage.classList.contains('agent') || lastMessage.dataset.streaming === 'false') { typingIndicator.style.display = 'none'; lastMessage = createAgentMessageBubble(); lastMessage.dataset.streaming = 'true'; } lastMessage.dataset.rawMarkdown += token; const contentDiv = lastMessage.querySelector('.content'); if (contentDiv) { contentDiv.innerHTML = marked.parse(lastMessage.dataset.rawMarkdown); renderCodeblocks(contentDiv); } scrollToBottom(); }
 
-        async function loadHistory(agentName, threadId, userId) {
-            if (!loggedInUserToken || !loggedInDbUserId) {
-                showToast("Cannot load history: Not logged in.", true);
-                return;
-            }
+        const query = inputField.value.trim();
+        const attachedFiles = window.quickUploads.getAttachedFiles(); // Get File objects
+
+        // If no query and no files are attached, do nothing.
+        if (!query && attachedFiles.length === 0) {
+            showToast("Please enter a query or attach files.", true);
+            return;
+        }
+
+        // Set the UI to a "generating" state early to disable user input and buttons.
+        setGeneratingState(true);
+        // Show the typing indicator.
+        typingIndicator.style.opacity = '1';
+        typingIndicator.style.display = 'flex';
+        // Scroll to the bottom of the chat window.
+        scrollToBottom();
+
+        // --- Step 1: Handle File Uploads (if any) ---
+        const uploadedFileInfos = []; // This array will store {file_name, file_size, temp_doc_id} for the WebSocket payload.
+        if (attachedFiles.length > 0) {
+            appendUserMessage("Uploading files..."); // Provide immediate feedback to the user.
             try {
-                const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${loggedInDbUserId}`, {
-                    method: 'GET',
-                    headers: {
-                        'X-API-Key': loggedInUserToken
+                // Ensure a thread_id exists before uploading files.
+                // If it's a new chat, we need to create a session first to get one.
+                if (!thread_id) {
+                    // This assumes a /api/v1/sessions/create endpoint exists that creates a new session.
+                    // If not, this part needs adjustment based on how new sessions are initiated on your backend.
+                    const sessionCreationPayload = {
+                        agent_name: agent, // Use the currently selected agent
+                        user_id: parseInt(loggedInDbUserId)
+                    };
+                    const sessionResponse = await fetch(`${API_BASE_URL}/sessions/create`, { // Assuming /sessions/create
+                        method: 'POST',
+                        headers: {
+                            'X-API-Key': loggedInUserToken,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(sessionCreationPayload)
+                    });
+
+                    if (!sessionResponse.ok) {
+                        const errorText = await sessionResponse.text();
+                        throw new Error(`Failed to create new session for file upload: ${sessionResponse.status} - ${errorText}`);
                     }
+                    const sessionData = await sessionResponse.json();
+                    thread_id = sessionData.thread_id; // Get the newly created thread_id
+                    localStorage.setItem('ragnetic_thread_id', thread_id); // Store it locally
+                    showToast("New chat session created for file upload.", false);
+                    fetchChatSessions(agent); // Refresh sidebar to show new session
+                }
+
+                // Upload each attached file to the backend in parallel.
+                // `window.quickUploads.uploadFileToBackend` returns a promise for each upload.
+                const uploadPromises = attachedFiles.map(file =>
+                    window.quickUploads.uploadFileToBackend(file, thread_id) // Pass the now-guaranteed thread_id
+                );
+                const results = await Promise.all(uploadPromises); // Wait for all uploads to complete.
+                uploadedFileInfos.push(...results); // Collect the results (which include `temp_doc_id`).
+
+                // Update UI feedback for the user.
+                appendUserMessage("Files uploaded successfully. Processing query...");
+            } catch (error) {
+                // An error occurred during file upload.
+                // The `uploadFileToBackend` function already shows a toast message.
+                setGeneratingState(false); // Reset UI state.
+                showToast(`File upload pre-processing failed: ${error.message}`, true);
+                return; // Stop `sendMessage` execution.
+            }
+        }
+
+        // --- Step 2: Send Chat Query via WebSocket ---
+        const payload = {
+            agent,
+            user_id: parseInt(loggedInDbUserId),
+            thread_id,
+            query,
+            files: uploadedFileInfos // Crucially, send the collected `uploadedFileInfos` with `temp_doc_id`.
+        };
+        const message = { type: 'query', payload: payload };
+
+        // Define the actual WebSocket send logic as a separate function.
+        const doSend = () => {
+            socket.send(JSON.stringify(message)); // Send the WebSocket message.
+            // Remove the empty state message if present.
+            const emptyState = document.getElementById('empty-state');
+            if (emptyState) emptyState.remove();
+            // Append the user's query to the chat history.
+            appendUserMessage(query);
+            // If files were uploaded, display them as part of the user's message in the chat history.
+            if (uploadedFileInfos.length > 0) {
+                appendAttachedFilesToUserMessage(uploadedFileInfos);
+            }
+            // Clear the input field and reset its height.
+            inputField.value = '';
+            inputField.style.height = 'auto';
+            // Clear the client-side list of attached files.
+            window.quickUploads.clearAttachedFiles();
+        };
+
+        // If WebSocket is not open, try to open it and then send the message.
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            showToast("Connecting... Please try again shortly.");
+            openWebSocket(doSend); // Pass `doSend` as a callback for when the WebSocket opens.
+        } else {
+            doSend(); // If WebSocket is already open, send immediately.
+        }
+    }
+
+    /**
+     * Appends a new user message to the chat display.
+     * @param {string} text - The content of the user's message.
+     */
+    function appendUserMessage(text) {
+        const msg = document.createElement('div');
+        msg.className = 'message user';
+        msg.textContent = text;
+        messagesDiv.appendChild(msg);
+        scrollToBottom();
+    }
+
+    /**
+     * Appends a visual representation of attached files to the last user message.
+     * @param {Array<Object>} uploadedFileInfos - List of objects with file_name, file_size, temp_doc_id.
+     */
+    function appendAttachedFilesToUserMessage(uploadedFileInfos) {
+        const lastUserMessage = messagesDiv.lastElementChild;
+        if (lastUserMessage && lastUserMessage.classList.contains('user')) {
+            const attachmentsDiv = document.createElement('div');
+            attachmentsDiv.className = 'user-message-attachments'; // Apply CSS styling
+            // Create a span for each uploaded file's name.
+            uploadedFileInfos.forEach(fileInfo => {
+                const fileSpan = document.createElement('span');
+                fileSpan.className = 'attached-file-display';
+                fileSpan.textContent = fileInfo.file_name; // Use file_name from uploaded info
+                attachmentsDiv.appendChild(fileSpan);
+            });
+            lastUserMessage.appendChild(attachmentsDiv); // Append to the user message bubble.
+            scrollToBottom();
+        }
+    }
+
+    /**
+     * Creates a new message bubble for AI responses.
+     * Includes basic copy functionality.
+     * @returns {HTMLElement} The created message bubble element.
+     */
+    function createAgentMessageBubble() {
+        const bubble = document.createElement('div');
+        bubble.className = 'message agent';
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'content';
+        bubble.appendChild(contentDiv);
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-btn';
+        copyBtn.innerHTML = svgs.copy;
+        copyBtn.onclick = (e) => {
+            const rawMarkdown = e.currentTarget.closest('.message.agent').dataset.rawMarkdown;
+            if (rawMarkdown) {
+                navigator.clipboard.writeText(rawMarkdown).then(() => {
+                    e.currentTarget.innerHTML = svgs.copied;
+                    setTimeout(() => { e.currentTarget.innerHTML = svgs.copy; }, 2000);
                 });
-                if (!response.ok) {
-                    if (response.status === 404) {
-                        console.warn(`History for thread ${threadId} not found or unauthorized.`);
-                        startNewSession(false);
-                        return;
-                    }
-                    showToast(`Could not load session (status: ${response.status}).`, true);
+            }
+        };
+        bubble.appendChild(copyBtn);
+        bubble.dataset.rawMarkdown = ''; // Store raw markdown for copy
+        messagesDiv.appendChild(bubble);
+        return bubble;
+    }
+
+    /**
+     * Renders code blocks with syntax highlighting and copy buttons.
+     * Assumes `renderCodeblocks` utility is available.
+     * @param {HTMLElement} scopeElement - The element containing code blocks to render.
+     */
+    function renderCodeblocks(scopeElement) {
+        // This function is typically from a separate utility or markdown parser setup.
+        // Its implementation is not included here but is assumed to be correct.
+        scopeElement.querySelectorAll('pre > code').forEach((codeBlock) => {
+            const pre = codeBlock.parentElement;
+            if (pre.querySelector('.code-header')) return; // Already rendered
+            const lang = codeBlock.className.split('-')[1] || 'text'; // Extract language from class
+            const header = document.createElement('div');
+            header.className = 'code-header';
+            const langSpan = document.createElement('span');
+            langSpan.textContent = lang;
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'code-copy-btn';
+            copyBtn.innerHTML = svgs.copyCode;
+            copyBtn.onclick = () => {
+                navigator.clipboard.writeText(codeBlock.textContent).then(() => {
+                    copyBtn.innerHTML = svgs.copiedCode;
+                    setTimeout(() => {
+                        copyBtn.innerHTML = svgs.copyCode;
+                    }, 2000);
+                });
+            };
+            header.appendChild(langSpan);
+            header.appendChild(copyBtn);
+            pre.insertBefore(header, codeBlock); // Insert header before the code block
+        });
+    }
+
+    /**
+     * Appends a token received from the WebSocket to the last AI message.
+     * Handles creating a new AI message bubble if needed.
+     * @param {string} token - The text token from the AI.
+     */
+    function appendAgentToken(token) {
+        let lastMessage = messagesDiv.lastElementChild;
+        // Check if the last message is an AI message that is still streaming.
+        if (!lastMessage || !lastMessage.classList.contains('agent') || lastMessage.dataset.streaming === 'false') {
+            typingIndicator.style.display = 'none'; // Hide typing indicator once content starts flowing
+            lastMessage = createAgentMessageBubble(); // Create a new AI message bubble
+            lastMessage.dataset.streaming = 'true'; // Mark as streaming
+        }
+        // Append the new token to the raw markdown data stored on the message element.
+        lastMessage.dataset.rawMarkdown += token;
+        // Render the updated markdown to HTML.
+        const contentDiv = lastMessage.querySelector('.content');
+        if (contentDiv) {
+            contentDiv.innerHTML = marked.parse(lastMessage.dataset.rawMarkdown);
+            renderCodeblocks(contentDiv); // Re-render code blocks to catch any new ones
+        }
+        scrollToBottom(); // Keep the chat scrolled to the latest message.
+    }
+
+    /**
+     * Loads chat history for a specific thread from the backend.
+     * @param {string} agentName - The name of the agent.
+     * @param {string} threadId - The unique ID of the chat thread.
+     * @param {number} userId - The database ID of the current user.
+     */
+    async function loadHistory(agentName, threadId, userId) {
+        if (!loggedInUserToken || !loggedInDbUserId) {
+            showToast("Cannot load history: Not logged in.", true);
+            return;
+        }
+        try {
+            const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${loggedInDbUserId}`, {
+                method: 'GET',
+                headers: {
+                    'X-API-Key': loggedInUserToken // Authenticate the request
+                }
+            });
+            if (!response.ok) {
+                // If session not found or unauthorized (404), start a new session instead.
+                if (response.status === 404) {
+                    console.warn(`History for thread ${threadId} not found or unauthorized.`);
+                    startNewSession(false); // Start a new session without confirmation
                     return;
                 }
-                const history = await response.json();
-                messagesDiv.innerHTML = '';
-                history.forEach(msg => { if (msg.type === 'human') appendUserMessage(msg.content); else if (msg.type === 'ai') { const agentMsgBubble = createAgentMessageBubble(); agentMsgBubble.dataset.rawMarkdown = msg.content; const contentDiv = agentMsgBubble.querySelector('.content'); contentDiv.innerHTML = marked.parse(msg.content); agentMsgBubble.dataset.streaming = 'false'; renderCodeblocks(contentDiv); renderMath(contentDiv); } });
-                setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 100);
-            }
-            catch (error) {
-                console.error("Failed to fetch history:", error);
-                showToast("Could not connect to server to load session.", true);
-            }
-        }
-
-        async function fetchChatSessions(agentName) {
-            if (!loggedInUserToken || !loggedInDbUserId) {
-                historyList.innerHTML = '';
+                // For other errors, show a toast.
+                showToast(`Could not load session (status: ${response.status}).`, true);
                 return;
             }
-            try {
-                const response = await fetch(`/sessions?agent_name=${agentName}&user_id=${loggedInDbUserId}`, {
-                    method: 'GET',
-                    headers: {
-                        'X-API-Key': loggedInUserToken
-                    }
-                });
-                if (!response.ok) { throw new Error('Failed to fetch chat sessions.'); }
-                const sessions = await response.json();
-                historyList.innerHTML = '';
-                if (sessions.length === 0) {
-                     historyList.innerHTML = `<li class="no-history"><p>No chat history available.</p></li>`;
-                     return;
-                }
-                sessions.forEach(session => {
-                    const li = document.createElement('li');
-                    li.dataset.threadId = session.thread_id;
-                    li.dataset.topicName = session.topic_name;
-                    const mainContent = document.createElement('div');
-                    mainContent.className = 'history-item-main';
-                    mainContent.innerHTML = `
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.5a1 1 0 0 0-.8.4l-1.9 2.533a1 1 0 0 1-1.6 0L5.3 12.4a1 1 0 0 0-.8-.4H2a2 2 0 0 1-2-2V2zm3.5 1a.5.5 0 0 0 0 1h9a.5.5 0 0 0 0-1h-9zm0 2.5a.5.5 0 0 0 0 1h9a.5.5 0 0 0 0-1h-9zm0 2.5a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1h-5z"/></svg>
-                        <span class="history-item-text">${session.topic_name}</span>
-                        <input type="text" class="rename-input" style="display: none;" />
-                    `;
-                    li.appendChild(mainContent);
-                    const actionsContainer = document.createElement('div');
-                    actionsContainer.className = 'history-item-actions';
-                    actionsContainer.innerHTML = `
-                        <button class="action-btn rename-btn" title="Rename Chat">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg>
-                        </button>
-                        <button class="action-btn delete-btn" title="Delete Chat">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/><path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/></svg>
-                        </button>
-                    `;
-                    li.appendChild(actionsContainer);
-                    if (session.thread_id === thread_id) { li.classList.add('active'); }
-                    mainContent.onclick = () => {
-                        if (li.classList.contains('editing')) return;
-                        document.querySelectorAll('#history-list li').forEach(item => item.classList.remove('active'));
-                        li.classList.add('active');
-                        thread_id = session.thread_id;
-                        localStorage.setItem('ragnetic_thread_id', thread_id);
-                        loadHistory(agent, thread_id, loggedInDbUserId);
-                        openWebSocket();
-                    };
-                    addRenameFunctionality(li, session.thread_id);
-                    addDeleteFunctionality(li, session.thread_id);
-                    historyList.appendChild(li);
-                });
-            } catch (error) {
-                console.error("Failed to fetch chat sessions:", error);
-                historyList.innerHTML = `<li class="no-history"><p>No chat history available.</p></li>`;
-            }
-        }
+            const history = await response.json();
+            messagesDiv.innerHTML = ''; // Clear current messages display
 
-        function addRenameFunctionality(liElement, currentThreadId) {
-            const renameButton = liElement.querySelector('.rename-btn');
-            const textSpan = liElement.querySelector('.history-item-text');
-            const renameInput = liElement.querySelector('.rename-input');
-            renameButton.onclick = (e) => {
-                e.stopPropagation();
-                liElement.classList.add('editing');
-                renameInput.style.display = 'block';
-                textSpan.style.display = 'none';
-                renameInput.value = textSpan.textContent;
-                renameInput.focus();
-            };
-            const finishEditing = async () => {
-                const newName = renameInput.value.trim();
-                const oldName = textSpan.textContent;
-                if (newName && newName !== oldName) {
-                    if (!loggedInUserToken || !loggedInDbUserId) {
-                        showToast("Please log in to rename chats.", true);
-                        return;
+            // Iterate through historical messages and append them to the display.
+            history.forEach(msg => {
+                if (msg.type === 'human') {
+                    appendUserMessage(msg.content);
+                    // Check for and display quick-uploaded files for historical user messages.
+                    // Ensure this matches the format saved in DB meta: [{file_name: ..., file_size: ..., temp_doc_id: ...}]
+                    if (msg.meta && msg.meta.quick_uploaded_files && msg.meta.quick_uploaded_files.length > 0) {
+                        appendAttachedFilesToUserMessage(msg.meta.quick_uploaded_files);
                     }
-                    try {
-                        const response = await fetch(`/sessions/${currentThreadId}/rename?agent_name=${agent}&user_id=${loggedInDbUserId}`, {
-                            method: 'PUT',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'X-API-Key': loggedInUserToken
-                            },
-                            body: JSON.stringify({ new_name: newName })
-                        });
-                        if (!response.ok) throw new Error('Failed to rename session.');
-                        textSpan.textContent = newName;
-                        showToast('Chat renamed successfully!');
-                    } catch (error) {
-                        console.error('Rename failed:', error);
-                        showToast('Error: Could not rename chat.', true);
+                } else if (msg.type === 'ai') {
+                    const agentMsgBubble = createAgentMessageBubble();
+                    agentMsgBubble.dataset.rawMarkdown = msg.content; // Store raw content for copy
+                    const contentDiv = agentMsgBubble.querySelector('.content');
+                    contentDiv.innerHTML = marked.parse(msg.content); // Render markdown
+                    agentMsgBubble.dataset.streaming = 'false'; // Not streaming historical messages
+                    renderCodeblocks(contentDiv); // Render code blocks
+                    renderMath(contentDiv); // Render math expressions
+
+                    // Render citations for historical AI messages if meta data exists.
+                    if (msg.meta && msg.meta.citations && window.citationRenderer && typeof window.citationRenderer.renderCitations === 'function') {
+                        window.citationRenderer.renderCitations(agentMsgBubble, msg.meta.citations);
                     }
                 }
+            });
+            // Scroll to the bottom after loading history to show the latest messages.
+            setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 100);
+        }
+        catch (error) {
+            console.error("Failed to fetch history:", error);
+            showToast("Could not connect to server to load session.", true);
+        }
+    }
+
+    /**
+     * Fetches and displays the list of recent chat sessions for the current agent and user.
+     * Populates the `historyList` sidebar.
+     * @param {string} agentName - The name of the currently selected agent.
+     */
+    async function fetchChatSessions(agentName) {
+        if (!loggedInUserToken || !loggedInDbUserId) {
+            historyList.innerHTML = ''; // Clear history if not logged in
+            return;
+        }
+        try {
+            const response = await fetch(`/sessions?agent_name=${agentName}&user_id=${loggedInDbUserId}`, {
+                method: 'GET',
+                headers: {
+                    'X-API-Key': loggedInUserToken
+                }
+            });
+            if (!response.ok) { throw new Error('Failed to fetch chat sessions.'); }
+            const sessions = await response.json();
+            historyList.innerHTML = ''; // Clear existing list
+
+            if (sessions.length === 0) {
+                 historyList.innerHTML = `<li class="no-history"><p>No chat history available.</p></li>`;
+                 return;
+            }
+
+            // Populate the history sidebar with session items.
+            sessions.forEach(session => {
+                const li = document.createElement('li');
+                li.dataset.threadId = session.thread_id;
+                li.dataset.topicName = session.topic_name; // Store topic name for renaming
+                const mainContent = document.createElement('div');
+                mainContent.className = 'history-item-main';
+                mainContent.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.5a1 1 0 0 0-.8.4l-1.9 2.533a1 1 0 0 1-1.6 0L5.3 12.4a1 1 0 0 0-.8-.4H2a2 2 0 0 1-2-2V2zm3.5 1a.5.5 0 0 0 0 1h9a.5.5 0 0 0 0-1h-9zm0 2.5a.5.5 0 0 0 0 1h9a.5.5 0 0 0 0-1h-9zm0 2.5a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1h-5z"/></svg>
+                    <span class="history-item-text">${session.topic_name}</span>
+                    <input type="text" class="rename-input" style="display: none;" />
+                `;
+                li.appendChild(mainContent);
+                const actionsContainer = document.createElement('div');
+                actionsContainer.className = 'history-item-actions';
+                actionsContainer.innerHTML = `
+                    <button class="action-btn rename-btn" title="Rename Chat">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg>
+                    </button>
+                    <button class="action-btn delete-btn" title="Delete Chat">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/><path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/></svg>
+                    </button>
+                `;
+                li.appendChild(actionsContainer);
+                // Highlight the active session.
+                if (session.thread_id === thread_id) { li.classList.add('active'); }
+                // Attach click handler to load session history.
+                mainContent.onclick = () => {
+                    if (li.classList.contains('editing')) return; // Prevent loading while renaming
+                    document.querySelectorAll('#history-list li').forEach(item => item.classList.remove('active'));
+                    li.classList.add('active');
+                    thread_id = session.thread_id; // Set current thread ID
+                    localStorage.setItem('ragnetic_thread_id', thread_id); // Store for persistence
+                    loadHistory(agent, thread_id, loggedInDbUserId); // Load history for the selected session
+                    openWebSocket(); // Re-open WebSocket for the new session
+                };
+                addRenameFunctionality(li, session.thread_id); // Add rename functionality
+                addDeleteFunctionality(li, session.thread_id); // Add delete functionality
+                historyList.appendChild(li); // Append to the history list
+            });
+        } catch (error) {
+            console.error("Failed to fetch chat sessions:", error);
+            historyList.innerHTML = `<li class="no-history"><p>No chat history available.</p></li>`;
+        }
+    }
+
+    /**
+     * Adds rename functionality to a chat session list item.
+     * @param {HTMLElement} liElement - The list item element.
+     * @param {string} currentThreadId - The thread ID of the session.
+     */
+    function addRenameFunctionality(liElement, currentThreadId) {
+        const renameButton = liElement.querySelector('.rename-btn');
+        const textSpan = liElement.querySelector('.history-item-text');
+        const renameInput = liElement.querySelector('.rename-input');
+        renameButton.onclick = (e) => {
+            e.stopPropagation(); // Prevent loading session when clicking rename
+            liElement.classList.add('editing');
+            renameInput.style.display = 'block';
+            textSpan.style.display = 'none';
+            renameInput.value = textSpan.textContent; // Pre-fill input with current name
+            renameInput.focus();
+        };
+        const finishEditing = async () => {
+            const newName = renameInput.value.trim();
+            const oldName = textSpan.textContent;
+            if (newName && newName !== oldName) {
+                if (!loggedInUserToken || !loggedInDbUserId) {
+                    showToast("Please log in to rename chats.", true);
+                    return;
+                }
+                try {
+                    const response = await fetch(`/sessions/${currentThreadId}/rename?agent_name=${agent}&user_id=${loggedInDbUserId}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-API-Key': loggedInUserToken
+                        },
+                        body: JSON.stringify({ new_name: newName })
+                    });
+                    if (!response.ok) throw new Error('Failed to rename session.');
+                    textSpan.textContent = newName; // Update displayed name
+                    showToast('Chat renamed successfully!');
+                } catch (error) {
+                    console.error('Rename failed:', error);
+                    showToast('Error: Could not rename chat.', true);
+                }
+            }
+            liElement.classList.remove('editing'); // Exit editing mode
+            renameInput.style.display = 'none';
+            textSpan.style.display = 'block';
+        };
+        renameInput.onblur = finishEditing; // Finish editing when input loses focus
+        renameInput.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault(); // Prevent new line in input
+                finishEditing();
+            } else if (e.key === 'Escape') {
                 liElement.classList.remove('editing');
                 renameInput.style.display = 'none';
                 textSpan.style.display = 'block';
-            };
-            renameInput.onblur = finishEditing;
-            renameInput.onkeydown = (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    finishEditing();
-                } else if (e.key === 'Escape') {
-                    liElement.classList.remove('editing');
-                    renameInput.style.display = 'none';
-                    textSpan.style.display = 'block';
-                }
-            };
-        }
-
-        function addDeleteFunctionality(liElement, currentThreadId) {
-            const deleteButton = liElement.querySelector('.delete-btn');
-            deleteButton.onclick = (e) => {
-                e.stopPropagation();
-                showConfirmationModal(() => {
-                    deleteChatSession(liElement, currentThreadId);
-                }, "Are you sure you want to delete this chat?", "Delete");
-            };
-        }
-        async function deleteChatSession(liElement, currentThreadId) {
-            if (!loggedInUserToken || !loggedInDbUserId) {
-                showToast("Please log in to delete chats.", true);
-                return;
             }
+        };
+    }
+
+    /**
+     * Adds delete functionality to a chat session list item.
+     * @param {HTMLElement} liElement - The list item element.
+     * @param {string} currentThreadId - The thread ID of the session.
+     */
+    function addDeleteFunctionality(liElement, currentThreadId) {
+        const deleteButton = liElement.querySelector('.delete-btn');
+        deleteButton.onclick = (e) => {
+            e.stopPropagation(); // Prevent loading session when clicking delete
+            showConfirmationModal(() => {
+                deleteChatSession(liElement, currentThreadId);
+            }, "Are you sure you want to delete this chat?", "Delete");
+        };
+    }
+
+    /**
+     * Deletes a chat session from the backend and updates the UI.
+     * @param {HTMLElement} liElement - The DOM element of the session to delete.
+     * @param {string} currentThreadId - The thread ID of the session to delete.
+     */
+    async function deleteChatSession(liElement, currentThreadId) {
+        if (!loggedInUserToken || !loggedInDbUserId) {
+            showToast("Please log in to delete chats.", true);
+            return;
+        }
+        try {
+            const response = await fetch(`/sessions/${currentThreadId}?agent_name=${agent}&user_id=${loggedInDbUserId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': loggedInUserToken
+                }
+            });
+            if (!response.ok) { throw new Error('Failed to delete session.'); }
+            showToast('Chat deleted successfully!');
+            liElement.remove(); // Remove from UI
+
+            // If the deleted session was the currently active one, start a new session.
+            if (thread_id === currentThreadId) {
+                startNewSession();
+            }
+        } catch(error) {
+            console.error("Delete failed:", error);
+            showToast('Error: Could not delete chat.', true);
+        }
+    }
+
+    /**
+     * Displays a confirmation modal to the user.
+     * @param {Function} onConfirm - Callback function to execute if user confirms.
+     * @param {string} text - Message to display in the modal.
+     * @param {string} confirmText - Text for the confirm button.
+     */
+    function showConfirmationModal(onConfirm, text = "Are you sure?", confirmText = "Start New") {
+        // If "Start New" and chat is already empty, just proceed without modal.
+        if (confirmText === "Start New" && (messagesDiv.children.length === 0 || document.getElementById('empty-state'))) {
+            onConfirm();
+            return;
+        }
+        modalText.textContent = text;
+        modalConfirmBtn.textContent = confirmText;
+        // Style confirm button based on action (e.g., red for "Delete")
+        modalConfirmBtn.className = confirmText === "Delete" ? 'modal-btn confirm error' : 'modal-btn confirm';
+        confirmCallback = onConfirm; // Store callback
+        confirmationModal.style.display = 'flex'; // Show modal
+    }
+
+    /**
+     * Resets the chat interface to a new session state.
+     * Clears local storage, UI, and re-initializes WebSocket.
+     * @param {boolean} [showConfirmation=true] - Whether to show a confirmation modal.
+     */
+    function startNewSession(showConfirmation = true) { // MODIFIED: Added showConfirmation parameter
+        const doReset = () => {
+            localStorage.removeItem('ragnetic_thread_id'); // Clear stored thread ID
+            thread_id = null; // Reset current thread ID
+            renderEmptyState(); // Show empty chat state
+            openWebSocket(); // Open new WebSocket connection
+            fetchChatSessions(agent); // Reload session list
+            window.quickUploads.clearAttachedFiles(); // Clear any attached files
+        };
+
+        if (showConfirmation) {
+            showConfirmationModal(doReset, "Start a new chat?", "Start New");
+        } else {
+            doReset(); // Directly reset if no confirmation needed (e.g., from 404 in loadHistory)
+        }
+    }
+
+
+    // --- Event Listeners for UI Interactions ---
+
+    // Logout button click handler
+    logoutBtn.addEventListener('click', () => {
+        // Clear all relevant local storage items
+        loggedInUserToken = null;
+        loggedInDbUserId = null;
+        localStorage.removeItem('ragnetic_user_token');
+        localStorage.removeItem('ragnetic_db_user_id');
+        localStorage.removeItem('ragnetic_thread_id');
+        localStorage.removeItem('ragnetic_user_id'); // Redundant if db_user_id is used consistently
+        localStorage.removeItem('ragnetic_agent');
+
+        thread_id = null;
+        agent = null;
+        showToast("Logged out successfully.");
+        window.location.href = '/login'; // Redirect to login page
+        messagesDiv.innerHTML = ''; // Clear chat display
+        historyList.innerHTML = ''; // Clear history sidebar
+        // Close existing WebSocket connection cleanly
+        if (socket && socket.readyState !== WebSocket.CLOSED) {
+            socket.close(1000, "User logged out");
+        }
+        renderEmptyState(); // Show empty state for new user
+        window.quickUploads.clearAttachedFiles(); // Clear any attached files on logout
+    });
+
+
+    // DOMContentLoaded listener for initial setup
+    document.addEventListener('DOMContentLoaded', async () => {
+        // Only set up chat environment if user is logged in.
+        if (loggedInUserToken && loggedInDbUserId) {
+            setupChatEnvironment();
+            // Dynamically load ingestion modal HTML
             try {
-                const response = await fetch(`/sessions/${currentThreadId}?agent_name=${agent}&user_id=${loggedInDbUserId}`, {
-                    method: 'DELETE',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': loggedInUserToken
-                    }
-                });
-                if (!response.ok) { throw new Error('Failed to delete session.'); }
-                showToast('Chat deleted successfully!');
-                liElement.remove();
-                if (thread_id === currentThreadId) {
-                    startNewSession();
+                const response = await fetch('/static/html/ingestion_modal.html');
+                if (!response.ok) {
+                    throw new Error(`Failed to load ingestion modal HTML from /static/html: ${response.statusText}`);
                 }
-            } catch(error) {
-                console.error("Delete failed:", error);
-                showToast('Error: Could not delete chat.', true);
-            }
-        }
-        function showConfirmationModal(onConfirm, text = "Are you sure?", confirmText = "Start New") {
-            if (confirmText === "Start New" && (messagesDiv.children.length === 0 || document.getElementById('empty-state'))) {
-                onConfirm();
-                return;
-            }
-            modalText.textContent = text;
-            modalConfirmBtn.textContent = confirmText;
-            modalConfirmBtn.className = confirmText === "Delete" ? 'modal-btn confirm error' : 'modal-btn confirm';
-            confirmCallback = onConfirm;
-            confirmationModal.style.display = 'flex';
-        }
-        function startNewSession() {
-            localStorage.removeItem('ragnetic_thread_id');
-            thread_id = null;
-            renderEmptyState();
-            openWebSocket();
-            fetchChatSessions(agent);
-        }
+                ingestionModal.innerHTML = await response.text();
 
-        // Logout handler
-        logoutBtn.addEventListener('click', () => {
-            loggedInUserToken = null;
-            loggedInDbUserId = null;
-            localStorage.removeItem('ragnetic_user_token');
-            localStorage.removeItem('ragnetic_db_user_id');
-            localStorage.removeItem('ragnetic_thread_id');
-            localStorage.removeItem('ragnetic_user_id');
-            localStorage.removeItem('ragnetic_agent');
-            thread_id = null;
-            agent = null;
-            showToast("Logged out successfully.");
-            // Redirect to login page after logout
-            window.location.href = '/login';
-            messagesDiv.innerHTML = '';
-            historyList.innerHTML = '';
-            if (socket && socket.readyState !== WebSocket.CLOSED) {
-                socket.close(1000, "User logged out");
-            }
-            renderEmptyState();
-        });
-
-
-        // Consolidated DOMContentLoaded listener
-        document.addEventListener('DOMContentLoaded', async () => {
-            if (loggedInUserToken && loggedInDbUserId) {
-                setupChatEnvironment();
-                try {
-                    const response = await fetch('/static/html/ingestion_modal.html');
-                    if (!response.ok) {
-                        throw new Error(`Failed to load ingestion modal HTML from /static/html: ${response.statusText}`);
-                    }
-                    ingestionModal.innerHTML = await response.text();
-
-                    // Call the globally exposed init method for the modal logic
-                    // This ensures all modal elements are queried after its HTML is in the DOM
-                    if (window.IngestionModal && typeof window.IngestionModal.init === 'function') {
-                        window.IngestionModal.init();
-                    } else {
-                        console.error("IngestionModal.init not found. Script might have failed or not exposed it globally.");
-                        showToast("Ingestion modal script failed to load correctly. Please refresh.", true);
-                    }
-
-                } catch (error) {
-                    console.error("Error loading ingestion modal:", error);
-                    showToast(`Error loading ingestion modal: ${error.message}`, true);
-                    openIngestionModalBtn.disabled = true; // Disable button if modal fails to load
-                }
-            } else {
-                // If not logged in, redirect to login page
-                window.location.href = '/login';
-            }
-        });
-
-        newChatButton.addEventListener('click', () => showConfirmationModal(startNewSession, "Start a new chat?", "Start New"));
-        agentSelect.addEventListener('change', () => showConfirmationModal(() => {
-            agent = agentSelect.value;
-            localStorage.setItem('ragnetic_agent', agent);
-            startNewSession();
-            // After changing agent, if the ingestion modal is open, refresh its agent list
-            if (ingestionModal.style.display === 'flex' && window.IngestionModal && typeof window.IngestionModal.loadAgents === 'function') {
-                window.IngestionModal.loadAgents(agent);
-            }
-        }, "Change agent and start a new chat?", "Change Agent"));
-        modalCancelBtn.addEventListener('click', () => { confirmationModal.style.display = 'none'; confirmCallback = null; });
-        modalConfirmBtn.addEventListener('click', () => { if (confirmCallback) confirmCallback(); confirmationModal.style.display = 'none'; confirmCallback = null; });
-        inputField.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleFormSubmit(); } });
-        inputField.addEventListener('input', () => { inputField.style.height = 'auto'; inputField.style.height = `${inputField.scrollHeight}px`; });
-
-        openIngestionModalBtn.addEventListener('click', async () => {
-            if (!loggedInUserToken || !loggedInDbUserId) {
-                showToast("Please log in to ingest data.", true);
-                window.location.href = '/login';
-                return;
-            }
-            if (window.IngestionModal && typeof window.IngestionModal.loadAgents === 'function') {
-                // Pass the currently selected chat agent name to pre-select it in the modal
-                await window.IngestionModal.loadAgents(agentSelect.value);
-                // After loading agents, ensure the source fields are rendered for the currently selected source type
-                const ingestionSourceTypeSelectInModal = ingestionModal.querySelector('#ingestionSourceType');
-                if (ingestionSourceTypeSelectInModal) {
-                    window.IngestionModal.renderIngestionSourceFields(ingestionSourceTypeSelectInModal.value);
+                // Initialize ingestion modal logic after its HTML is loaded.
+                if (window.IngestionModal && typeof window.IngestionModal.init === 'function') {
+                    window.IngestionModal.init();
                 } else {
-                    console.warn("ingestionSourceTypeSelect not found on modal open, might be timing issue.");
+                    console.error("IngestionModal.init not found. Script might have failed or not exposed it globally.");
+                    showToast("Ingestion modal script failed to load correctly. Please refresh.", true);
                 }
-                // When opening the modal, always show the form panel and reset its state
-                if (window.IngestionModal && typeof window.IngestionModal.showIngestionFormPanel === 'function') {
-                    window.IngestionModal.showIngestionFormPanel(); // This will reset and show the form
-                }
-                ingestionModal.style.display = 'flex';
-            } else {
-                 console.error("Ingestion modal logic not initialized or functions missing.");
-                 showToast("Ingestion modal not ready. Please refresh.", true);
+
+            } catch (error) {
+                console.error("Error loading ingestion modal:", error);
+                showToast(`Error loading ingestion modal: ${error.message}`, true);
+                openIngestionModalBtn.disabled = true; // Disable button if modal fails to load
             }
+        } else {
+            window.location.href = '/login'; // Redirect to login if not authenticated
+        }
+    });
+
+    // New Chat button click handler
+    newChatButton.addEventListener('click', () => startNewSession()); // MODIFIED: Call startNewSession directly, it handles confirmation
+
+    // Agent selection change handler
+    agentSelect.addEventListener('change', () => showConfirmationModal(() => {
+        agent = agentSelect.value; // Update current agent
+        localStorage.setItem('ragnetic_agent', agent); // Persist agent choice
+        startNewSession(false); // Start a new session without confirmation here
+        // If ingestion modal is open, refresh its agent list.
+        if (ingestionModal.style.display === 'flex' && window.IngestionModal && typeof window.IngestionModal.loadAgents === 'function') {
+            window.IngestionModal.loadAgents(agent);
+        }
+    }, "Change agent and start a new chat?", "Change Agent")); // Keep original modal logic
+
+    // Confirmation modal button handlers
+    modalCancelBtn.addEventListener('click', () => { confirmationModal.style.display = 'none'; confirmCallback = null; });
+    modalConfirmBtn.addEventListener('click', () => { if (confirmCallback) confirmCallback(); confirmationModal.style.display = 'none'; confirmCallback = null; });
+
+    // Input field keydown for Enter to send message, Shift+Enter for new line
+    inputField.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleFormSubmit();
+        }
+    });
+
+    // Adjust input field height dynamically based on content
+    inputField.addEventListener('input', () => {
+        inputField.style.height = 'auto';
+        inputField.style.height = `${inputField.scrollHeight}px`;
+    });
+
+    // Open Ingestion Modal button handler
+    openIngestionModalBtn.addEventListener('click', async () => {
+        if (!loggedInUserToken || !loggedInDbUserId) {
+            showToast("Please log in to ingest data.", true);
+            window.location.href = '/login';
+            return;
+        }
+        if (window.IngestionModal && typeof window.IngestionModal.loadAgents === 'function') {
+            await window.IngestionModal.loadAgents(agentSelect.value); // Load agents into the modal select
+            const ingestionSourceTypeSelectInModal = ingestionModal.querySelector('#ingestionSourceType');
+            if (ingestionSourceTypeSelectInModal) {
+                window.IngestionModal.renderIngestionSourceFields(ingestionSourceTypeSelectInModal.value);
+            } else {
+                console.warn("ingestionSourceTypeSelect not found on modal open, might be timing issue.");
+            }
+            if (window.IngestionModal && typeof window.IngestionModal.showIngestionFormPanel === 'function') {
+                window.IngestionModal.showIngestionFormPanel(); // Reset and show form panel
+            }
+            ingestionModal.style.display = 'flex'; // Display the modal
+        } else {
+             console.error("Ingestion modal logic not initialized or functions missing.");
+             showToast("Ingestion modal not ready. Please refresh.", true);
+        }
+    });
+
+    // Quick Upload button click handler
+    if (quickUploadBtn) {
+        quickUploadBtn.addEventListener('click', () => {
+            quickUploadFileInput.click(); // Programmatically click the hidden file input
         });
-    </script>
+    }
+    // Quick Upload file input change handler
+    if (quickUploadFileInput) {
+        quickUploadFileInput.addEventListener('change', (event) => {
+            if (window.quickUploads && typeof window.quickUploads.handleFileSelection === 'function') {
+                window.quickUploads.handleFileSelection(event.target.files);
+            }
+            event.target.value = ''; // Clear the input so same file can be selected again
+        });
+    }
+</script>
 </body>
 </html>

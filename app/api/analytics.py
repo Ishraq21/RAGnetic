@@ -254,7 +254,6 @@ async def get_benchmark_summary(
                     "Total Tokens": "total_tokens",
                     "Avg Retrieval Time (s)": "avg_retrieval_time_s",
                     "Avg Generation Time (s)": "avg_generation_time_s",
-                    # New config columns from benchmark.py
                     "agent_llm_model": "agent_llm_model",
                     "agent_embedding_model": "agent_embedding_model",
                     "chunking_mode": "chunking_mode",

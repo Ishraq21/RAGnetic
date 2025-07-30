@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _PATH_SETTINGS = get_path_settings()
 _PROJECT_ROOT_FROM_CONFIG = _PATH_SETTINGS["PROJECT_ROOT"]
 _ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"]
-logger.info(f"Loaded allowed data directories for text loader from central config: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
+logger.debug(f"Loaded allowed data directories for text loader from central config: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
 # --- End Centralized Configuration ---
 
 

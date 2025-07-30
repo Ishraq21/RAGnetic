@@ -1,35 +1,46 @@
+# app/workflows/tasks.py
+
 import logging
 import os
-from celery import Celery
 import redis
+from typing import Optional
 
-from app.core.config import get_db_connection, get_memory_storage_config, get_log_storage_config
+# Import the celery_app instance from the new central tasks file
+from app.core.tasks import celery_app # MODIFIED: Import celery_app from app.core.tasks
+
+# Imports for WorkflowEngine and DB
 from app.db import get_sync_db_engine
 from app.workflows.engine import WorkflowEngine
-from typing import Optional # Import Optional
+
+# These imports are now redundant if celery_app is imported from core/tasks
+# from celery import Celery
+# from app.core.config import get_db_connection, get_memory_storage_config, get_log_storage_config
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 task_logger = logging.getLogger(__name__)
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
-celery_app = Celery("ragnetic_workflows", broker=REDIS_URL, backend=REDIS_URL)
+# The celery_app definition is now centralized in app/core/tasks.py
+# So, remove the following lines:
+# celery_app = Celery("ragnetic_workflows", broker=REDIS_URL, backend=REDIS_URL)
 
-
-def get_beat_db_uri():
-    conn_name = (get_memory_storage_config().get("connection_name") or
-                 get_log_storage_config().get("connection_name"))
-    if not conn_name:
-        return "sqlite:///schedule.db"
-    conn_str = get_db_connection(conn_name).replace('+aiosqlite', '').replace('+asyncpg', '')
-    return conn_str
-
-
-celery_app.conf.update(
-    task_track_started=True,
-    broker_connection_retry_on_startup=True,
-    beat_dburi=get_beat_db_uri()
-)
+# The get_beat_db_uri function and celery_app.conf.update are also centralized.
+# So, remove the following lines:
+# def get_beat_db_uri():
+#     conn_name = (get_memory_storage_config().get("connection_name") or
+#                  get_log_storage_config().get("connection_name"))
+#     if not conn_name:
+#         return "sqlite:///schedule.db"
+#     conn_str = get_db_connection(conn_name).replace('+aiosqlite', '').replace('+asyncpg', '')
+#     return conn_str
+#
+# celery_app.conf.update(
+#     task_track_started=True,
+#     broker_connection_retry_on_startup=True,
+#     beat_dburi=get_beat_db_uri()
+# )
 
 
 @celery_app.task(name="app.workflows.tasks.run_workflow_task")
