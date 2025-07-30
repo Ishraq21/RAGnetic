@@ -1,0 +1,58 @@
+<div class="modal-content large-modal" id="ingestion-modal-content-container">
+    <span class="close-button" id="close-ingestion-modal">&times;</span>
+    <h2>Document & Data Ingestion</h2>
+
+    <div id="ingest-new-tab" class="tab-content active">
+        <form id="ingestion-form">
+            <div class="form-group">
+                <label for="ingestionAgentName">Select Agent (Knowledge Base):</label>
+                <select id="ingestionAgentName" name="agentName" required>
+                    <option value="">Loading agents...</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="ingestionSourceType">Source Type:</label>
+                <select id="ingestionSourceType" name="sourceType" required>
+                    <option value="local_upload">Local File Upload (via browser)</option>
+                    <option value="local">Local File Path (on server)</option>
+                    <option value="url">Web URL</option>
+                    <option value="db">Database (SQL)</option>
+                    <option value="code_repository">Code Repository (Git)</option>
+                    <option value="gdoc">Google Drive</option>
+                    <option value="api">REST API</option>
+                    <option value="web_crawler">Web Crawler</option>
+                </select>
+            </div>
+
+            <div id="ingestion-source-fields">
+                <div class="form-group file-upload-group">
+                    <label for="fileInput">Choose File(s) from your computer:</label>
+                    <input type="file" id="fileInput" name="fileInput" multiple>
+                    <p class="info">Select one or more files to upload directly from your local machine. Supported types include PDF, DOCX, CSV, TXT, Jupyter Notebooks, Parquet files, and IaC files (YAML/Terraform).</p>
+                </div>
+            </div>
+
+             <div class="checkbox-group">
+                <input type="checkbox" id="parallelIngestion" name="parallelIngestion" checked>
+                <label for="parallelIngestion">Enable Parallel Ingestion (for directories, etc.)</label>
+            </div>
+             <div class="form-group" id="numWorkersGroup" style="display: none;">
+                <label for="numIngestionWorkers">Number of Parallel Workers (defaults to CPU count):</label>
+                <input type="number" id="numIngestionWorkers" name="numIngestionWorkers" min="1">
+            </div>
+
+
+            <button type="submit" id="startIngestionBtn">Start Ingestion</button>
+        </form>
+
+        <div id="ingestion-status-messages">
+            <p class="info-msg">Real-time ingestion progress and logs will appear here:</p>
+        </div>
+
+        <div id="ingestionProgressBarContainer">
+            <div id="ingestionProgressBar"></div>
+        </div>
+    </div>
+
+    </div>
