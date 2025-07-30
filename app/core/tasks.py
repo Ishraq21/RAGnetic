@@ -16,6 +16,7 @@ from app.db.models import chat_sessions_table, chat_messages_table
 from app.db import get_sync_db_engine
 from app.services.temporary_document_service import TemporaryDocumentService
 from app.core.config import get_db_connection, get_memory_storage_config, get_log_storage_config, get_path_settings, _get_config_parser
+from app.agents.config_manager import load_agent_config
 
 logger = logging.getLogger(__name__)
 
@@ -87,21 +88,30 @@ def cleanup_temporary_documents(inactive_hours: int = 24):
         inactive_sessions_stmt = select(
             chat_sessions_table.c.thread_id,
             chat_sessions_table.c.user_id,
-            chat_sessions_table.c.id
+            chat_sessions_table.c.id,
+            chat_sessions_table.c.agent_name
         ).where(
             chat_sessions_table.c.updated_at < cutoff_time
         )
         inactive_sessions = session.execute(inactive_sessions_stmt).fetchall()
         logger.info(f"Found {len(inactive_sessions)} inactive chat sessions to process for cleanup.")
 
-        temp_doc_service = TemporaryDocumentService()
 
         for s in inactive_sessions:
             thread_id = s.thread_id
             user_id = s.user_id
             session_db_id = s.id
+            agent_name = s.agent_name # Get the agent_name for this session
 
-            logger.info(f"Cleaning up session: User={user_id}, Thread={thread_id}")
+            logger.info(f"Cleaning up session: User={user_id}, Thread={thread_id}, Agent={agent_name}")
+
+            # ❗ **Change**: Load the agent config and instantiate the service inside the loop
+            try:
+                agent_config = load_agent_config(agent_name)
+                temp_doc_service = TemporaryDocumentService(agent_config=agent_config)
+            except Exception as e:
+                logger.error(f"Could not load agent config for '{agent_name}' for cleanup. Skipping session {thread_id}. Error: {e}", exc_info=True)
+                continue # Skip to the next session if agent config cannot be loaded
 
             temp_doc_ids_to_clean: List[str] = []
 
@@ -122,9 +132,10 @@ def cleanup_temporary_documents(inactive_hours: int = 24):
                 logger.info(f"Found {len(temp_doc_ids_to_clean)} unique temporary documents in session {thread_id} to clean.")
                 for temp_doc_id in temp_doc_ids_to_clean:
                     try:
+                        # This now correctly uses the service instance for the specific agent
                         temp_doc_service.cleanup_temp_document(temp_doc_id)
                     except Exception as e:
-                        logger.error(f"Failed to clean up temp_doc_id '{temp_doc_id}': {e}", exc_info=True)
+                        logger.error(f"Failed to clean up temp_doc_id '{temp_doc_id}' for session {thread_id}: {e}", exc_info=True)
             else:
                 logger.info(f"No temporary documents found in chat history for session {thread_id}.")
 
