@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _PATH_SETTINGS = get_path_settings()
 _PROJECT_ROOT_FROM_CONFIG = _PATH_SETTINGS["PROJECT_ROOT"]  # Store project root if needed
 _ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"]  # Store resolved allowed dirs
-logger.info(
+logger.debug(
     f"Loaded allowed data directories for CSV loader from central config: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
 
 
@@ -162,12 +162,12 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None, sourc
                     "source_path": str(safe_file_path.resolve()),  # Full path for lineage
                     "file_name": safe_file_path.name,
                     "file_type": safe_file_path.suffix.lower(),
-                    "load_timestamp": datetime.now().isoformat(),  # NEW: Add load timestamp
+                    "load_timestamp": datetime.now().isoformat(),
                     "row_number": index + 1,  # Specific for CSV/Parquet rows
                     "record_id": record_id  # Specific for CSV/Parquet
                 }
                 # Add general source info if available from the DataSource object
-                if source:  # NEW: Add info from DataSource object for lineage
+                if source:
                     metadata["source_type_config"] = source.model_dump()  # Store entire DataSource config
                     if source.url: metadata["source_url"] = source.url
                     if source.db_connection: metadata["source_db_connection"] = source.db_connection

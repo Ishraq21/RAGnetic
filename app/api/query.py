@@ -3,13 +3,13 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, update
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List  # Added List for payload.files
 from datetime import datetime
 from pydantic import BaseModel, Field
 from uuid import uuid4
 
 from app.db import get_db
-from app.core.security import get_http_api_key, PermissionChecker # Import PermissionChecker
+from app.core.security import get_http_api_key, PermissionChecker
 from app.core.validation import sanitize_for_path
 from app.db.models import agent_runs, chat_sessions_table, chat_messages_table, users_table
 from app.agents.config_manager import load_agent_config
@@ -21,7 +21,9 @@ from app.tools.search_engine_tool import SearchTool
 from langchain_core.messages import HumanMessage, AIMessage
 from app.core.serialization import _serialize_for_db
 from app.db.dao import save_conversation_metrics_sync
-from app.schemas.security import User # Import User schema
+from app.schemas.security import User
+# NEW: Import citation extraction utility
+from app.core.citation_parser import extract_citations_from_text
 
 logger = logging.getLogger("ragnetic")
 
@@ -30,23 +32,27 @@ router = APIRouter(prefix="/api/v1/agents", tags=["Query API"])
 
 class QueryRequest(BaseModel):
     query: str = Field(..., description="The user's query to the agent.")
-    # user_id and thread_id will now be primarily derived from authenticated user/session
-    # but kept as optional for backward compatibility or specific use cases.
-    user_id: Optional[str] = Field(None, description="A unique identifier for the user (will be overridden by authenticated user_id if available).")
+    user_id: Optional[str] = Field(None,
+                                   description="A unique identifier for the user (will be overridden by authenticated user_id if available).")
     thread_id: Optional[str] = Field(None, description="A unique identifier for the conversation thread.")
+    # NEW: Add files field to accept temporary document info from frontend
+    files: List[Dict[str, str]] = Field(default_factory=list,
+                                        description="List of successfully uploaded temporary files with their temp_doc_ids.")
 
 
 class QueryResponse(BaseModel):
     response: str = Field(..., description="The agent's final response content.")
     run_id: str = Field(..., description="The unique ID for this specific run, for auditing.")
     final_state: Dict[str, Any] = Field(..., description="The final state of the agent graph, containing metrics.")
+    # NEW: Add citations to the response for frontend display
+    citations: List[Dict[str, Any]] = Field(default_factory=list,
+                                            description="Extracted citations from the AI's response.")
 
 
 @router.post("/{agent_name}/query", response_model=QueryResponse)
 async def query_agent(
         agent_name: str,
         request: QueryRequest = Body(...),
-        # Require 'agent:query' permission to query an agent
         current_user: User = Depends(PermissionChecker(["agent:query"])),
         db: AsyncSession = Depends(get_db),
 ):
@@ -57,20 +63,17 @@ async def query_agent(
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
     except Exception as e:
         logger.error(f"An unexpected error occurred while loading agent config '{agent_name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"An unexpected server error occurred while loading agent configuration for '{agent_name}'. Please check server logs.")
+        raise HTTPException(status_code=500,
+                            detail=f"An unexpected server error occurred while loading agent configuration for '{agent_name}'. Please check server logs.")
 
     # Prepare IDs
-    # Use the authenticated user's user_id. The request.user_id is now secondary/legacy.
-    safe_user_id = sanitize_for_path(current_user.username) # Use username from authenticated user
+    safe_user_id = sanitize_for_path(current_user.username)
     safe_thread_id = (
         sanitize_for_path(request.thread_id) if request.thread_id else f"api-thread-{uuid4().hex[:8]}"
     )
     request_id = str(uuid4())
 
-    # Ensure user record exists based on authenticated user's ID
-    # This part can be simplified since current_user is already from DB.
-    # We need the DB ID (int) of the user, not just the user_id (string)
-    user_db_id = current_user.id # Use the ID of the authenticated user
+    user_db_id = current_user.id
 
     # Ensure session record
     session_id = (await db.execute(
@@ -86,21 +89,32 @@ async def query_agent(
             .values(thread_id=safe_thread_id, agent_name=agent_name, user_id=user_db_id)
             .returning(chat_sessions_table.c.id)
         )).scalar_one()
+        await db.commit()  # Commit new session creation
 
-    # Save the human query
+    # Extract temporary document IDs for the current query
+    temp_document_ids_for_this_query = [f['temp_doc_id'] for f in request.files]
+    # Also capture the file names and sizes for storing in chat_messages_table meta
+    quick_uploaded_files_meta = [
+        {"file_name": f['file_name'], "file_size": f['file_size'], "temp_doc_id": f['temp_doc_id']} for f in
+        request.files]
+
+    # Save the human query with quick_uploaded_files meta
+    human_message_meta = {"quick_uploaded_files": quick_uploaded_files_meta} if quick_uploaded_files_meta else None
     await db.execute(
         insert(chat_messages_table).values(
             session_id=session_id,
             sender="human",
             content=request.query,
             timestamp=datetime.utcnow(),
+            meta=human_message_meta  # NEW: Save meta for human message
         )
     )
     await db.commit()
 
-    # Re-load full history
+    # Re-load full history (including meta)
     history_rows = (await db.execute(
-        select(chat_messages_table.c.sender, chat_messages_table.c.content)
+        select(chat_messages_table.c.sender, chat_messages_table.c.content,
+               chat_messages_table.c.meta)  # NEW: Select meta
         .where(chat_messages_table.c.session_id == session_id)
         .order_by(chat_messages_table.c.timestamp.asc())
     )).fetchall()
@@ -124,8 +138,9 @@ async def query_agent(
 
     # Build and execute the agent
     tools = []
+    # MODIFIED: Pass temp_document_ids to get_retriever_tool
     if "retriever" in agent_config.tools:
-        tools.append(get_retriever_tool(agent_config))
+        tools.append(get_retriever_tool(agent_config, temp_document_ids_for_this_query))
     if "arxiv" in agent_config.tools:
         tools.extend(get_arxiv_tool())
     if "search_engine" in agent_config.tools:
@@ -145,29 +160,63 @@ async def query_agent(
         "messages": history,
         "request_id": request_id,
         "agent_config": agent_config,
+        "temp_document_ids": temp_document_ids_for_this_query,  # NEW: Pass temp document IDs to agent state
     }
 
+    final_state = {}
     try:
-        final_state = await agent.ainvoke(initial_state, {"configurable": {"thread_id": safe_thread_id}})
+        # Pass an empty configurable for now, as direct ainvoke doesn't use it the same way as astream_events
+        # If your agent relies on `config['configurable']` during `ainvoke`, you might need to adapt.
+        # However, AgentState should carry most of what's needed for this flow.
+        final_state_output = await agent.ainvoke(initial_state)
+
+        # Retrieve the final state and other info from the output
+        # `ainvoke` typically returns the final state directly
+        final_state = final_state_output  # Assuming ainvoke returns the AgentState dict
+
+        # IMPORTANT: Extract retrieved_documents_meta_for_citation and accumulated_content
+        # from the final_state returned by the agent.
+        # Ensure that your `call_model` in `agent_graph.py` puts these into the state.
+        retrieved_documents_meta_for_citation = final_state.get('retrieved_documents_meta_for_citation', [])
+        ai_response_content_str = final_state.get('messages', [])[-1].content if final_state.get('messages') else ""
+
+
     except Exception as e:
         logger.error(f"Agent run {request_id} failed: {e}", exc_info=True)
         final_state = {"error": True, "errorMessage": str(e)}
+        retrieved_documents_meta_for_citation = []
+        ai_response_content_str = ""
 
-    # Extract AI reply
-    ai_content = ""
-    if final_state.get("messages"):
-        ai_content = final_state["messages"][-1].content
+    # Extract AI reply (safely)
+    # ai_content = ""
+    # if final_state.get("messages"):
+    #     ai_content = final_state["messages"][-1].content # This can be problematic if last message is tool_call
 
-    # Save AI reply if successful
-    if ai_content and not final_state.get("error"):
+    # NEW: Extract citations from AI response
+    extracted_citations = []
+    if ai_response_content_str:
+        extracted_citations = extract_citations_from_text(
+            llm_response_text=ai_response_content_str,
+            retrieved_documents_metadata=retrieved_documents_meta_for_citation
+        )
+        if extracted_citations:
+            logger.info(f"Extracted {len(extracted_citations)} citations from AI response for run {request_id}.")
+        else:
+            logger.info(f"No citations extracted from AI response for run {request_id}.")
+
+    # Save AI reply with meta if successful
+    if ai_response_content_str and not final_state.get("error"):
+        ai_message_meta = {"citations": extracted_citations} if extracted_citations else None
         await db.execute(
             insert(chat_messages_table).values(
                 session_id=session_id,
                 sender="ai",
-                content=ai_content,
+                content=ai_response_content_str,
                 timestamp=datetime.utcnow(),
+                meta=ai_message_meta  # NEW: Save meta for AI message
             )
         )
+        await db.commit()  # Commit after saving AI message
 
     # Save metrics to the database
     if final_state.get("total_tokens") is not None:
@@ -180,6 +229,8 @@ async def query_agent(
             "retrieval_time_s": final_state.get("retrieval_time_s"),
             "generation_time_s": final_state.get("generation_time_s"),
             "estimated_cost_usd": final_state.get("estimated_cost_usd"),
+            "llm_model": agent_config.llm_model,  # Get LLM model from config
+            "embedding_cost_usd": final_state.get("embedding_cost_usd"),  # Get embedding cost
             "timestamp": datetime.utcnow()
         }
         await save_conversation_metrics_sync(db, metrics_data)
@@ -198,5 +249,5 @@ async def query_agent(
     await db.commit()
     logger.info(f"User '{current_user.username}' queried agent '{agent_name}' (Run ID: {request_id}).")
 
-    return QueryResponse(response=ai_content, run_id=request_id, final_state=serialized)
-
+    return QueryResponse(response=ai_response_content_str, run_id=request_id, final_state=serialized,
+                         citations=extracted_citations)  # NEW: Return citations

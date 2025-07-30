@@ -33,6 +33,7 @@ from pinecone import Pinecone as PineconeClient
 # IMPORTS for connection checks
 from sqlalchemy import create_engine, text, select, func, case
 from sqlalchemy.sql import expression
+from app.core.tasks import get_beat_db_uri
 
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file
 # Import core components from the application
@@ -289,7 +290,6 @@ app = typer.Typer(
 run_app = typer.Typer(name="run", help="Commands for running workflows and other processes.")
 app.add_typer(run_app)
 
-# New Typer apps for security management
 user_app = typer.Typer(name="user", help="Manage user accounts.")
 app.add_typer(user_app)
 
@@ -911,7 +911,7 @@ def start_server(
             typer.secho("Please install Redis (e.g., 'brew install redis') or start it manually.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
 
-    from app.training.trainer_tasks import get_beat_db_uri
+    # MODIFIED: Get beat_db_uri from app.core.tasks
     beat_db_uri = get_beat_db_uri()
 
     # Prepare a custom environment for Celery worker and beat processes
@@ -941,13 +941,14 @@ def start_server(
     # Determine concurrency for Celery worker
     final_concurrency = worker_concurrency if worker_concurrency is not None else 4  # Default to 4
 
+    # MODIFIED: Point Celery worker and beat to app.core.tasks
     # Base Celery worker command arguments
     base_worker_args = [
-        "celery", "-A", "app.training.trainer_tasks", "worker",
+        "celery", "-A", "app.core.tasks", "worker",
         f"--pool={worker_pool_type}",
         "--loglevel=info",
         f"--autoscale={final_concurrency},1",
-        "-Q", "ragnetic_fine_tuning_tasks,celery",
+        "-Q", "ragnetic_fine_tuning_tasks,celery,ragnetic_cleanup_tasks", # Ensure all queues are listed
     ]
 
     # In reload mode, subprocesses are managed directly.
@@ -963,7 +964,7 @@ def start_server(
         # Pass celery_env to worker_process
         worker_process = subprocess.Popen(base_worker_args, env=celery_env)  # Pass env
         beat_process = subprocess.Popen([
-            "celery", "-A", "app.training.trainer_tasks", "beat",
+            "celery", "-A", "app.core.tasks", "beat",
             "-S", "sqlalchemy_celery_beat.schedulers:DatabaseScheduler",
             "--loglevel=info"
         ], env=celery_env)  # Pass env
@@ -994,7 +995,7 @@ def start_server(
 
             typer.secho("Starting Celery Beat scheduler...", fg=typer.colors.BLUE, bold=True)
             beat_cmd = [
-                "celery", "-A", "app.training.trainer_tasks", "beat",
+                "celery", "-A", "app.core.tasks", "beat",
                 "-S", "sqlalchemy_celery_beat.schedulers:DatabaseScheduler",
                 "--loglevel=info"
             ]
@@ -1887,9 +1888,7 @@ def update_user(
                                                help="New password for the user."),
         email: Optional[str] = typer.Option(None, help="New email for the user."),
         first_name: Optional[str] = typer.Option(None, "--first-name", "-f", help="New first name of the user."),
-        # New option
         last_name: Optional[str] = typer.Option(None, "--last-name", "-l", help="New last name of the user."),
-        # New option
         is_active: Optional[bool] = typer.Option(None, "--active/--inactive", help="Set user active/inactive."),
         is_superuser: Optional[bool] = typer.Option(None, "--superuser/--no-superuser",
                                                     help="Grant/revoke superuser privileges."),

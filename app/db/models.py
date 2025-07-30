@@ -86,6 +86,8 @@ chat_messages_table = Table(
     Column("sender", sender_enum, nullable=False),
     Column("content", Text, nullable=False),
     Column("timestamp", DateTime, default=utc_timestamp, nullable=False),
+    Column("meta", JSON, nullable=True)
+
 )
 
 memory_entries_table = Table(

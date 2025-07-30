@@ -1,51 +1,34 @@
 # app/training/trainer_tasks.py
 import logging
 import os
-from celery import Celery
 from typing import Dict, Any
+from pathlib import Path # New: Import Path for file operations
+import shutil # New: Import shutil for directory operations
+
+# Import the celery_app instance from the new central tasks file
+from app.core.tasks import celery_app # MODIFIED: Import celery_app from app.core.tasks
 
 # Import necessary components from your project's core and database modules
-from app.core.config import get_db_connection, get_memory_storage_config, get_log_storage_config
+from app.core.config import get_db_connection, get_memory_storage_config, get_log_storage_config, get_path_settings
 from app.db import get_sync_db_engine
 from app.schemas.fine_tuning import FineTuningJobConfig, FineTuningStatus
 from app.training.trainer import LLMFineTuner
+from app.db.models import fine_tuned_models_table
+from sqlalchemy import update, select
 
-import app.workflows.tasks  # Simply importing the module registers its tasks with this Celery app instance
 
 logger = logging.getLogger(__name__)
 
-# Configure Celery using environment variables. Redis is a common choice for broker/backend.
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-celery_app = Celery("ragnetic_tasks", broker=REDIS_URL, backend=REDIS_URL)  # Renamed app for generality
 
-
-# Helper function to get the database URI for Celery Beat scheduler.
+# This get_beat_db_uri is likely redundant now if celery_app is imported and configured centrally,
+# but keeping it if it's used elsewhere for non-Celery DB connections.
 def get_beat_db_uri():
     conn_name = (get_memory_storage_config().get("connection_name") or
                  get_log_storage_config().get("connection_name"))
     if not conn_name:
-        return "sqlite:///celery_schedule.db"  # Fallback for Celery Beat if no other DB is explicitly configured
+        return "sqlite:///celery_schedule.db"
     conn_str = get_db_connection(conn_name).replace('+aiosqlite', '').replace('+asyncpg', '')
     return conn_str
-
-
-# Apply Celery configuration settings
-celery_app.conf.update(
-    task_track_started=True,  # Allow tracking tasks in 'STARTED' state
-    broker_connection_retry_on_startup=True,  # Retry connection to broker on startup
-    beat_dburi=get_beat_db_uri(),  # Configure Celery Beat to use a persistent scheduler
-    # Define task queues here. 'celery' is the default queue.
-    task_queues={
-        'celery': {},  # Default queue
-        'ragnetic_fine_tuning_tasks': {},  # Dedicated queue for fine-tuning
-    },
-    task_routes={
-        # Route fine-tuning tasks to their specific queue
-        'app.training.trainer_tasks.fine_tune_llm_task': {'queue': 'ragnetic_fine_tuning_tasks'},
-        # Route workflow tasks to the default queue (or a specific one if needed)
-        'app.workflows.tasks.execute_workflow_task': {'queue': 'celery'},
-    }
-)
 
 
 @celery_app.task(name="app.training.trainer_tasks.fine_tune_llm_task")
@@ -69,4 +52,3 @@ def fine_tune_llm_task(job_config_dict: Dict[str, Any], user_id: int):
         job_name_for_logging = job_config.job_name if job_config else job_config_dict.get('job_name', 'Unknown Job')
         logger.error(f"Fine-tuning task failed for job '{job_name_for_logging}': {e}", exc_info=True)
         raise  # Re-raise the exception to allow Celery's backend to mark the task as failed
-
