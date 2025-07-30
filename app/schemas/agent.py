@@ -238,7 +238,7 @@ class AgentConfig(BaseModel):
         description="Optional LLM to use specifically for evaluation tasks (e.g., test set generation, LLM-as-a-judge)."
     )
     reproducible_ids: Optional[bool] = Field(
-        False,
+        True,
         description="If true, generates IDs based on content hash for reproducibility; otherwise, uses random UUIDs."
     )
 

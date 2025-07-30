@@ -3,6 +3,7 @@ import os
 import logging
 import requests
 import json
+import asyncio # NEW: Import asyncio for running async functions
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from multiprocessing import Process
@@ -11,7 +12,7 @@ import configparser
 
 # Import core components
 from app.agents.config_manager import get_agent_configs
-from app.pipelines.embed import embed_agent_data
+from app.pipelines.embed import embed_agent_data # This is an async function
 from app.core.config import get_path_settings
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 _APP_PATHS = get_path_settings()
 _PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
 _CONFIG_FILE = _APP_PATHS["CONFIG_FILE_PATH"]
-_WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"] # Explicitly define _WORKFLOWS_DIR
+_WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
 
 
 class AgentDataEventHandler(FileSystemEventHandler):
@@ -41,6 +42,24 @@ class AgentDataEventHandler(FileSystemEventHandler):
         port = self.config.get('SERVER', 'port', fallback='8000')
         return f"http://{host}:{port}/api/v1"
 
+    # NEW: Helper to run an async function from a sync context
+    def _run_async_in_sync(self, coro):
+        """Runs a coroutine in a new or existing event loop."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError: # No running loop, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(coro)
+        else: # Already a running loop, schedule the task
+            # For a synchronous watchdog handler, we typically don't want to block
+            # the loop indefinitely. So, we'll schedule it and let it run.
+            # However, for `embed_agent_data` we want the watcher to effectively "wait"
+            # for it to finish for proper sequencing from the watcher's perspective.
+            # `asyncio.run` is the simplest way to do that for a single call in a sync context.
+            # But watchdog's observer.start() is sync and blocks. So, a new loop each time is necessary.
+            return loop.run_until_complete(coro) # Use run_until_complete if within main thread
+
     def on_any_event(self, event):
         if event.is_directory or event.event_type not in ['created', 'deleted', 'modified']:
             return
@@ -55,7 +74,7 @@ class AgentDataEventHandler(FileSystemEventHandler):
             return
         self.last_event_time[str(src_path)] = current_time
 
-        # --- NEW LOGIC: Check for workflow YAML file changes and trigger sync ---
+        # --- Check for workflow YAML file changes and trigger sync ---
         if src_path.is_file() and src_path.suffix in ['.yaml', '.yml']:
             try:
                 # Check if the file is within the workflows directory
@@ -67,24 +86,22 @@ class AgentDataEventHandler(FileSystemEventHandler):
                 # Not a workflow file in the workflows directory
                 pass
 
-        # --- Existing Agent re-deployment logic (only if not a workflow file) ---
-        # Check if the event should trigger a workflow (e.g., file_ingestion)
-        if event.event_type == 'created':
-            pass
-
-        # Trigger the existing agent re-deployment logic
-        affected_agents = self._find_affected_agents(str(src_path)) # Convert to string for old _find_affected_agents
+        # --- Agent re-deployment logic (only if not a workflow file) ---
+        # Note: The API-based local file upload already triggers embed_agent_data
+        # directly via the PUT /agents/{name} endpoint. This watcher logic is
+        # primarily for direct file system changes outside of the API (e.g., manual copy).
+        affected_agents = self._find_affected_agents(str(src_path))
         if not affected_agents:
             return
 
         for agent_config in affected_agents:
             logger.info(f"Agent '{agent_config.name}' is affected. Triggering re-deployment...")
             try:
-                # This should probably be run in a separate process/thread to not block the watcher
-                embed_agent_data(agent_config)
+                # --- FIX: Running async embed_agent_data in a sync context ---
+                self._run_async_in_sync(embed_agent_data(agent_config))
                 logger.info(f"Successfully re-deployed agent '{agent_config.name}'.")
             except Exception as e:
-                logger.error(f"Failed to re-deploy agent '{agent_config.name}': {e}")
+                logger.error(f"Failed to re-deploy agent '{agent_config.name}': {e}", exc_info=True)
 
 
     def _find_affected_agents(self, changed_path: str):
@@ -98,12 +115,14 @@ class AgentDataEventHandler(FileSystemEventHandler):
                 if source.type == 'local' and source.path:
                     normalized_source_path = os.path.normpath(source.path)
                     # Check if the changed path is within the source path
-                    if normalized_changed_path.startswith(normalized_source_path):
+                    # or if the source path is the changed path itself (for single file sources)
+                    if normalized_changed_path.startswith(normalized_source_path) or \
+                       normalized_source_path == normalized_changed_path:
                         affected.append(config)
-                        break
+                        break # Only need to add an agent once if multiple sources affected
         return affected
 
-    def _trigger_workflow_on_new_file(self, file_path: Path): # Changed to Path from str
+    def _trigger_workflow_on_new_file(self, file_path: Path):
         """
         Triggers a configured workflow for a new file.
         This is a placeholder for a more robust configuration system.
@@ -127,19 +146,21 @@ class AgentDataEventHandler(FileSystemEventHandler):
         """Calls the API endpoint to sync workflow definitions from files to database."""
         try:
             url = f"{self.server_url}/workflows/sync"
+            # In a real app, this API call would need authentication (e.g., API key)
+            # For simplicity, assuming local access without auth for watcher or webhook sync.
             response = requests.post(url, timeout=5)
             response.raise_for_status()
             logger.info(f"Successfully triggered workflow sync API. Response: {response.json()}")
         except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to trigger workflow sync API: {e}")
+            logger.error(f"Failed to trigger workflow sync API: {e}", exc_info=True)
 
 
-def start_watcher(directories: list[str]): # Changed 'directory' to 'directories' (a list)
+def start_watcher(directories: list[str]):
     """Starts the file system watcher on the specified directories."""
     event_handler = AgentDataEventHandler()
     observer = Observer()
 
-    for directory in directories: # Loop through each directory to monitor
+    for directory in directories:
         path_to_monitor = Path(directory)
         if path_to_monitor.is_dir():
             observer.schedule(event_handler, str(path_to_monitor), recursive=True)
@@ -150,7 +171,7 @@ def start_watcher(directories: list[str]): # Changed 'directory' to 'directories
     observer.start()
     try:
         while True:
-            time.sleep(1)
+            time.sleep(1) # Keep the main thread alive for the observer
     except KeyboardInterrupt:
         observer.stop()
     observer.join()

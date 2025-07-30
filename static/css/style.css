@@ -113,7 +113,7 @@ body.login-body {
     align-items: stretch;
     gap: 0.75rem;
 }
-#new-chat-btn {
+#new-chat-btn, #open-ingestion-modal-btn { /* Apply same style to ingestion button */
     display: flex; align-items: center; justify-content: flex-start;
     gap: 0.75rem; padding: 0.75rem 1rem;
     background: var(--sidebar-hover-bg);
@@ -124,7 +124,7 @@ body.login-body {
     font-weight: 500; cursor: pointer;
     transition: background-color 0.2s;
 }
-#new-chat-btn:hover {
+#new-chat-btn:hover, #open-ingestion-modal-btn:hover {
     background-color: #3f3f3f;
 }
 
@@ -316,8 +316,11 @@ body.login-body {
 
 #empty-state {
     flex-grow: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; text-align: center;
-    color: var(--muted-text); animation: fadeInMessage 0.5s ease-in-out;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--muted-text);
+    animation: fadeInMessage 0.5s ease-in-out;
     min-height: calc(100vh - 200px);
 }
 #empty-state h1 { font-size: 3em; font-weight: 700; margin: 0; color: var(--text-color); }
@@ -386,10 +389,10 @@ body.login-body {
 #toast-notification.error {
     border-left: 4px solid var(--error-color);
 }
-#confirmation-modal {
+#confirmation-modal, .modal { /* .modal for new ingestion modal */
     position: fixed; top: 0; left: 0; width: 100%; height: 100%;
     background-color: rgba(0,0,0,0.6);
-    display: none;
+    display: none; /* Hidden by default */
     align-items: center;
     justify-content: center;
     z-index: 2000;
@@ -403,7 +406,162 @@ body.login-body {
     max-width: 400px;
     box-shadow: 0 5px 15px rgba(0,0,0,0.5);
     animation: modal-fade-in 0.3s ease-out;
+    position: relative; /* For close button positioning */
 }
+.modal-content.large-modal { /* New style for ingestion modal */
+    max-width: 700px;
+    width: 90%;
+    text-align: left;
+}
+.modal-content h2 { /* Styling for modal titles */
+    font-size: 1.8em;
+    color: var(--accent-color);
+    margin-top: 0;
+    margin-bottom: 1em;
+    text-align: center;
+}
+.modal-content .close-button {
+    position: absolute;
+    top: 15px;
+    right: 25px;
+    color: var(--muted-text);
+    font-size: 2.2em;
+    font-weight: bold;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+.modal-content .close-button:hover {
+    color: var(--text-color);
+}
+
+.modal-content .form-group {
+    margin-bottom: 15px;
+}
+.modal-content label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: var(--text-color);
+    font-size: 0.95em;
+}
+.modal-content input[type="text"],
+.modal-content input[type="number"],
+.modal-content input[type="url"],
+.modal-content select,
+.modal-content textarea {
+    width: 100%;
+    padding: 10px 12px;
+    background: #2a2a2a;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-color);
+    font-size: 1em;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.modal-content input[type="file"] {
+    width: 100%;
+    padding: 10px 0;
+    color: var(--text-color);
+}
+.modal-content input[type="text"]::placeholder,
+.modal-content input[type="url"]::placeholder,
+.modal-content textarea::placeholder {
+    color: var(--muted-text);
+}
+.modal-content input[type="text"]:focus,
+.modal-content input[type="url"]:focus,
+.modal-content select:focus,
+.modal-content textarea:focus,
+.modal-content input[type="file"]:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    box-shadow: var(--futuristic-glow);
+}
+.modal-content input[type="checkbox"] {
+    margin-right: 8px;
+    transform: scale(1.2);
+}
+.modal-content .checkbox-group {
+    display: flex;
+    align-items: center;
+    margin-top: 15px;
+}
+.modal-content .info {
+    font-size: 0.8em;
+    color: var(--muted-text);
+    margin-top: 5px;
+    margin-bottom: 10px;
+}
+.modal-content button[type="submit"] {
+    padding: 12px 20px;
+    background: var(--button-background);
+    border: none;
+    border-radius: 8px;
+    color: white;
+    font-size: 1.1em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s, transform 0.2s;
+    width: 100%;
+    margin-top: 20px;
+}
+.modal-content button[type="submit"]:hover:not(:disabled) {
+    background-color: var(--button-hover-background);
+    transform: translateY(-2px);
+}
+.modal-content button[type="submit"]:disabled {
+    background-color: var(--border-color);
+    cursor: not-allowed;
+    transform: translateY(0);
+}
+
+
+.modal-content #ingestion-status-messages { /* Specific styles for modal's status messages */
+    margin-top: 25px;
+    padding: 15px;
+    background-color: #2a2a2a;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow-y: auto;
+    max-height: 250px;
+    font-size: 0.9em;
+    line-height: 1.5;
+    color: var(--muted-text);
+    text-align: left; /* Ensure text alignment for modal */
+}
+.modal-content .status-message {
+    margin-bottom: 8px;
+    padding: 5px 0;
+    border-bottom: 1px dashed #3a3a3a;
+}
+.modal-content .status-message:last-child {
+    border-bottom: none;
+}
+.modal-content .success-msg { color: var(--success-color); }
+.modal-content .error-msg { color: var(--error-color); }
+.modal-content .info-msg { color: var(--text-color); }
+.modal-content .debug-msg { color: var(--muted-text); font-style: italic; }
+
+.modal-content #ingestionProgressBarContainer {
+    width: 100%;
+    background-color: #333;
+    border-radius: 5px;
+    margin-top: 15px;
+    overflow: hidden;
+}
+.modal-content #ingestionProgressBar {
+    width: 0%;
+    height: 25px;
+    background-color: var(--accent-color);
+    border-radius: 5px;
+    text-align: center;
+    color: white;
+    line-height: 25px;
+    font-size: 0.9em;
+    transition: width 0.3s ease-in-out;
+}
+
+
 .modal-content p { margin: 0 0 1.5rem 0; font-size: 1.1em; line-height: 1.6; }
 .modal-buttons { display: flex; gap: 1rem; justify-content: center; }
 .modal-btn { padding: 0.75rem 1.5rem; border-radius: 8px; border: none; font-size: 1em; font-weight: 500; cursor: pointer; }
