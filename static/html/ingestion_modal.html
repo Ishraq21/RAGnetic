@@ -1,31 +1,36 @@
 <div class="modal-content large-modal" id="ingestion-modal-content-container">
     <span class="close-button" id="close-ingestion-modal">&times;</span>
-    <h2>Document & Data Ingestion</h2>
+    <h3 style="text-align:center;">Document & Data Ingestion</h3>
 
-    <div id="ingest-new-tab" class="tab-content active">
+    <div id="ingestion-form-panel" class="modal-panel active">
         <form id="ingestion-form">
-            <div class="form-group">
-                <label for="ingestionAgentName">Select Agent (Knowledge Base):</label>
-                <select id="ingestionAgentName" name="agentName" required>
-                    <option value="">Loading agents...</option>
-                </select>
+
+            <div class="form-section agent-source-selection">
+                <h3>Agent & Source</h3>
+                <div class="form-group">
+                    <label for="ingestionAgentName">Select Agent (Knowledge Base):</label>
+                    <select id="ingestionAgentName" name="agentName" required>
+                        <option value="">Loading agents...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="ingestionSourceType">Source Type:</label>
+                    <select id="ingestionSourceType" name="sourceType" required>
+                        <option value="local_upload">Local File Upload (via browser)</option>
+                        <option value="local">Local File Path (on server)</option>
+                        <option value="url">Web URL</option>
+                        <option value="db">Database (SQL)</option>
+                        <option value="code_repository">Code Repository (Git)</option>
+                        <option value="gdoc">Google Drive</option>
+                        <option value="api">REST API</option>
+                        <option value="web_crawler">Web Crawler</option>
+                    </select>
+                </div>
             </div>
 
-            <div class="form-group">
-                <label for="ingestionSourceType">Source Type:</label>
-                <select id="ingestionSourceType" name="sourceType" required>
-                    <option value="local_upload">Local File Upload (via browser)</option>
-                    <option value="local">Local File Path (on server)</option>
-                    <option value="url">Web URL</option>
-                    <option value="db">Database (SQL)</option>
-                    <option value="code_repository">Code Repository (Git)</option>
-                    <option value="gdoc">Google Drive</option>
-                    <option value="api">REST API</option>
-                    <option value="web_crawler">Web Crawler</option>
-                </select>
-            </div>
-
-            <div id="ingestion-source-fields">
+            <div id="ingestion-source-fields" class="form-section source-specific-fields">
+                <h3>Source Details</h3>
                 <div class="form-group file-upload-group">
                     <label for="fileInput">Choose File(s) from your computer:</label>
                     <input type="file" id="fileInput" name="fileInput" multiple>
@@ -33,26 +38,40 @@
                 </div>
             </div>
 
-             <div class="checkbox-group">
-                <input type="checkbox" id="parallelIngestion" name="parallelIngestion" checked>
-                <label for="parallelIngestion">Enable Parallel Ingestion (for directories, etc.)</label>
+            <div class="form-section ingestion-options">
+                <h3>Ingestion Settings</h3>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="reproducibleIds" name="reproducibleIds" checked>
+                    <label for="reproducibleIds">Use Reproducible IDs (Consistent chunk hashing)</label>
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="parallelIngestion" name="parallelIngestion" checked>
+                    <label for="parallelIngestion">Enable Parallel Ingestion (for directories, etc.)</label>
+                </div>
+                <div class="form-group" id="numWorkersGroup" style="display: none;">
+                    <label for="numIngestionWorkers">Number of Parallel Workers (defaults to CPU count):</label>
+                    <br>
+                    <input type="number" id="numIngestionWorkers" name="numIngestionWorkers" min="1">
+                </div>
             </div>
-             <div class="form-group" id="numWorkersGroup" style="display: none;">
-                <label for="numIngestionWorkers">Number of Parallel Workers (defaults to CPU count):</label>
-                <input type="number" id="numIngestionWorkers" name="numIngestionWorkers" min="1">
-            </div>
-
 
             <button type="submit" id="startIngestionBtn">Start Ingestion</button>
         </form>
-
-        <div id="ingestion-status-messages">
-            <p class="info-msg">Real-time ingestion progress and logs will appear here:</p>
-        </div>
-
-        <div id="ingestionProgressBarContainer">
-            <div id="ingestionProgressBar"></div>
-        </div>
     </div>
 
+    <div id="ingestion-status-panel" class="modal-panel" style="display: none;">
+        <div class="form-section status-log-area">
+            <h3>Ingestion Status</h3>
+            <div id="ingestion-status-messages">
+                <p class="info-msg">Real-time ingestion progress and logs will appear here:</p>
+            </div>
+
+            <div id="ingestionProgressBarContainer">
+                <div id="ingestionProgressBar"></div>
+            </div>
+            <button type="button" id="backToIngestionFormBtn" class="secondary-btn" style="margin-top: 20px;">
+                Ingest More Data
+            </button>
+        </div>
     </div>
+</div>

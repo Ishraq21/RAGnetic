@@ -98,10 +98,9 @@
         const historyList = document.getElementById('history-list');
         const logoutBtn = document.getElementById('logout-btn');
 
-        // NEW: Ingestion Modal elements (main container and trigger button)
+        // Ingestion Modal elements (main container and trigger button)
         const ingestionModal = document.getElementById('ingestion-modal');
         const openIngestionModalBtn = document.getElementById('open-ingestion-modal-btn');
-        // closeIngestionModalBtn is queried and handled within ingestion_modal_logic.js after the modal content is loaded.
 
 
         let agent, thread_id, socket;
@@ -447,7 +446,7 @@
             localStorage.removeItem('ragnetic_user_token');
             localStorage.removeItem('ragnetic_db_user_id');
             localStorage.removeItem('ragnetic_thread_id');
-            localStorage.removeItem('ragnetic_user_id'); // This one seems redundant if loggedInDbUserId is used
+            localStorage.removeItem('ragnetic_user_id');
             localStorage.removeItem('ragnetic_agent');
             thread_id = null;
             agent = null;
@@ -525,7 +524,10 @@
                 } else {
                     console.warn("ingestionSourceTypeSelect not found on modal open, might be timing issue.");
                 }
-                window.IngestionModal.showTab('ingest-new-tab'); // Ensure the correct tab is shown on open
+                // When opening the modal, always show the form panel and reset its state
+                if (window.IngestionModal && typeof window.IngestionModal.showIngestionFormPanel === 'function') {
+                    window.IngestionModal.showIngestionFormPanel(); // This will reset and show the form
+                }
                 ingestionModal.style.display = 'flex';
             } else {
                  console.error("Ingestion modal logic not initialized or functions missing.");
