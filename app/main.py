@@ -134,13 +134,11 @@ class RedisConnectionManager:
     def __init__(self, url: str):
         self.redis_url = url
         self.connection: Optional[redis.Redis] = None
-        self.pubsub = None
 
     async def connect(self, websocket=None, channel=None):
         if self.connection is None:
             self.connection = redis.from_url(self.redis_url, decode_responses=True)
             await self.connection.ping()
-            self.pubsub = self.connection.pubsub()
 
     def disconnect(self, websocket=None, channel=None):
         pass
@@ -326,6 +324,28 @@ class ChatMessagePayloadWithFiles(BaseModel):
     # List of dictionaries, each with 'file_name' and 'temp_doc_id'
     files: List[WebSocketUploadedFileItem] = Field(default_factory=list,
                                                    description="List of successfully uploaded temporary files with their temp_doc_ids and sizes.")
+
+class CreateSessionRequest(BaseModel):
+    agent_name: str
+    user_id: int
+
+@app.post("/api/v1/sessions/create", status_code=status.HTTP_201_CREATED, tags=["Memory"])
+async def create_new_session(
+    request: CreateSessionRequest,
+    api_key: str = Depends(get_http_api_key),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Explicitly creates a new chat session and returns its details.
+    Used by the frontend to get a thread_id before the first message.
+    """
+    session_id, topic_name, thread_id = await _get_or_create_session(
+        db,
+        thread_id_from_frontend=None, # Force creation of a new session
+        agent_name=request.agent_name,
+        user_db_id=request.user_id
+    )
+    return {"thread_id": thread_id, "session_id": session_id, "topic_name": topic_name}
 
 
 @app.post("/api/v1/chat/upload-temp-document", response_model=QuickUploadFileItem, status_code=status.HTTP_200_OK,
@@ -531,162 +551,104 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
         langgraph_agent = get_agent_workflow(all_tools).compile()
 
         while True:
-            # Get files and query from the current payload
+            # --- 1. Handle current payload and update session state ---
             newly_uploaded_files = payload.files
             query = payload.query
-
-            # If new files were uploaded, add their IDs to the session-long list
             if newly_uploaded_files:
                 new_ids = [f.temp_doc_id for f in newly_uploaded_files]
                 all_temp_doc_ids_in_session.extend(new_ids)
                 all_temp_doc_ids_in_session = list(dict.fromkeys(all_temp_doc_ids_in_session))
 
-            # Case 1: Handle "file-only" uploads.
-            if not query and newly_uploaded_files:
-                logger.info(
-                    f"[{canonical_thread_id}] Acknowledged {len(newly_uploaded_files)} files. Waiting for user query.")
+            # --- 2. Handle special cases (file-only or empty messages) ---
+            if not query:
+                if newly_uploaded_files:  # Case 1: File-only upload
+                    logger.info(f"[{canonical_thread_id}] Acknowledged {len(newly_uploaded_files)} files.")
+                    ack_message = {"done": True, "error": False, "request_id": str(uuid4()), "user_id": user_db_id,
+                                   "thread_id": canonical_thread_id, "topic_name": session_topic, "citations": []}
+                    await ws.send_text(json.dumps(ack_message))
+                else:  # Case 2: Truly empty message
+                    logger.warning(f"[{canonical_thread_id}] Received empty query, skipping.")
 
-                # Send a "done" message back to the frontend immediately.
-                # This tells the UI to stop the "thinking" indicator and wait for user input.
-                ack_done_message = {
-                    "done": True,
-                    "error": False,
-                    "errorMessage": None,
-                    "request_id": str(uuid4()), # Use a dummy request ID for this ack
-                    "user_id": user_db_id,
-                    "thread_id": canonical_thread_id,
-                    "topic_name": session_topic,
-                    "citations": []
-                }
-                # Use ws.send_text for a direct reply instead of manager.broadcast
-                await ws.send_text(json.dumps(ack_done_message))
-
-                # Now, continue waiting for the next message from the client
+                # Wait for the next valid message and restart the loop
                 message_data = await ws.receive_json()
-                try:
-                    payload = ChatMessagePayloadWithFiles(**message_data["payload"])
-                except Exception as e:
-                    logger.error(
-                        f"WebSocket received invalid payload on subsequent message: {e}, Raw: {message_data.get('payload')}")
-                    await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason=f"Invalid payload format: {e}")
-                    return
-                continue # Restart the loop with the new payload
+                payload = ChatMessagePayloadWithFiles(**message_data["payload"])
+                continue
 
-
+            # --- 3. Prepare for Agent Run (do this only ONCE) ---
             request_id = str(uuid4())
-            logger.info(
-                f"[{canonical_thread_id}] Processing request {request_id} for query: '{query[:50]}...' with {len(all_temp_doc_ids_in_session)} temporary files.")
-
-            # Prepare metadata using only the files from this specific message
-            quick_uploaded_files_meta = [
-                {"file_name": f.file_name, "file_size": f.file_size, "temp_doc_id": f.temp_doc_id} for f in
-                newly_uploaded_files]
-            human_message_meta = {
-                "quick_uploaded_files": quick_uploaded_files_meta} if quick_uploaded_files_meta else None
-
-            await _save_message_and_update_session(db, session_id, 'human', query, meta=human_message_meta)
-
+            await _save_message_and_update_session(db, session_id, 'human', query, meta={
+                "quick_uploaded_files": [f.dict() for f in newly_uploaded_files]} if newly_uploaded_files else None)
             if is_first_message_in_session:
-                title = query.strip()[:100] if query else f"Chat with {len(all_temp_doc_ids_in_session)} files"
+                title = query.strip()[:100]
                 await db.execute(
                     update(chat_sessions_table).where(chat_sessions_table.c.id == session_id).values(topic_name=title))
                 await db.commit()
                 is_first_message_in_session = False
 
-            history_stmt = select(chat_messages_table.c.sender, chat_messages_table.c.content,
-                                  chat_messages_table.c.meta).where(
+            history_stmt = select(chat_messages_table.c.sender, chat_messages_table.c.content).where(
                 chat_messages_table.c.session_id == session_id).order_by(chat_messages_table.c.timestamp.asc())
-            history_result = (await db.execute(history_stmt)).fetchall()
             history = [HumanMessage(content=msg.content) if msg.sender == 'human' else AIMessage(content=msg.content)
-                       for msg in history_result]
+                       for msg in (await db.execute(history_stmt)).fetchall()]
 
-            run_start_time = datetime.utcnow()
-            insert_run_stmt = insert(agent_runs).values(
-                run_id=request_id,
-                session_id=session_id,
-                start_time=run_start_time,
-                status='running',
-                initial_messages=[msg.dict() for msg in history]
-            ).returning(agent_runs.c.id)
-            run_db_id = (await db.execute(insert_run_stmt)).scalar_one()
+            run_db_id = (await db.execute(insert(agent_runs).values(run_id=request_id, session_id=session_id,
+                                                                    start_time=datetime.utcnow()).returning(
+                agent_runs.c.id))).scalar_one()
             await db.commit()
 
-            initial_state: AgentState = {
-                "messages": history,
-                "request_id": request_id,
-                "agent_config": agent_config,
-                # FIX: Pass the complete list of session documents to the agent.
-                "temp_document_ids": all_temp_doc_ids_in_session
-            }
-
-            token_callback = UsageMetadataCallbackHandler()
-
+            initial_state = {"messages": history, "request_id": request_id, "agent_config": agent_config,
+                             "temp_document_ids": all_temp_doc_ids_in_session}
             run_config = {
-                "configurable": {
-                    "thread_id": canonical_thread_id,
-                    "session_id": session_id,
-                    "user_id": user_db_id,
-                    "agent_name": agent_name,
-                    "callbacks": [token_callback]
-                }
-            }
-            final_state, ai_response_content = await handle_query_streaming(
-                initial_state,
-                run_config,
-                langgraph_agent,
-                canonical_thread_id,
-                run_db_id,
-                db
-            )
+                "configurable": {"thread_id": canonical_thread_id, "session_id": session_id, "user_id": user_db_id,
+                                 "agent_name": agent_name, "callbacks": [UsageMetadataCallbackHandler()]}}
 
-            retrieved_documents_meta_for_citation = final_state.get('retrieved_documents_meta_for_citation', [])
-            ai_response_content_str = final_state.get('accumulated_content', '')
+            # --- 4. Run Agent Concurrently with Listener (for cancellation) ---
+            generation_task = asyncio.create_task(
+                handle_query_streaming(initial_state, run_config, langgraph_agent, canonical_thread_id, run_db_id, db))
+            listener_task = asyncio.create_task(ws.receive_json())
 
-            extracted_citations = []
-            if ai_response_content_str:
-                extracted_citations = extract_citations_from_text(
-                    llm_response_text=ai_response_content_str,
-                    retrieved_documents_metadata=retrieved_documents_meta_for_citation
-                )
-                if extracted_citations:
-                    logger.info(f"Extracted {len(extracted_citations)} citations from AI response.")
-                else:
-                    logger.info("No citations extracted from AI response.")
+            done, pending = await asyncio.wait({generation_task, listener_task}, return_when=asyncio.FIRST_COMPLETED)
+
+            if listener_task in done:
+                message = listener_task.result()
+                if message.get("type") == "interrupt":
+                    logger.info(f"[{canonical_thread_id}] Interrupt received. Cancelling generation.")
+                    generation_task.cancel()
+            else:  # generation_task in done
+                listener_task.cancel()
+
+            final_state, ai_response_content_str = await generation_task
+
+            # --- 5. Process Final Result ---
+            extracted_citations = extract_citations_from_text(ai_response_content_str,
+                                                              final_state.get('retrieved_documents_meta_for_citation',
+                                                                              []))
 
             done_message = {
-                "done": True,
-                "error": final_state.get("error", False),
-                "errorMessage": final_state.get("errorMessage") if final_state and final_state.get("error") else None,
-                "request_id": request_id,
-                "user_id": user_db_id,
-                "thread_id": canonical_thread_id,
-                "topic_name": session_topic,
-                "citations": extracted_citations
+                "done": True, "error": final_state.get("error", False), "errorMessage": final_state.get("errorMessage"),
+                "request_id": request_id, "user_id": user_db_id, "thread_id": canonical_thread_id,
+                "topic_name": session_topic, "citations": extracted_citations
             }
-            await manager.broadcast(channel, json.dumps({"token": final_state.get("errorMessage", ""), **done_message}))
+            await manager.broadcast(channel, json.dumps(done_message))
 
-            if ai_response_content_str and not (final_state and final_state.get("error")):
-                ai_message_meta = {"citations": extracted_citations} if extracted_citations else None
-                await _save_message_and_update_session(db, session_id, 'ai', ai_response_content_str,
-                                                       meta=ai_message_meta)
+            if ai_response_content_str and not final_state.get("error"):
+                await _save_message_and_update_session(db, session_id, 'ai', ai_response_content_str, meta={
+                    "citations": extracted_citations} if extracted_citations else None)
 
-            run_end_time = datetime.utcnow()
-            update_run_stmt = update(agent_runs).where(agent_runs.c.id == run_db_id).values(
-                end_time=run_end_time,
-                status='completed' if not (final_state and final_state.get("error")) else 'failed',
-                final_state=_serialize_for_db(final_state)
-            )
-            await db.execute(update_run_stmt)
+            await db.execute(update(agent_runs).where(agent_runs.c.id == run_db_id).values(end_time=datetime.utcnow(),
+                                                                                           status='completed' if not final_state.get(
+                                                                                               "error") else 'failed',
+                                                                                           final_state=_serialize_for_db(
+                                                                                               final_state)))
             await db.commit()
 
-            message_data = await ws.receive_json()
-            try:
-                payload = ChatMessagePayloadWithFiles(**message_data["payload"])
-            except Exception as e:
-                logger.error(
-                    f"WebSocket received invalid payload on subsequent message: {e}, Raw: {message_data.get('payload')}")
-                await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason=f"Invalid payload format: {e}")
-                return
+            # --- 6. Wait for Next User Message ---
+            if listener_task.done() and not listener_task.cancelled() and listener_task.result().get(
+                    "type") != "interrupt":
+                message_data = listener_task.result()
+            else:
+                message_data = await ws.receive_json()
+
+            payload = ChatMessagePayloadWithFiles(**message_data["payload"])
 
 
     except WebSocketDisconnect:
@@ -713,33 +675,39 @@ async def redis_listen(ws: WebSocket, channel: str):
     if not isinstance(manager, RedisConnectionManager):
         return
 
-    while True:
-        try:
-            if manager.pubsub is None:
-                await manager.connect()
-            await manager.pubsub.subscribe(channel)
-            break
-        except RedisConnectionError as e:
-            logger.warning(f"Could not subscribe to {channel}, retrying in 1s: {e}")
-            await asyncio.sleep(1)
+    # Create a new, dedicated Redis client for this specific listener task.
+    listener_client = redis.from_url(manager.redis_url, decode_responses=True)
+    pubsub = listener_client.pubsub()
+
     try:
+        await pubsub.subscribe(channel)
+        logger.info(f"Redis listener subscribed to channel {channel}.")
         while True:
+            # Periodically check if the WebSocket client is still connected.
+            if ws.client_state != WebSocketState.CONNECTED:
+                logger.info(f"Client disconnected from channel {channel}. Stopping listener.")
+                break
+
             try:
-                message = await manager.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                # Wait for a message with a timeout.
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message:
+                    await ws.send_text(message["data"])
+            except asyncio.TimeoutError:
+                # Timeout is expected, just continue the loop to check client state again.
+                continue
             except RedisConnectionError as e:
-                logger.warning(f"Redis pubsub lost for {channel}; reconnecting: {e}")
-                manager.pubsub = None
-                return await redis_listen(ws, channel)
-            if message and ws.client_state == WebSocketState.CONNECTED:
-                await ws.send_text(message["data"])
+                logger.warning(f"Redis connection lost for listener on {channel}: {e}")
+                break # Exit the loop if the connection fails.
+
     except asyncio.CancelledError:
-        logger.info(f"Redis listener for channel {channel} cancelled.")
+        logger.info(f"Redis listener for channel {channel} was cancelled.")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred in Redis listener for {channel}: {e}", exc_info=True)
     finally:
-        try:
-            if manager.pubsub:
-                await manager.pubsub.unsubscribe(channel)
-        except RedisConnectionError:
-            pass
+        # Crucially, ensure the dedicated connection for this task is always closed.
+        logger.info(f"Closing Redis listener connection for channel {channel}.")
+        await listener_client.close()
 
 
 async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph_agent: Any, thread_id: str,
