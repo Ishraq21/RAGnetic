@@ -234,6 +234,14 @@ async def load_documents_from_source(source: DataSource, agent_config: AgentConf
                     logger.warning(f"Unsupported local file type: {path}. Skipping.")
             elif os.path.isdir(path):
                 loaded_docs = await directory_loader.load(path, **loader_args)
+        elif source_type == "csv":
+            loaded_docs = await csv_loader.load(source.path, **loader_args)
+        elif source_type == "pdf":
+            loaded_docs = await pdf_loader.load(source.path, **loader_args)
+        elif source_type == "txt":
+            loaded_docs = await text_loader.load(source.path, **loader_args)
+        elif source_type == "docx":
+            loaded_docs = await docx_loader.load(source.path, **loader_args)
         elif source_type == "code_repository":
             loaded_docs = await code_repository_loader.load(source.path, **loader_args)
         elif source_type == "url":
@@ -411,5 +419,3 @@ async def embed_agent_data(config: AgentConfig, db: AsyncSession) -> bool:
 
     logger.info(f"Finished embedding for {config.name}")
     return True
-
-# MIY
