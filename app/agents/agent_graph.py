@@ -77,7 +77,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
     """
     sync_engine_connection = None
     embedding_cost_usd = 0.0
-    retrieved_documents_meta_for_citation: List[Dict[str, Any]] = []  # Initialize for this scope
 
     db_session: Optional[AsyncSession] = config['configurable'].get("db_session")
 
@@ -127,59 +126,38 @@ async def call_model(state: AgentState, config: RunnableConfig):
         embedding_model_name = agent_config.embedding_model
 
         t0 = time.perf_counter()
+
         if "retriever" in agent_config.tools:
             try:
                 embedding_tokens = count_tokens(query, embedding_model_name)
-                logger.info(f"[call_model] Embedding query: '{query[:50]}...'")
-                logger.info(f"[call_model] Embedding model used: {embedding_model_name}")
-                logger.info(f"[call_model] Calculated embedding tokens: {embedding_tokens}")
-
-                embedding_cost_usd = calculate_cost(
-                    embedding_model_name=embedding_model_name,
-                    embedding_tokens=embedding_tokens
-                )
-                logger.info(f"[call_model] Calculated embedding cost: ${embedding_cost_usd:.6f}")
-                logger.info(f"Attempting to retrieve documents for query: '{query[:80]}...'")
-
+                embedding_cost_usd = calculate_cost(embedding_model_name=embedding_model_name, embedding_tokens=embedding_tokens)
                 retriever_tool = await get_retriever_tool(agent_config)
-                tool_input = {"query": query, "temp_document_ids": temp_document_ids}
-                retrieved_docs = await retriever_tool.ainvoke(tool_input)
-                if isinstance(retrieved_docs, str):
-                    retrieved_docs_str = retrieved_docs
-                    logger.error(f"Retriever tool returned an error string: {retrieved_docs}")
-                elif retrieved_docs:
-                    retrieved_docs_str = ""
-                    retrieved_documents_meta_for_citation = []  # Reset for current run
-                    for doc in retrieved_docs:
-                        doc_name = doc.metadata.get('doc_name', 'Unknown Document')
-                        page_number = doc.metadata.get('page_number')
-                        # Use temp_doc_id for unique identification, but display name/page for LLM readability
-                        temp_doc_id = doc.metadata.get('temp_doc_id')
-
-                        source_info = f"Source: '{doc_name}'"
-                        if page_number:
-                            source_info += f" Page: {page_number}"
-                        if temp_doc_id:
-                            source_info += f" (ID: {temp_doc_id[:8]}...)"  # Short ID for debug/backend tracing
-
-                        retrieved_docs_str += f"Document Content ({source_info}):\n{doc.page_content}\n\n"
-
-                        # Store metadata for later citation extraction in main.py/websocket_chat
-                        retrieved_documents_meta_for_citation.append(doc.metadata)
-
-                        # Use temp_doc_id and chunk_index for unique retrieved_chunk_ids
-                        retrieved_chunk_ids.append(f"{temp_doc_id}_{doc.metadata.get('chunk_index', '')}"
-                                                   if temp_doc_id else str(
-                            uuid.uuid4()))  # Fallback to UUID if no temp_doc_id
-
+                retrieved_docs = await retriever_tool.ainvoke({"query": query, "temp_document_ids": temp_document_ids})
+                if retrieved_docs:
                     logger.info(f"Successfully retrieved {len(retrieved_docs)} documents.")
                 else:
-                    retrieved_docs_str = "No documents were found matching the query."
-                    logger.warning("Retriever tool ran successfully but returned no documents.")
+                    logger.warning("Retriever tool returned no documents.")
             except Exception as e:
                 logger.error(f"Error during document retrieval: {e}", exc_info=True)
-                retrieved_docs_str = f"An error occurred while trying to retrieve relevant documents: {e}"
         retrieval_time = time.perf_counter() - t0
+
+        # --- 2. Source Formatting for Prompt ---
+        source_map: Dict[int, Dict[str, Any]] = {}
+        if retrieved_docs:
+            source_strings = []
+            for i, doc in enumerate(retrieved_docs, 1):
+                meta = doc.metadata
+                doc_name = meta.get('doc_name', 'Unknown')
+                page_num = meta.get('page_number')
+                source_label = f"[{i}] {doc_name}" + (f" (Page {page_num})" if page_num else "")
+                source_strings.append(source_label)
+                source_map[i] = meta
+            formatted_sources_str = "\n".join(source_strings)
+            retrieved_docs_str = "\n\n".join([f"## Context from Source [{i}]:\n{doc.page_content}" for i, doc in enumerate(retrieved_docs, 1)])
+        else:
+            formatted_sources_str = "No documents were found matching the query."
+            retrieved_docs_str = "No context was retrieved."
+
 
         if agent_config.execution_prompt:
             logger.info("Using custom 'execution_prompt' from agent configuration.")
@@ -200,16 +178,14 @@ async def call_model(state: AgentState, config: RunnableConfig):
                                    ---
                                    Your primary goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
                                    **General Instructions:**
-                                   1.  Synthesize an answer from the information given in the "SOURCES" section below.
-                                   2.  If information from a document is used, **you MUST cite the source inline**.
-                                       Use the format: `[↩:OriginalFileName.ext:PageNumber]` or `[↩:OriginalFileName.ext]` if page number is not available.
-                                       Example: "The report indicates a 15% increase in sales [↩:Q4_Report.pdf:2]."
-                                       Example: "The new policy was outlined [↩:Policy_Doc.docx]."
-                                       For code files or CSVs, if no page number, just use the filename.
-                                   3.  Do not refer to "the context provided" or "the information I have." Respond directly and authoritatively.
-                                   4. If you use any document info, **you MUST cite inline** as `[↩:FileName.ext:Page]` or `[↩:FileName.ext]` if there’s no page number.
-                                      - Ex: “Revenue grew 10% [↩:Q4_Report.pdf:2].”
-                                      - Ex: “See code example below [↩:script.py].”
+                                             1.  Synthesize an answer from the information given in the "SOURCES" section below.
+                                             2.  Provide a clear, comprehensive answer based **only** on the "CONTEXT" provided below.
+                                             3.  For every piece of information you use from the context, you **MUST** add a citation marker at the end of the sentence.
+                                             4.  Use the format `[number]` for citations, corresponding to the numbered list in the "SOURCES" section. For example: `The sky is blue [3].`
+                                             5.  Each source in the SOURCES list corresponds to a specific chunk of a document. Cite the number of the specific chunk you are using.
+                                             6.  You can cite multiple sources for a single sentence, like this: `This is a fact [2][3].`
+                                             7.  Do not refer to "the context provided" or "the documents." Respond directly and authoritatively.
+                                      
 
                                    IMPORTANT: When explaining any mathematical expressions, YOU MUST USE LaTeX SYNTAX.
                                    IMPORTANT: Wrap inline equations in `$...$`, and display equations in `$$...$$`.
@@ -226,10 +202,13 @@ async def call_model(state: AgentState, config: RunnableConfig):
                                    - Block math must be wrapped in `$$ ... $$`.
 
                                    **SOURCES:**
+                                   {formatted_sources_str}
                                    ---
+                                   **CONTEXT:**
                                    {retrieved_docs_str}
                                    ---
-                                   Based on the sources and your persona, please answer the user's query.
+                                    Based on the SOURCES and CONTEXT, answer the user's query.
+
                                 """
             prompt_with_history = [SystemMessage(content=system_prompt_content)] + messages
 
@@ -436,7 +415,10 @@ async def call_model(state: AgentState, config: RunnableConfig):
             response_text = response.content
             retrieved_meta = state.get("retrieved_documents_meta_for_citation", [])
 
-            # 1. Save the AI's message to get a message_id
+
+            # 2. Parse citations from the response
+            parsed_citations = extract_citations_from_text(response_text, source_map)
+
             message_id = await create_chat_message(
                 db=db_session,
                 session_id=session_id,
@@ -444,15 +426,10 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 content=response_text
             )
 
-            # 2. Parse citations from the response
-            parsed_citations = extract_citations_from_text(response_text,
-                                                           retrieved_documents_meta_for_citation)
-
             # 3. Save each parsed citation to the database
             if parsed_citations:
                 logger.info(f"Saving {len(parsed_citations)} citations for message_id {message_id}.")
                 for cit in parsed_citations:
-                    # Ensure chunk_id exists before attempting to save
                     if 'chunk_id' in cit and cit['chunk_id'] is not None:
                         await create_citation(
                             db=db_session,
@@ -465,7 +442,20 @@ async def call_model(state: AgentState, config: RunnableConfig):
                     else:
                         logger.warning(f"Skipping citation due to missing chunk_id: {cit}")
 
+
+
+        '''
+        In state.update and log_metrics_data, estimated_cost_usd is assigned total_estimated_cost_usd. T
+        his means these logs and the internal state reflect the full cost of the interaction.
+
+        In db_metrics_data, estimated_cost_usd is assigned llm_cost_usd. 
+        This is because your conversation_metrics_table schema has a separate column for embedding_cost_usd
+        The estimated_cost_usd column in the database is designed to store only the LLM portion, 
+        while the embedding_cost_usd column stores the embedding cost.
+        '''
         state.update({
+            "agent_name": agent_name_from_config,
+            "request_id": request_id,
             "messages": [response],
             "retrieval_time_s": retrieval_time,
             "generation_time_s": generation_time,
@@ -475,7 +465,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "total_tokens": prompt_tokens + completion_tokens,
             "estimated_cost_usd": total_estimated_cost_usd,
             "retrieved_chunk_ids": retrieved_chunk_ids,
-            "retrieved_documents_meta_for_citation": retrieved_documents_meta_for_citation
+            "retrieved_documents_meta_for_citation": [doc.metadata for doc in retrieved_docs] # Store for potential future use
         })
 
         current_timestamp = datetime.utcnow()

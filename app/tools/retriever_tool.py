@@ -121,7 +121,10 @@ async def get_retriever_tool(agent_config: AgentConfig) -> Tool:
         if os.path.exists(docs_path_permanent):
             try:
                 with await asyncio.to_thread(open, docs_path_permanent, 'r', encoding='utf-8') as f:
-                    bm25_docs_permanent = [Document(page_content=json.loads(line)["page_content"]) for line in f]
+                    bm25_docs_permanent = [
+                        Document(page_content=json.loads(line)["page_content"], metadata=json.loads(line)["metadata"])
+                        for line in f
+                    ]
 
                 if bm25_docs_permanent:
                     bm25_permanent = await asyncio.to_thread(
@@ -211,6 +214,9 @@ async def get_retriever_tool(agent_config: AgentConfig) -> Tool:
                     logger.info("Enhanced retrieval strategy enabled with Cross-Encoder Reranker.")
 
                 retrieved_docs = await base_retriever.ainvoke(query)
+
+                for idx, doc in enumerate(retrieved_docs):
+                    logger.info(f"Retrieved Document {idx} metadata: {doc.metadata}")
 
                 for doc in retrieved_docs:
                     if hasattr(doc, 'metadata') and doc.metadata.get('doc_name'):
