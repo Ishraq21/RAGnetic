@@ -14,8 +14,7 @@ import configparser
 from app.agents.config_manager import get_agent_configs
 from app.pipelines.embed import embed_agent_data
 from app.core.config import get_path_settings, get_memory_storage_config, get_log_storage_config
-from app.db import initialize_db_connections, \
-    AsyncSessionLocal  # Import AsyncSessionLocal and initialize_db_connections
+from app.db import initialize_db_connections, AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +23,11 @@ _APP_PATHS = get_path_settings()
 _PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
 _CONFIG_FILE = _APP_PATHS["CONFIG_FILE_PATH"]
 _WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
+_DATA_DIR = _APP_PATHS["DATA_DIR"] # Ensure _DATA_DIR is available
+
+# Helper function to get file extension safely
+def _get_file_extension(filepath: str) -> str:
+    return Path(filepath).suffix.lower().lstrip('.')
 
 
 class AgentDataEventHandler(FileSystemEventHandler):
@@ -35,24 +39,24 @@ class AgentDataEventHandler(FileSystemEventHandler):
         self.config = configparser.ConfigParser()
         self.config.read(_CONFIG_FILE)
         self.server_url = self._get_server_url()
-        self.last_event_time = {}  # To debounce events
-        self.workflows_dir = _WORKFLOWS_DIR  # Ensure _WORKFLOWS_DIR is accessible as an attribute
+        self.last_event_time = {} # To debounce events
+        self.workflows_dir = _WORKFLOWS_DIR # Ensure _WORKFLOWS_DIR is accessible as an attribute
+        self.uploaded_temp_dir = _DATA_DIR / "uploaded_temp" # Define the temp upload directory
 
         self._initialize_db_for_watcher()
 
     def _initialize_db_for_watcher(self):
         """Initializes database connections for the watcher process."""
         try:
-            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
-                "connection_name")
+            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get("connection_name")
             if not conn_name:
-                logger.error(
-                    "Database connection name not found for watcher DB initialization. DB-dependent features might fail.")
+                logger.error("Database connection name not found for watcher DB initialization. DB-dependent features might fail.")
                 return
             initialize_db_connections(conn_name)
             logger.info("Watcher: Database connections initialized.")
         except Exception as e:
             logger.error(f"Watcher: Failed to initialize database connections: {e}", exc_info=True)
+
 
     def _get_server_url(self) -> str:
         """Constructs the server URL from the config file."""
@@ -60,7 +64,6 @@ class AgentDataEventHandler(FileSystemEventHandler):
         port = self.config.get('SERVER', 'port', fallback='8000')
         return f"http://{host}:{port}/api/v1"
 
-    # NEW: Helper to run an async function with DB session from a sync context
     async def _run_async_with_db_session(self, coro_func, *args, **kwargs):
         """Runs an async coroutine, providing it with a DB session."""
         if AsyncSessionLocal is None:
@@ -69,11 +72,10 @@ class AgentDataEventHandler(FileSystemEventHandler):
 
         async with AsyncSessionLocal() as session:
             try:
-                # Pass the session explicitly to the coroutine function
                 return await coro_func(*args, db=session, **kwargs)
             except Exception as e:
                 logger.error(f"Error during async DB operation in watcher: {e}", exc_info=True)
-                raise  # Re-raise to be caught by the calling context
+                raise
 
     def on_any_event(self, event):
         if event.is_directory or event.event_type not in ['created', 'deleted', 'modified']:
@@ -82,9 +84,12 @@ class AgentDataEventHandler(FileSystemEventHandler):
         src_path = Path(event.src_path)
         logger.info(f"File change detected: {src_path} ({event.event_type})")
 
+        if src_path.is_relative_to(self.uploaded_temp_dir):
+            logger.info(f"Ignoring file change in temporary upload directory: {src_path}. API handles this.")
+            return
+
         # Debounce events to prevent multiple triggers for a single save operation
         current_time = time.time()
-        # Increased debounce time for better reliability with file systems
         if str(src_path) in self.last_event_time and (current_time - self.last_event_time[str(src_path)]) < 2:
             logger.debug(f"Debouncing event for {src_path}")
             return
@@ -93,16 +98,14 @@ class AgentDataEventHandler(FileSystemEventHandler):
         # --- Check for workflow YAML file changes and trigger sync ---
         if src_path.is_file() and src_path.suffix in ['.yaml', '.yml']:
             try:
-                # Check if the file is within the workflows directory
-                src_path.relative_to(self.workflows_dir)  # Use self.workflows_dir here
+                src_path.relative_to(self.workflows_dir)
                 logger.info(f"Workflow definition file changed: {src_path}. Triggering workflow sync API.")
                 self._trigger_workflow_sync_api()
-                return  # Workflow change is handled, no need to proceed to agent/file_ingestion logic for this file
+                return
             except ValueError:
-                # Not a workflow file in the workflows directory
                 pass
 
-        # --- Agent re-deployment logic (only if not a workflow file) ---
+        # --- Agent re-deployment logic for non-workflow and non-temp-upload files ---
         affected_agents = self._find_affected_agents(str(src_path))
         if not affected_agents:
             return
@@ -110,28 +113,42 @@ class AgentDataEventHandler(FileSystemEventHandler):
         for agent_config in affected_agents:
             logger.info(f"Agent '{agent_config.name}' is affected. Triggering re-deployment...")
             try:
-                # FIX: Pass the agent_config and acquire a DB session
                 asyncio.run(self._run_async_with_db_session(embed_agent_data, config=agent_config))
                 logger.info(f"Successfully re-deployed agent '{agent_config.name}'.")
             except Exception as e:
                 logger.error(f"Failed to re-deploy agent '{agent_config.name}': {e}", exc_info=True)
 
+
     def _find_affected_agents(self, changed_path: str):
-        """Scans all agent configs to see if their data sources include the changed path."""
+        """
+        Scans all agent configs to see if their local data sources include the changed path,
+        and if the file type matches (if specified).
+        """
         affected = []
         all_agent_configs = get_agent_configs()
         normalized_changed_path = os.path.normpath(changed_path)
+        changed_file_extension = _get_file_extension(changed_path)
 
         for config in all_agent_configs:
             for source in config.sources:
                 if source.type == 'local' and source.path:
                     normalized_source_path = os.path.normpath(source.path)
-                    # Check if the changed path is within the source path
-                    # or if the source path is the changed path itself (for single file sources)
-                    if normalized_changed_path.startswith(normalized_source_path) or \
-                            normalized_source_path == normalized_changed_path:
+
+                    is_exact_match = (normalized_changed_path == normalized_source_path)
+
+                    is_within_directory = False
+                    if Path(normalized_source_path).is_dir() and normalized_changed_path.startswith(normalized_source_path + os.sep):
+                        is_within_directory = True
+
+                    path_matches = is_exact_match or is_within_directory
+
+                    file_type_matches = True
+                    if source.file_types:
+                        file_type_matches = changed_file_extension in [ext.lower().lstrip('.') for ext in source.file_types]
+
+                    if path_matches and file_type_matches:
                         affected.append(config)
-                        break  # Only need to add an agent once if multiple sources affected
+                        break
         return affected
 
     def _trigger_workflow_on_new_file(self, file_path: Path):
@@ -158,8 +175,6 @@ class AgentDataEventHandler(FileSystemEventHandler):
         """Calls the API endpoint to sync workflow definitions from files to database."""
         try:
             url = f"{self.server_url}/workflows/sync"
-            # In a real app, this API call would need authentication (e.g., API key)
-            # For simplicity, assuming local access without auth for watcher or webhook sync.
             response = requests.post(url, timeout=5)
             response.raise_for_status()
             logger.info(f"Successfully triggered workflow sync API. Response: {response.json()}")
@@ -169,7 +184,7 @@ class AgentDataEventHandler(FileSystemEventHandler):
 
 def start_watcher(directories: list[str]):
     """Starts the file system watcher on the specified directories."""
-    event_handler = AgentDataEventHandler()  # DB initialization happens here now
+    event_handler = AgentDataEventHandler()
     observer = Observer()
 
     for directory in directories:
@@ -183,7 +198,7 @@ def start_watcher(directories: list[str]):
     observer.start()
     try:
         while True:
-            time.sleep(1)  # Keep the main thread alive for the observer
+            time.sleep(1)
     except KeyboardInterrupt:
         observer.stop()
     observer.join()
