@@ -379,7 +379,8 @@ async def upload_temp_document(
         upload_result = await temp_doc_service.process_and_store_temp_document(
             file=file,
             user_id=current_user.id,
-            thread_id=thread_id
+            thread_id=thread_id,
+            db = db,
         )
 
         return QuickUploadFileItem(
