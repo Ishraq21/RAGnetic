@@ -1161,32 +1161,23 @@ body:not(.login-body) {
 /* NEW: Styles for Citation Popup */
 .citation-popup {
     position: absolute;
-    bottom: 100%; /* Position above the citation marker */
+    /* The transform will be used by JS if you add positioning logic, but is fine for now */
+    bottom: calc(100% + 5px); /* Position 5px above the marker */
     left: 50%;
-    transform: translateX(-50%) translateY(-10px); /* Adjust vertical position */
+    transform: translateX(-50%);
     background: var(--card-background);
     border: 1px solid var(--border-color);
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     padding: 10px 15px;
-    min-width: 250px;
-    max-width: 350px;
-    z-index: 10; /* Ensure it's on top */
+    min-width: 300px;
+    max-width: 400px;
+    z-index: 10;
     color: var(--text-color);
     font-size: 0.85em;
     line-height: 1.4;
     text-align: left;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.2s ease, visibility 0.2s ease;
-    pointer-events: none; /* Allows clicks/hovers to pass through to underlying elements */
-}
-
-/* Show popup on hover over the marker */
-.citation-marker:hover + .citation-popup {
-    opacity: 1;
-    visibility: visible;
-    pointer-events: auto; /* Re-enable pointer events for interaction with the popup itself */
+    /* display: none; /* Let JS handle visibility directly */
 }
 
 

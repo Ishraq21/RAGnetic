@@ -12,7 +12,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.db.models import chat_sessions_table, chat_messages_table
+from app.db.models import chat_sessions_table, chat_messages_table, document_chunks_table, citations_table
 from app.db import get_sync_db_engine
 from app.services.temporary_document_service import TemporaryDocumentService
 from app.core.config import get_db_connection, get_memory_storage_config, get_log_storage_config, get_path_settings, _get_config_parser
@@ -70,77 +70,107 @@ celery_app.conf.update(
 )
 
 
-
 @celery_app.task(name='app.core.tasks.cleanup_temporary_documents', queue='ragnetic_cleanup_tasks')
 def cleanup_temporary_documents(inactive_hours: int = 24):
     """
-    Celery task to clean up temporary documents (files and vector stores)
-    associated with chat sessions that have been inactive for a specified duration.
+    Celery task to clean up temporary files, vector stores, and their
+    associated database records for chat sessions inactive for a specified duration.
     """
-    logger.info(f"Running scheduled temporary document cleanup for sessions inactive for > {inactive_hours} hours.")
+    task_logger.info(f"Starting cleanup task for sessions inactive for > {inactive_hours} hours.")
     sync_engine = get_sync_db_engine()
     Session = sessionmaker(bind=sync_engine)
-    session = Session()
+    db_session = Session()
 
     try:
         cutoff_time = datetime.utcnow() - timedelta(hours=inactive_hours)
 
+        # Step 1: Find all inactive sessions and gather all necessary info upfront.
         inactive_sessions_stmt = select(
-            chat_sessions_table.c.thread_id,
-            chat_sessions_table.c.user_id,
             chat_sessions_table.c.id,
+            chat_sessions_table.c.thread_id,
             chat_sessions_table.c.agent_name
-        ).where(
-            chat_sessions_table.c.updated_at < cutoff_time
-        )
-        inactive_sessions = session.execute(inactive_sessions_stmt).fetchall()
-        logger.info(f"Found {len(inactive_sessions)} inactive chat sessions to process for cleanup.")
+        ).where(chat_sessions_table.c.updated_at < cutoff_time)
 
+        inactive_sessions = db_session.execute(inactive_sessions_stmt).fetchall()
+        task_logger.info(f"Found {len(inactive_sessions)} inactive chat sessions to process.")
 
-        for s in inactive_sessions:
-            thread_id = s.thread_id
-            user_id = s.user_id
-            session_db_id = s.id
-            agent_name = s.agent_name # Get the agent_name for this session
+        if not inactive_sessions:
+            task_logger.info("No inactive sessions to clean up. Task finished.")
+            return
 
-            logger.info(f"Cleaning up session: User={user_id}, Thread={thread_id}, Agent={agent_name}")
+        inactive_session_ids = [s.id for s in inactive_sessions]
 
-            # ❗ **Change**: Load the agent config and instantiate the service inside the loop
+        # Step 2: Perform Filesystem Cleanup
+        # Loop through each session to clean its associated temp files from disk.
+        for session_info in inactive_sessions:
             try:
-                agent_config = load_agent_config(agent_name)
+                # Load agent config to get correct paths for the temporary document service.
+                agent_config = load_agent_config(session_info.agent_name)
                 temp_doc_service = TemporaryDocumentService(agent_config=agent_config)
-            except Exception as e:
-                logger.error(f"Could not load agent config for '{agent_name}' for cleanup. Skipping session {thread_id}. Error: {e}", exc_info=True)
-                continue # Skip to the next session if agent config cannot be loaded
 
-            temp_doc_ids_to_clean: List[str] = []
+                # Find all temp_doc_ids associated with this specific session.
+                messages_meta_stmt = select(chat_messages_table.c.meta).where(
+                    chat_messages_table.c.session_id == session_info.id
+                )
+                messages_with_meta = db_session.execute(messages_meta_stmt).fetchall()
 
-            messages_stmt = select(chat_messages_table.c.meta).where(
-                chat_messages_table.c.session_id == session_db_id
-            )
-            messages_with_meta = session.execute(messages_stmt).fetchall()
+                temp_doc_ids_to_clean = set()
+                for msg_meta_row in messages_with_meta:
+                    if msg_meta_row.meta and 'quick_uploaded_files' in msg_meta_row.meta:
+                        for file_info in msg_meta_row.meta['quick_uploaded_files']:
+                            if 'temp_doc_id' in file_info:
+                                temp_doc_ids_to_clean.add(file_info['temp_doc_id'])
 
-            for msg_meta_row in messages_with_meta:
-                if msg_meta_row.meta and 'quick_uploaded_files' in msg_meta_row.meta:
-                    for file_info in msg_meta_row.meta['quick_uploaded_files']:
-                        if 'temp_doc_id' in file_info:
-                            temp_doc_ids_to_clean.append(file_info['temp_doc_id'])
-
-            temp_doc_ids_to_clean = list(set(temp_doc_ids_to_clean))
-
-            if temp_doc_ids_to_clean:
-                logger.info(f"Found {len(temp_doc_ids_to_clean)} unique temporary documents in session {thread_id} to clean.")
-                for temp_doc_id in temp_doc_ids_to_clean:
-                    try:
-                        # This now correctly uses the service instance for the specific agent
+                if temp_doc_ids_to_clean:
+                    task_logger.info(
+                        f"Cleaning up {len(temp_doc_ids_to_clean)} temporary document(s) from filesystem for session: {session_info.thread_id}")
+                    for temp_doc_id in temp_doc_ids_to_clean:
                         temp_doc_service.cleanup_temp_document(temp_doc_id)
-                    except Exception as e:
-                        logger.error(f"Failed to clean up temp_doc_id '{temp_doc_id}' for session {thread_id}: {e}", exc_info=True)
-            else:
-                logger.info(f"No temporary documents found in chat history for session {thread_id}.")
+
+            except Exception as e:
+                task_logger.error(
+                    f"Failed during file cleanup for agent '{session_info.agent_name}' / session '{session_info.thread_id}'. Error: {e}",
+                    exc_info=True)
+                # We continue to the next session even if one fails.
+
+        # Step 3: Perform Database Cleanup in a single transaction.
+        task_logger.info(f"Starting database cleanup for {len(inactive_session_ids)} inactive sessions.")
+
+        # Get all message IDs from the inactive sessions.
+        messages_to_delete_stmt = select(chat_messages_table.c.id).where(
+            chat_messages_table.c.session_id.in_(inactive_session_ids))
+        message_ids_to_delete = [row.id for row in db_session.execute(messages_to_delete_stmt).fetchall()]
+
+        if message_ids_to_delete:
+            # Find all unique chunk IDs cited in those messages.
+            chunks_to_delete_stmt = select(citations_table.c.chunk_id).distinct().where(
+                citations_table.c.message_id.in_(message_ids_to_delete))
+            chunk_ids_to_delete = [row.chunk_id for row in db_session.execute(chunks_to_delete_stmt).fetchall()]
+
+            # Delete citations linked to the messages.
+            db_session.execute(delete(citations_table).where(citations_table.c.message_id.in_(message_ids_to_delete)))
+            task_logger.info(f"Deleted citations for {len(message_ids_to_delete)} messages.")
+
+            # Delete the orphaned document chunks.
+            if chunk_ids_to_delete:
+                db_session.execute(
+                    delete(document_chunks_table).where(document_chunks_table.c.id.in_(chunk_ids_to_delete)))
+                task_logger.info(f"Deleted {len(chunk_ids_to_delete)} orphaned document chunks from the database.")
+
+        # Delete all messages from the inactive sessions.
+        db_session.execute(
+            delete(chat_messages_table).where(chat_messages_table.c.session_id.in_(inactive_session_ids)))
+        task_logger.info(f"Deleted messages for {len(inactive_session_ids)} inactive sessions.")
+
+        # Finally, delete the inactive session records themselves.
+        db_session.execute(delete(chat_sessions_table).where(chat_sessions_table.c.id.in_(inactive_session_ids)))
+        task_logger.info(f"Deleted {len(inactive_session_ids)} inactive session records.")
+
+        # Commit all database deletions.
+        db_session.commit()
 
     except Exception as e:
-        logger.error(f"An unexpected error occurred during temporary document cleanup: {e}", exc_info=True)
+        task_logger.error(f"A critical error occurred during the cleanup task: {e}", exc_info=True)
+        db_session.rollback()  # Rollback database changes on any failure.
     finally:
-        session.close()
-    logger.info("Finished temporary document cleanup task.")
+        db_session.close()  # Ensure the database session is always closed.

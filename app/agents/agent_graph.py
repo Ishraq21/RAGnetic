@@ -1,5 +1,3 @@
-# app/agents/agent_graph.py
-
 import os
 import logging
 from pathlib import Path
@@ -19,6 +17,7 @@ from langchain_core.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
 from langchain_huggingface.llms import HuggingFacePipeline as LCHuggingFacePipeline
+from sqlalchemy.ext.asyncio import AsyncSession
 from transformers import AutoTokenizer, pipeline
 
 from app.schemas.agent import AgentConfig
@@ -38,6 +37,8 @@ from app.db.dao import save_conversation_metrics_sync
 from app.db import get_sync_db_engine
 
 from app.training.model_manager import FineTunedModelManager
+from app.core.citation_parser import extract_citations_from_text
+from app.db.dao import create_citation, create_chat_message
 
 logger = logging.getLogger(__name__)
 logger = logging.getLogger("ragnetic")
@@ -77,6 +78,14 @@ async def call_model(state: AgentState, config: RunnableConfig):
     sync_engine_connection = None
     embedding_cost_usd = 0.0
     retrieved_documents_meta_for_citation: List[Dict[str, Any]] = []  # Initialize for this scope
+
+    db_session: Optional[AsyncSession] = config['configurable'].get("db_session")
+
+    if not db_session:
+        logger.critical("Database session not found in config. Cannot save messages or citations.")
+        error_message = AIMessage(content="I'm sorry, but a critical configuration error occurred (DB session missing).")
+        state.update({"messages": [error_message]})
+        return state
     try:
         start_time = time.perf_counter()
         agent_config = state['agent_config']
@@ -184,7 +193,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
 
         else:
             logger.info("Using default system prompt.")
-            # MODIFIED: Enhanced system prompt with clear citation instructions
             system_prompt_content = f"""You are RAGnetic, a professional AI assistant. Your behavior and personality are defined by the user's custom instructions below.
                                    ---
                                    **USER'S CUSTOM INSTRUCTIONS (Your Persona):**
@@ -199,12 +207,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
                                        Example: "The new policy was outlined [↩:Policy_Doc.docx]."
                                        For code files or CSVs, if no page number, just use the filename.
                                    3.  Do not refer to "the context provided" or "the information I have." Respond directly and authoritatively.
-                                   4.  If the sources indicate an error or that no documents were found, inform the user of this fact.
-                                   **Instructions for Formatting:**
-                                   - Use Markdown for all your responses.
-                                   - Use headings (`##`, `###`) to structure main topics.
-                                   - Use bold text (`**text**`) to highlight key terms, figures, or important information.
-                                   - Use bullet points (`- `) or numbered lists (`1. `) for detailed points or steps.
+                                   4. If you use any document info, **you MUST cite inline** as `[↩:FileName.ext:Page]` or `[↩:FileName.ext]` if there’s no page number.
+                                      - Ex: “Revenue grew 10% [↩:Q4_Report.pdf:2].”
+                                      - Ex: “See code example below [↩:script.py].”
 
                                    IMPORTANT: When explaining any mathematical expressions, YOU MUST USE LaTeX SYNTAX.
                                    IMPORTANT: Wrap inline equations in `$...$`, and display equations in `$$...$$`.
@@ -427,6 +432,38 @@ async def call_model(state: AgentState, config: RunnableConfig):
             completion_tokens=completion_tokens
         )
         total_estimated_cost_usd = llm_cost_usd + embedding_cost_usd
+        if response and isinstance(response, AIMessage):
+            response_text = response.content
+            retrieved_meta = state.get("retrieved_documents_meta_for_citation", [])
+
+            # 1. Save the AI's message to get a message_id
+            message_id = await create_chat_message(
+                db=db_session,
+                session_id=session_id,
+                sender="ai",
+                content=response_text
+            )
+
+            # 2. Parse citations from the response
+            parsed_citations = extract_citations_from_text(response_text,
+                                                           retrieved_documents_meta_for_citation)
+
+            # 3. Save each parsed citation to the database
+            if parsed_citations:
+                logger.info(f"Saving {len(parsed_citations)} citations for message_id {message_id}.")
+                for cit in parsed_citations:
+                    # Ensure chunk_id exists before attempting to save
+                    if 'chunk_id' in cit and cit['chunk_id'] is not None:
+                        await create_citation(
+                            db=db_session,
+                            message_id=message_id,
+                            chunk_id=cit['chunk_id'],
+                            marker_text=cit['marker_text'],
+                            start_char=cit['start_char'],
+                            end_char=cit['end_char']
+                        )
+                    else:
+                        logger.warning(f"Skipping citation due to missing chunk_id: {cit}")
 
         state.update({
             "messages": [response],
@@ -493,9 +530,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
         error_message = AIMessage(content=f"I'm sorry, but I encountered an unexpected error. Error: {e}")
         state.update({"messages": [error_message]})
         return state
-    finally:
-        if sync_engine_connection:
-            sync_engine_connection.close()
+
 
 
 def should_continue(state: AgentState) -> str:

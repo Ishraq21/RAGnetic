@@ -17,7 +17,10 @@ from app.agents.config_manager import get_agent_configs, load_agent_config, save
 from app.pipelines.embed import embed_agent_data
 from app.core.embed_config import get_embedding_model
 from app.schemas.agent import DataSource
-from app.schemas.security import User  # Import User schema
+from app.schemas.security import User
+from app.db import AsyncSessionLocal, get_db
+from sqlalchemy.ext.asyncio import AsyncSession
+
 import logging
 
 # IMPORTS for inspect_agent dynamic vector store loading
@@ -27,6 +30,7 @@ from langchain_pinecone import Pinecone as PineconeLangChain
 from langchain_mongodb import MongoDBAtlasVectorSearch
 from pinecone import Pinecone as PineconeClient
 from pathlib import Path
+
 
 # IMPORTS for connection checks
 from sqlalchemy import create_engine, text
@@ -88,7 +92,6 @@ async def get_agent_by_name(
 async def create_new_agent(
         config: AgentConfig = Body(...),
         bg: BackgroundTasks = BackgroundTasks(),
-        # Only users with 'agent:create' permission can create agents
         current_user: User = Depends(PermissionChecker(["agent:create"]))
 ):
     """
@@ -102,17 +105,23 @@ async def create_new_agent(
             detail=f"Agent '{config.name}' already exists. Use PUT to update."
         )
     except FileNotFoundError:
-        pass  # This is the expected case for a new agent
+        pass
 
     try:
         save_agent_config(config)
-        bg.add_task(embed_agent_data, config)
+
+        # **REFINED LOGIC**: Create a helper function to manage the DB session for the background task.
+        async def run_embedding_with_session():
+            async with AsyncSessionLocal() as session:
+                await embed_agent_data(config=config, db=session)
+
+        bg.add_task(run_embedding_with_session) # Call the helper instead of the original function
+
         logger.info(f"User '{current_user.username}' created agent '{config.name}'.")
         return {"status": "Agent config saved; embedding started.", "agent": config.name}
     except Exception as e:
         logger.error(f"API: Error creating agent '{config.name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500,
-                            detail=f"An unexpected server error occurred during agent creation for '{config.name}'. Please check server logs.")
+        raise HTTPException(status_code=500, detail=f"An unexpected server error occurred: {str(e)}")
 
 
 @router.put("/{agent_name}")
@@ -120,7 +129,6 @@ async def update_agent_by_name(
         agent_name: str,
         config: AgentConfig = Body(...),
         bg: BackgroundTasks = BackgroundTasks(),
-        # Only users with 'agent:update' permission can update agents
         current_user: User = Depends(PermissionChecker(["agent:update"]))
 ):
     """
@@ -130,19 +138,24 @@ async def update_agent_by_name(
     if agent_name != config.name:
         raise HTTPException(status_code=400, detail="Agent name in path does not match agent name in body.")
     try:
-        load_agent_config(agent_name)  # Ensure the agent exists
+        load_agent_config(agent_name)
 
         save_agent_config(config)
-        bg.add_task(embed_agent_data, config)
+
+        # **REFINED LOGIC**: Use the same helper function pattern here for the update.
+        async def run_embedding_with_session():
+            async with AsyncSessionLocal() as session:
+                await embed_agent_data(config=config, db=session)
+
+        bg.add_task(run_embedding_with_session)
+
         logger.info(f"User '{current_user.username}' updated agent '{agent_name}'.")
         return {"status": "Agent config updated; re-embedding started.", "agent": config.name}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
     except Exception as e:
         logger.error(f"API: Error updating agent '{agent_name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500,
-                            detail=f"An unexpected server error occurred during agent update for '{agent_name}'. Please check server logs.")
-
+        raise HTTPException(status_code=500, detail=f"An unexpected server error occurred: {str(e)}")
 
 @router.delete("/{agent_name}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent_by_name(

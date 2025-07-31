@@ -17,6 +17,7 @@ from pathlib import Path
 from datetime import datetime
 from pydantic import BaseModel, Field
 from fastapi import Form
+from app.db.dao import create_chat_message
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Depends, status, UploadFile, File
 from fastapi.templating import Jinja2Templates
@@ -303,7 +304,6 @@ class RenameRequest(BaseModel):
     new_name: str
 
 
-# --- NEW Pydantic Models for Quick Upload ---
 class QuickUploadFileItem(BaseModel):
     file_name: str = Field(..., description="Name of the uploaded file.")
     file_size: int = Field(..., description="Size of the uploaded file in bytes.")
@@ -472,7 +472,7 @@ async def _get_or_create_session(db: AsyncSession, thread_id_from_frontend: Opti
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="Failed to create new chat session.")
 
-
+"""
 async def _save_message_and_update_session(db: AsyncSession, session_id: int, sender: str, content: str,
                                            meta: Optional[Dict] = None):
     now = datetime.utcnow()
@@ -484,6 +484,11 @@ async def _save_message_and_update_session(db: AsyncSession, session_id: int, se
     await db.commit()
 
 
+"""
+
+
+
+
 @app.websocket("/ws")
 async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api_key),
                          db: AsyncSession = Depends(get_db)):
@@ -491,13 +496,10 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
     canonical_thread_id: str = "uninitialized_thread"
     pubsub_task = None
     channel: str = f"chat:{canonical_thread_id}"
-
-    # This list will persist for the duration of the WebSocket connection.
     all_temp_doc_ids_in_session: List[str] = []
 
-    retrieved_documents_meta_for_citation: List[Dict[str, Any]] = []
-
     try:
+        # Initial connection and payload validation
         message_data = await ws.receive_json()
         if not (message_data.get("type") == "query" and "payload" in message_data):
             await ws.close(code=status.WS_1003_UNSUPPORTED_DATA,
@@ -519,13 +521,10 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
             await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Invalid 'user_id' type. Expected integer.")
             return
 
+        # Session creation and tool setup
         thread_id_from_frontend = sanitize_for_path(payload.thread_id)
-
         session_id, session_topic, returned_thread_id = await _get_or_create_session(db, thread_id_from_frontend,
                                                                                      agent_name, user_db_id)
-        logger.debug(
-            f"[main.py:websocket_chat] Session ID obtained: {session_id}, User DB ID: {user_db_id}, Agent Name: {agent_name}")
-
         canonical_thread_id = returned_thread_id
         channel = f"chat:{canonical_thread_id}"
 
@@ -550,8 +549,9 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
 
         langgraph_agent = get_agent_workflow(all_tools).compile()
 
+        # Main message loop
         while True:
-            # --- 1. Handle current payload and update session state ---
+            # 1. Process incoming payload
             newly_uploaded_files = payload.files
             query = payload.query
             if newly_uploaded_files:
@@ -559,32 +559,38 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
                 all_temp_doc_ids_in_session.extend(new_ids)
                 all_temp_doc_ids_in_session = list(dict.fromkeys(all_temp_doc_ids_in_session))
 
-            # --- 2. Handle special cases (file-only or empty messages) ---
+            # 2. Handle file-only uploads or empty messages
             if not query:
-                if newly_uploaded_files:  # Case 1: File-only upload
+                if newly_uploaded_files:
                     logger.info(f"[{canonical_thread_id}] Acknowledged {len(newly_uploaded_files)} files.")
                     ack_message = {"done": True, "error": False, "request_id": str(uuid4()), "user_id": user_db_id,
                                    "thread_id": canonical_thread_id, "topic_name": session_topic, "citations": []}
                     await ws.send_text(json.dumps(ack_message))
-                else:  # Case 2: Truly empty message
+                else:
                     logger.warning(f"[{canonical_thread_id}] Received empty query, skipping.")
 
-                # Wait for the next valid message and restart the loop
                 message_data = await ws.receive_json()
                 payload = ChatMessagePayloadWithFiles(**message_data["payload"])
                 continue
 
-            # --- 3. Prepare for Agent Run (do this only ONCE) ---
+            # 3. Save HUMAN message and prepare for agent run
             request_id = str(uuid4())
-            await _save_message_and_update_session(db, session_id, 'human', query, meta={
-                "quick_uploaded_files": [f.dict() for f in newly_uploaded_files]} if newly_uploaded_files else None)
+
+            # Use the DAO function to save the user's message and update the session timestamp
+            await create_chat_message(
+                db, session_id, 'human', query, meta={
+                "quick_uploaded_files": [f.dict() for f in newly_uploaded_files]
+            } if newly_uploaded_files else None)
+
             if is_first_message_in_session:
                 title = query.strip()[:100]
                 await db.execute(
-                    update(chat_sessions_table).where(chat_sessions_table.c.id == session_id).values(topic_name=title))
+                    update(chat_sessions_table).where(chat_sessions_table.c.id == session_id).values(topic_name=title)
+                )
                 await db.commit()
                 is_first_message_in_session = False
 
+            # 4. Fetch history and configure the agent run
             history_stmt = select(chat_messages_table.c.sender, chat_messages_table.c.content).where(
                 chat_messages_table.c.session_id == session_id).order_by(chat_messages_table.c.timestamp.asc())
             history = [HumanMessage(content=msg.content) if msg.sender == 'human' else AIMessage(content=msg.content)
@@ -595,13 +601,26 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
                 agent_runs.c.id))).scalar_one()
             await db.commit()
 
-            initial_state = {"messages": history, "request_id": request_id, "agent_config": agent_config,
-                             "temp_document_ids": all_temp_doc_ids_in_session}
-            run_config = {
-                "configurable": {"thread_id": canonical_thread_id, "session_id": session_id, "user_id": user_db_id,
-                                 "agent_name": agent_name, "callbacks": [UsageMetadataCallbackHandler()]}}
+            initial_state = {
+                "messages": history,
+                "request_id": request_id,
+                "agent_config": agent_config,
+                "temp_document_ids": all_temp_doc_ids_in_session
+            }
 
-            # --- 4. Run Agent Concurrently with Listener (for cancellation) ---
+            # Inject the database session into the agent graph's config
+            run_config = {
+                "configurable": {
+                    "thread_id": canonical_thread_id,
+                    "session_id": session_id,
+                    "user_id": user_db_id,
+                    "agent_name": agent_name,
+                    "db_session": db,  # CRITICAL: Pass the DB session to the agent
+                    "callbacks": [UsageMetadataCallbackHandler()]
+                }
+            }
+
+            # 5. Run agent and handle cancellation
             generation_task = asyncio.create_task(
                 handle_query_streaming(initial_state, run_config, langgraph_agent, canonical_thread_id, run_db_id, db))
             listener_task = asyncio.create_task(ws.receive_json())
@@ -613,43 +632,43 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
                 if message.get("type") == "interrupt":
                     logger.info(f"[{canonical_thread_id}] Interrupt received. Cancelling generation.")
                     generation_task.cancel()
-            else:  # generation_task in done
+            else:
                 listener_task.cancel()
 
             final_state, ai_response_content_str = await generation_task
 
-            # --- 5. Process Final Result ---
-            extracted_citations = extract_citations_from_text(ai_response_content_str,
-                                                              final_state.get('retrieved_documents_meta_for_citation',
-                                                                              []))
+            # 6. Process Final Result (Simplified)
+            # The agent graph has already saved the AI message and citations.
+            # We just send the final "done" message with the citation data from the agent.
+            final_citations = final_state.get('citations', [])
 
             done_message = {
-                "done": True, "error": final_state.get("error", False), "errorMessage": final_state.get("errorMessage"),
-                "request_id": request_id, "user_id": user_db_id, "thread_id": canonical_thread_id,
-                "topic_name": session_topic, "citations": extracted_citations
+                "done": True,
+                "error": final_state.get("error", False),
+                "errorMessage": final_state.get("errorMessage"),
+                "request_id": request_id,
+                "user_id": user_db_id,
+                "thread_id": canonical_thread_id,
+                "topic_name": session_topic,
+                "citations": final_citations
             }
             await manager.broadcast(channel, json.dumps(done_message))
 
-            if ai_response_content_str and not final_state.get("error"):
-                await _save_message_and_update_session(db, session_id, 'ai', ai_response_content_str, meta={
-                    "citations": extracted_citations} if extracted_citations else None)
-
-            await db.execute(update(agent_runs).where(agent_runs.c.id == run_db_id).values(end_time=datetime.utcnow(),
-                                                                                           status='completed' if not final_state.get(
-                                                                                               "error") else 'failed',
-                                                                                           final_state=_serialize_for_db(
-                                                                                               final_state)))
+            # Update the agent_runs record with the final state
+            await db.execute(update(agent_runs).where(agent_runs.c.id == run_db_id).values(
+                end_time=datetime.utcnow(),
+                status='completed' if not final_state.get("error") else 'failed',
+                final_state=_serialize_for_db(final_state)
+            ))
             await db.commit()
 
-            # --- 6. Wait for Next User Message ---
-            if listener_task.done() and not listener_task.cancelled() and listener_task.result().get(
-                    "type") != "interrupt":
+            # 7. Wait for the next user message
+            if listener_task.done() and not listener_task.cancelled() and listener_task.result().get("type") != "interrupt":
                 message_data = listener_task.result()
             else:
                 message_data = await ws.receive_json()
 
             payload = ChatMessagePayloadWithFiles(**message_data["payload"])
-
 
     except WebSocketDisconnect:
         logger.info(f"[{canonical_thread_id}] Client disconnected.")
@@ -669,7 +688,6 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
         if pubsub_task and not pubsub_task.done():
             pubsub_task.cancel()
         manager.disconnect(ws, channel)
-
 
 async def redis_listen(ws: WebSocket, channel: str):
     if not isinstance(manager, RedisConnectionManager):

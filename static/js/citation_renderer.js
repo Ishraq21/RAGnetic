@@ -2,24 +2,27 @@ window.citationRenderer = (function() {
     const CITATION_HIGHLIGHT_CLASS = 'citation-marker';
     const CITATION_POPUP_CLASS = 'citation-popup';
 
-    // A simple cache to avoid re-fetching snippets for the same citation.
-    const documentSnippetsCache = {};
+    // A simple cache to avoid re-fetching snippets for the same chunk.
+    const snippetsCache = {};
 
+    /**
+     * Initializes the citation renderer by adding event listeners to the main messages container.
+     */
     function init() {
         const messagesContainer = document.getElementById('messages');
         if (messagesContainer) {
-            messagesContainer.addEventListener('click', handleCitationClick);
             messagesContainer.addEventListener('mouseover', handleCitationHover);
-            messagesContainer.addEventListener('mouseout', handleCitationOut);
+            messagesContainer.addEventListener('mouseout', hideAllCitationPopups);
             console.log("Citation Renderer initialized.");
+        } else {
+            console.warn("Could not find 'messages' container. Citation rendering will not be active.");
         }
     }
 
     /**
      * Finds and replaces citation markers in a message element's HTML with interactive spans.
-     * This method is more robust than using character offsets.
      * @param {HTMLElement} messageElement - The DOM element containing the AI message.
-     * @param {Array<Object>} citations - A list of citation objects from the message's metadata.
+     * @param {Array<Object>} citations - A list of citation objects. Each object must have `marker_text` and `chunk_id`.
      */
     function renderCitations(messageElement, citations) {
         if (!citations || citations.length === 0) {
@@ -27,35 +30,38 @@ window.citationRenderer = (function() {
         }
 
         const contentElement = messageElement.querySelector('.content');
-        if (!contentElement) return;
+        if (!contentElement) {
+            console.error("Message element is missing a '.content' child. Cannot render citations.");
+            return;
+        }
 
         let contentHtml = contentElement.innerHTML;
 
         citations.forEach(citation => {
-            const markerText = citation.text; // The full text of the citation marker, e.g., "[↩:doc.pdf:1]"
+            const markerText = citation.marker_text;
+            const chunkId = citation.chunk_id;
 
-            // Construct the replacement HTML with data attributes for the popup
-            let dataAttrs = `data-doc-name="${citation.doc_name || ''}"`;
-            if (citation.page_number) dataAttrs += ` data-page="${citation.page_number}"`;
-            if (citation.temp_doc_id) dataAttrs += ` data-temp-doc-id="${citation.temp_doc_id}"`;
+            if (!markerText || chunkId === undefined) {
+                console.warn("Skipping invalid citation object:", citation);
+                return;
+            }
 
-            const replacementHtml = `<span class="${CITATION_HIGHLIGHT_CLASS}" ${dataAttrs}>${markerText}</span>`;
+            // Create the interactive span with the chunk_id stored in a data attribute.
+            const replacementHtml = `<span class="${CITATION_HIGHLIGHT_CLASS}" data-chunk-id="${chunkId}" data-doc-name="${citation.doc_name || ''}">${markerText}</span>`;
 
-            // Replace all occurrences of the marker text with the interactive span
-            contentHtml = contentHtml.replaceAll(markerText, replacementHtml);
+            // Use a regex for safer replacement to avoid conflicts with HTML attributes.
+            // This ensures we only replace the text content.
+            const markerRegex = new RegExp(markerText.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g');
+            contentHtml = contentHtml.replace(markerRegex, replacementHtml);
         });
 
         contentElement.innerHTML = contentHtml;
     }
 
-    function handleCitationClick(event) {
-        const target = event.target.closest(`.${CITATION_HIGHLIGHT_CLASS}`);
-        if (target) {
-            console.log("Citation clicked:", target.dataset);
-            // Future functionality can be added here, like pinning the popup.
-        }
-    }
-
+    /**
+     * Handles the mouse hover event on a citation marker to show the snippet popup.
+     * @param {MouseEvent} event - The mouse event.
+     */
     function handleCitationHover(event) {
         const target = event.target.closest(`.${CITATION_HIGHLIGHT_CLASS}`);
         if (target) {
@@ -63,29 +69,30 @@ window.citationRenderer = (function() {
         }
     }
 
-    function handleCitationOut(event) {
-        const target = event.target.closest(`.${CITATION_HIGHLIGHT_CLASS}`);
-        if (target) {
-            hideAllCitationPopups();
-        }
-    }
-
+    /**
+     * Displays the citation popup for a given marker element.
+     * @param {HTMLElement} markerElement - The citation span element that was hovered.
+     */
     function showCitationPopup(markerElement) {
-        hideAllCitationPopups(); // Ensure only one popup is visible at a time
+        hideAllCitationPopups(); // Ensure only one popup is visible at a time.
 
-        const { docName, page, tempDocId } = markerElement.dataset;
-        const cacheKey = `${tempDocId || 'perm'}_${docName}_${page || 'all'}`;
+        const { chunkId, docName } = markerElement.dataset;
 
-        // Create and display the popup immediately with a "Loading..." state
-        const popup = createAndDisplayPopup(markerElement, 'Fetching snippet...', docName, page, true);
+        if (!chunkId) {
+            console.error("Cannot show popup: chunkId is missing from data attribute.");
+            return;
+        }
 
-        // Fetch from cache or API
-        if (documentSnippetsCache[cacheKey]) {
-            updatePopupContent(popup, documentSnippetsCache[cacheKey]);
+        // Create and display the popup immediately with a "Loading..." state.
+        const popup = createAndDisplayPopup(markerElement, 'Fetching snippet...', docName);
+
+        // Fetch from cache or API.
+        if (snippetsCache[chunkId]) {
+            updatePopupContent(popup, snippetsCache[chunkId]);
         } else {
-            fetchCitationSnippet(tempDocId, docName, page)
+            fetchCitationSnippet(chunkId)
                 .then(snippet => {
-                    documentSnippetsCache[cacheKey] = snippet;
+                    snippetsCache[chunkId] = snippet;
                     updatePopupContent(popup, snippet);
                 })
                 .catch(error => {
@@ -95,67 +102,82 @@ window.citationRenderer = (function() {
         }
     }
 
-    function createAndDisplayPopup(markerElement, content, docName, page, isLoading = false) {
+    /**
+     * Creates the popup element and inserts it into the DOM.
+     * @param {HTMLElement} markerElement - The element to anchor the popup to.
+     * @param {string} content - The initial content for the popup.
+     * @param {string} docName - The name of the source document for the header.
+     * @returns {HTMLElement} The created popup element.
+     */
+    function createAndDisplayPopup(markerElement, content, docName) {
         const popup = document.createElement('div');
         popup.className = CITATION_POPUP_CLASS;
 
         popup.innerHTML = `
-            <div class="popup-header">${docName || 'Document'}${page ? ` (Page ${page})` : ''}</div>
-            <div class="popup-content ${isLoading ? 'loading' : ''}">${content}</div>
+            <div class="popup-header">${docName || 'Source Document'}</div>
+            <div class="popup-content loading">${content}</div>
         `;
 
+        // Position the popup near the marker.
         markerElement.parentNode.insertBefore(popup, markerElement.nextSibling);
         return popup;
     }
 
+    /**
+     * Updates the content of an existing popup and removes the loading state.
+     * @param {HTMLElement} popupElement - The popup element to update.
+     * @param {string} newContent - The new text content.
+     */
     function updatePopupContent(popupElement, newContent) {
-        if (!popupElement) return;
-        const contentDiv = popupElement.querySelector('.popup-content');
+        const contentDiv = popupElement?.querySelector('.popup-content');
         if (contentDiv) {
             contentDiv.textContent = newContent;
             contentDiv.classList.remove('loading');
         }
     }
 
+    /**
+     * Removes all citation popups from the DOM.
+     */
     function hideAllCitationPopups() {
         document.querySelectorAll(`.${CITATION_POPUP_CLASS}`).forEach(popup => popup.remove());
     }
 
-    async function fetchCitationSnippet(tempDocId, docName, page) {
-        const apiUrl = `${API_BASE_URL}/chat/citation-snippet`;
-        const params = new URLSearchParams({
-            doc_name: docName,
-        });
+    /**
+     * Fetches a citation snippet from the backend API using its chunk ID.
+     * @param {string} chunkId - The unique ID of the document chunk.
+     * @returns {Promise<string>} A promise that resolves with the snippet text.
+     */
+    async function fetchCitationSnippet(chunkId) {
 
-        if (page) params.append('page', page);
-        if (tempDocId) params.append('temp_doc_id', tempDocId);
+        const apiUrl = `${API_BASE_URL}/chat/citation-snippet?chunk_id=${chunkId}`;
 
         try {
-            const response = await fetch(`${apiUrl}?${params.toString()}`, {
+            const response = await fetch(apiUrl, {
                 headers: { 'X-API-Key': loggedInUserToken }
             });
 
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({ detail: `HTTP Error ${response.status}` }));
-                throw new Error(errorData.detail);
+                throw new Error(errorData.detail || 'Unknown server error');
             }
 
             const data = await response.json();
             return data.snippet; // Expects API to return { "snippet": "..." }
         } catch (error) {
-            console.error("Error fetching citation snippet:", error);
-            throw error;
+            console.error("API call to fetch citation snippet failed:", error);
+            throw error; // Re-throw to be caught by the caller.
         }
     }
 
-    // Public API for the module
+    // Public API for the module.
     return {
         init: init,
         renderCitations: renderCitations,
     };
 })();
 
-// Initialize the module when the DOM is ready
+// Initialize the module when the DOM is ready.
 document.addEventListener('DOMContentLoaded', () => {
     window.citationRenderer?.init();
 });
