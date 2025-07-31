@@ -52,6 +52,10 @@ from app.schemas.fine_tuning import FineTuningJobConfig, FineTuningStatus
 from app.training.data_prep.jsonl_instruction_loader import JsonlInstructionLoader
 from app.training.data_prep.conversational_jsonl_loader import ConversationalJsonlLoader
 from app.schemas.data_prep import DatasetPreparationConfig
+from app.db import AsyncSessionLocal, initialize_db_connections
+import app.db as db
+
+
 # --- Centralized Path Configuration ---
 _APP_PATHS = get_path_settings()
 _PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
@@ -1041,9 +1045,20 @@ def deploy_agent_by_name(
         agent_name: str = typer.Argument(..., help="The name of the agent to deploy."),
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation and overwrite existing data."),
 ):
+    # This function is defined in your file, no changes needed here
     _validate_agent_name_cli(agent_name)
     logger = logging.getLogger(__name__)
     try:
+        # --- FIX: Initialize DB Connection using the imported 'db' module ---
+        conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
+            "connection_name")
+        if not conn_name:
+            typer.secho("Error: No database connection is configured in your config.yaml.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+        # Call initialization directly on the imported db module
+        db.initialize_db_connections(conn_name)
+
         config_path = _AGENTS_DIR / f"{agent_name}.yaml"
         logger.info(f"Loading agent configuration from: {config_path}")
         if not os.path.exists(config_path):
@@ -1051,18 +1066,24 @@ def deploy_agent_by_name(
             raise typer.Exit(code=1)
 
         vectorstore_path = _VECTORSTORE_DIR / agent_name
-        if os.path.exists(vectorstore_path) and not force:
-            typer.secho(f"Warning: A vector store for agent '{agent_name}' already exists.", fg=typer.colors.YELLOW)
-            if not typer.confirm("Do you want to overwrite it and re-deploy the agent?"):
-                typer.echo("Deployment cancelled.")
-                raise typer.Exit()
+        if os.path.exists(vectorstore_path):
+            if not force:
+                typer.secho(f"Warning: A vector store for agent '{agent_name}' already exists.", fg=typer.colors.YELLOW)
+                if not typer.confirm("Do you want to overwrite it and re-deploy the agent?"):
+                    typer.echo("Deployment cancelled.")
+                    raise typer.Exit()
             shutil.rmtree(vectorstore_path)
             logger.info(f"Removed existing vector store at: {vectorstore_path}")
 
         agent_config = load_agent_from_yaml_file(config_path)
         typer.echo(f"\nDeploying agent '{agent_config.name}' using embedding model '{agent_config.embedding_model}'...")
 
-        vector_store_created = asyncio.run(embed_agent_data(agent_config))
+        async def run_embedding_with_session():
+            # **THE FIX**: Call AsyncSessionLocal through the imported 'db' module
+            async with db.AsyncSessionLocal() as session:
+                return await embed_agent_data(config=agent_config, db=session)
+
+        vector_store_created = asyncio.run(run_embedding_with_session())
 
         typer.secho("\nAgent deployment successful!", fg=typer.colors.GREEN)
         if vector_store_created:
@@ -1073,7 +1094,6 @@ def deploy_agent_by_name(
     except Exception as e:
         logger.error(f"An unexpected error occurred during deployment: {e}", exc_info=True)
         raise typer.Exit(code=1)
-
 
 @app.command(name='inspect-agent', help="Displays the configuration of a specific agent.")
 def inspect_agent(

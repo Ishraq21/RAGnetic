@@ -1,4 +1,3 @@
-# app/training/model_manager.py
 import logging
 from pathlib import Path
 from typing import Optional, Any
@@ -21,7 +20,7 @@ class FineTunedModelManager:
         self.models_base_path.mkdir(parents=True, exist_ok=True) # Ensure the base directory exists
         logger.info(f"FineTunedModelManager initialized. Models will be stored in: {self.models_base_path}")
 
-    def save_adapter(self, adapter_id: str, adapter: Any, tokenizer: Any = None) -> str:  # ADD tokenizer argument
+    def save_adapter(self, adapter_id: str, adapter: Any, tokenizer: Any = None) -> str:
         """
         Saves the fine-tuned LoRA adapter weights (or a full fine-tuned model)
         to a specified path derived from its unique 'adapter_id'.

@@ -1,36 +1,39 @@
-import os
-import logging
-from typing import List, Dict, Any, Optional
-import uuid
+import asyncio
 import hashlib
 import json
-import asyncio
+import logging
+import os
+import uuid
+from itertools import groupby
+from typing import List
 
-# LangChain and LlamaIndex have different Document objects
-from langchain_core.documents import Document as LangChainDocument  # Using canonical import path
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from llama_index.core.schema import Document as LlamaDocument
-from llama_index.core.node_parser import SemanticSplitterNodeParser
-from llama_index.embeddings.langchain import LangchainEmbedding
-
 # LangChain vector store components
 from langchain_community.vectorstores import FAISS, Chroma
 from langchain_community.vectorstores.utils import filter_complex_metadata
-from langchain_qdrant import Qdrant
-from langchain_pinecone import Pinecone as PineconeLangChain
+# LangChain and LlamaIndex have different Document objects
+from langchain_core.documents import Document as LangChainDocument  # Using canonical import path
 from langchain_mongodb import MongoDBAtlasVectorSearch
+from langchain_pinecone import Pinecone as PineconeLangChain
+from langchain_qdrant import Qdrant
 from pinecone import Pinecone as PineconeClient
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# Use forward references for type hints to avoid circular imports
-from app.schemas.agent import AgentConfig, DataSource, ChunkingConfig
-from app.core.embed_config import get_embedding_model
 from app.core.config import get_api_key, get_path_settings
+from app.core.embed_config import get_embedding_model
+from app.db.dao import create_document_chunk
+from app.db.models import document_chunks_table
 from app.pipelines.loaders import (
     directory_loader, url_loader, db_loader, api_loader,
     code_repository_loader, gdoc_loader, web_crawler_loader,
     notebook_loader, pdf_loader, docx_loader, csv_loader,
     text_loader, iac_loader, parquet_loader
 )
+from app.schemas.agent import AgentConfig
+# Use forward references for type hints to avoid circular imports
+from app.schemas.agent import DataSource, ChunkingConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -45,6 +48,7 @@ class VectorStoreCreationError(Exception):
 
 
 def _generate_chunk_id(content: str, original_id: str = "", reproducible: bool = False, idx: int = None) -> str:
+    """Generates a unique ID for a chunk."""
     if reproducible:
         hash_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
         return f"{original_id}-{idx}-{hash_digest}" if idx is not None else f"{original_id}-{hash_digest}"
@@ -58,112 +62,57 @@ def _get_chunks_from_documents(
         reproducible_ids: bool,
 ) -> List[LangChainDocument]:
     """
-    Helper function to apply a chunking strategy to documents and ensure unique,
-    reproducible IDs for chunks. Supports 'none', 'semantic', and 'default' modes.
-    This function remains synchronous as it's CPU-bound after documents are loaded.
+    Applies a chunking strategy, correctly handling multi-page documents by grouping
+    them by source before assigning chunk indexes to prevent UNIQUE constraint violations.
     """
-    final_chunks_list: List[LangChainDocument] = []  # Use a single list for all modes' results
+    final_chunks_list: List[LangChainDocument] = []
     chunking_mode = chunking_config.mode
     logger.info(f"Applying chunking mode: '{chunking_mode}'")
 
-    # Ensure input documents are valid LangChainDocuments
-    validated_documents = []
-    for i, doc in enumerate(documents):
-        if not isinstance(doc, LangChainDocument):
-            logger.error(
-                f"[DEBUG] _get_chunks_from_documents (Input Validation): Input doc at #{i} is not LangChainDocument, got {type(doc)}. Skipping. Content snippet: {str(doc)[:100]}")
-            continue
-        validated_documents.append(doc)
-    documents = validated_documents  # Use validated documents for chunking
+    # Define a key function to group documents by their source path or URL
+    def get_source_key(doc):
+        return doc.metadata.get('source_path') or doc.metadata.get('source_url') or doc.metadata.get('source')
 
-    # --- Handle 'none' chunking mode ---
-    if chunking_mode == 'none':
-        logger.info("Chunking mode is 'none'. Using documents directly as chunks.")
-        for idx, doc in enumerate(documents):
-            # Create a new LangChainDocument instance to guarantee consistency
-            new_chunk = LangChainDocument(page_content=doc.page_content, metadata=doc.metadata.copy(), id=doc.id)
-            if reproducible_ids:
-                content_hash = hashlib.sha256(new_chunk.page_content.encode('utf-8')).hexdigest()
-                new_chunk.id = f"{new_chunk.metadata.get('original_doc_id', '')}-{idx}-{content_hash[:8]}"
-            else:
-                new_chunk.id = str(uuid.uuid4())
-            new_chunk.metadata["chunk_id"] = new_chunk.id
-            final_chunks_list.append(new_chunk)
-        logger.info(f"None chunking resulted in {len(final_chunks_list)} chunks.")
-        return final_chunks_list
+    # Sort documents by the source key to ensure groupby works correctly
+    documents.sort(key=get_source_key)
 
-    # --- Handle 'semantic' chunking mode ---
-    elif chunking_mode == 'semantic':
-        logger.info("Attempting semantic chunking using LlamaIndex...")
-        try:
-            embeddings = LangchainEmbedding(get_embedding_model(embedding_model_name))
-            splitter = SemanticSplitterNodeParser.from_defaults(
-                embed_model=embeddings,
-                breakpoint_percentile_threshold=chunking_config.breakpoint_percentile_threshold,
+    # Group documents by their original source
+    for source, docs_from_source in groupby(documents, key=get_source_key):
+        docs_from_source = list(docs_from_source)
+        doc_name = os.path.basename(source) if source else "Unknown Document"
+
+        if chunking_mode == 'default':
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=chunking_config.chunk_size,
+                chunk_overlap=chunking_config.chunk_overlap
             )
-            llama_docs = [LlamaDocument(text=d.page_content, metadata=d.metadata.copy(), id_=d.id) for d in documents]
-            nodes = splitter.get_nodes_from_documents(llama_docs)
-            final_chunks_list = []
-            for node in nodes:
-                content = node.get_content()
-                metadata = node.metadata.copy()
+            # Combine the content of all pages/parts of the document before splitting
+            full_text = "\n\n".join([doc.page_content for doc in docs_from_source])
 
-                original_doc_id = metadata.get("original_doc_id", "")
-                cid = _generate_chunk_id(content, original_doc_id, reproducible_ids)
+            # Create a temporary document with combined text but retaining metadata from the first page
+            # This ensures page-specific metadata like page_number is handled correctly by the splitter
+            temp_doc_with_metadata = LangChainDocument(page_content=full_text, metadata=docs_from_source[0].metadata)
 
-                metadata["chunk_id"] = cid
-                new_doc = LangChainDocument(page_content=content, metadata=metadata, id=cid)
-                final_chunks_list.append(new_doc)
-            logger.info(f"Successfully applied semantic chunking. Resulted in {len(final_chunks_list)} chunks.")
-            return final_chunks_list
-        except Exception:
-            logger.warning("Semantic chunking failed, falling back to default.", exc_info=True)
-            chunking_mode = 'default'  # Fallback to default below
+            chunks = splitter.split_documents([temp_doc_with_metadata])
 
-    # --- Handle 'default' (Recursive) chunking mode ---
-    # This block will execute if chunking_mode was 'default' initially, or if 'semantic' failed and fell back here.
-    if chunking_mode == 'default':
-        logger.info(
-            f"Applying default recursive character chunking with size={chunking_config.chunk_size} and overlap={chunking_config.chunk_overlap}.")
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunking_config.chunk_size,
-            chunk_overlap=chunking_config.chunk_overlap
-        )
-        split_chunks_raw = splitter.split_documents(documents)  # This should return LangChainDocuments
+            for i, chunk in enumerate(chunks):
+                chunk.metadata["doc_name"] = doc_name
+                chunk.metadata["chunk_index"] = i  # Index is now unique for the entire document
+                cid = _generate_chunk_id(chunk.page_content, chunk.metadata.get('original_doc_id', ''),
+                                         reproducible_ids, i)
+                chunk.id = cid
+                chunk.metadata["chunk_id"] = cid
+                final_chunks_list.append(chunk)
 
-        normalized_chunks: List[LangChainDocument] = []
-        for idx, item in enumerate(split_chunks_raw):
-            logger.debug(
-                f"[DEBUG] _get_chunks_from_documents/default: raw_chunk_item #{idx} type: {type(item)}, content_snippet: {str(item)[:100]}")  # NEW DEBUG LOG
+        else:  # Handle 'none' or other modes
+            logger.info(f"Chunking mode is '{chunking_mode}'. Treating documents as pre-chunked.")
+            for i, doc in enumerate(docs_from_source):
+                doc.metadata['doc_name'] = doc_name
+                doc.metadata['chunk_index'] = i
+                final_chunks_list.append(doc)
 
-            if isinstance(item, LangChainDocument):
-                normalized_chunks.append(item)
-            elif isinstance(item, tuple) and len(item) >= 2:
-                page_content, metadata = item[0], item[1] if isinstance(item[1], dict) else {}
-                chunk_doc = LangChainDocument(page_content=page_content, metadata=metadata)
-                normalized_chunks.append(chunk_doc)  # CORRECTED: Append the converted Document
-                logger.debug(
-                    f"[Chunk Normalize] Tuple found at #{idx} – converted to LangChainDocument in _get_chunks_from_documents/default.")
-            else:
-                logger.warning(
-                    f"[Chunk Normalize] Unexpected type at #{idx}: {type(item)} — skipping in _get_chunks_from_documents/default. Content: {str(item)[:100]}")
-                continue
-
-        # Correctly populate final_chunks_list from normalized_chunks
-        for idx, d in enumerate(normalized_chunks):
-            cid = _generate_chunk_id(d.page_content, d.metadata.get('original_doc_id', ''), reproducible_ids, idx)
-            final_chunks_list.append(
-                LangChainDocument(
-                    page_content=d.page_content,
-                    metadata={**d.metadata, "chunk_id": cid},
-                    id=cid
-                )
-            )
-        logger.info(f"Default chunking resulted in {len(final_chunks_list)} chunks.")
-        return final_chunks_list
-
-    # If no mode executed successfully or yielded chunks. This return should ideally be unreachable.
-    return []
+    logger.info(f"Chunking resulted in {len(final_chunks_list)} total chunks.")
+    return final_chunks_list
 
 
 async def load_documents_from_source(source: DataSource, agent_config: AgentConfig, reproducible_ids: bool) -> list[
@@ -265,7 +214,8 @@ async def load_documents_from_source(source: DataSource, agent_config: AgentConf
     return final_loaded_docs
 
 
-async def embed_agent_data(config: AgentConfig) -> bool:
+async def embed_agent_data(config: AgentConfig, db: AsyncSession) -> bool:
+
     """
     Main pipeline: load, chunk, filter metadata, build vector store, save BM25.
     """
@@ -284,14 +234,40 @@ async def embed_agent_data(config: AgentConfig) -> bool:
         return False
 
     # 2) Chunk
-    docs.sort(key=lambda d: d.metadata.get('original_doc_id', ''))
     chunks = _get_chunks_from_documents(docs, config.chunking, config.embedding_model, config.reproducible_ids)
     if not chunks:
-        logger.info("No chunks generated.")
+        logger.info("No chunks were generated from the documents.")
         return False
 
-    for i, c in enumerate(chunks):
-        logger.debug(f"Chunk #{i} type: {type(c)}")
+    logger.info(f"Saving {len(chunks)} chunks to the database.")
+    for chunk in chunks:
+        doc_name = chunk.metadata["doc_name"]
+        chunk_index = chunk.metadata["chunk_index"]
+        try:
+            # Try to INSERT new chunk
+            chunk_id = await create_document_chunk(
+                db=db,
+                document_name=doc_name,
+                chunk_index=chunk_index,
+                content=chunk.page_content,
+                page_number=chunk.metadata.get("page_number"),
+                row_number=chunk.metadata.get("row_number")
+            )
+        except IntegrityError:
+            logger.info(f"Chunk already existed (upserting): {doc_name}#{chunk_index}")
+            stmt = (
+                select(document_chunks_table.c.id)
+                .where(
+                    document_chunks_table.c.document_name == doc_name,
+                    document_chunks_table.c.chunk_index == chunk_index,
+                )
+            )
+            result = await db.execute(stmt)
+            chunk_id = result.scalar_one()
+        # Assign the real DB ID back onto your chunk
+        chunk.metadata["chunk_id"] = chunk_id
+    logger.info("Finished saving/updating chunks in the database.")
+
 
 
     # 3) Filter metadata in batch
@@ -346,3 +322,6 @@ async def embed_agent_data(config: AgentConfig) -> bool:
 
     logger.info(f"Finished embedding for {config.name}")
     return True
+
+
+#MIY

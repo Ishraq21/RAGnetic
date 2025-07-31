@@ -5,12 +5,15 @@ from sqlalchemy import insert, select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from app.db.models import conversation_metrics_table, users_table, roles_table, user_api_keys_table, \
-    role_permissions_table, user_organizations_table, organizations_table
+    role_permissions_table, user_organizations_table, organizations_table, document_chunks_table, citations_table, \
+    chat_sessions_table
 from app.schemas.security import UserCreate, UserUpdate, RoleCreate
 from typing import Optional, List, Dict, Any
 import bcrypt
 from datetime import datetime
-import secrets  # For API key generation
+import secrets
+from app.schemas.agent import DocumentMetadata
+from app.db.models import chat_messages_table
 
 logger = logging.getLogger("ragnetic")
 
@@ -475,3 +478,89 @@ def save_conversation_metrics_sync(connection, metrics_data: dict):
     except Exception as e:
         logger.error(f"Failed to save conversation metrics (sync): {e}", exc_info=True)
         connection.rollback() # Rollback on error
+
+# --- Document Chunk Management ---
+
+async def create_document_chunk(db: AsyncSession, document_name: str, chunk_index: int, content: str, page_number: Optional[int] = None, row_number: Optional[int] = None) -> int:
+    """Creates a new document chunk and returns its ID."""
+    stmt = insert(document_chunks_table).values(
+        document_name=document_name,
+        chunk_index=chunk_index,
+        content=content,
+        page_number=page_number,
+        row_number=row_number
+    ).returning(document_chunks_table.c.id)
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.scalar_one()
+
+async def get_document_chunk(db: AsyncSession, chunk_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieves a document chunk by its ID."""
+    stmt = select(document_chunks_table).where(document_chunks_table.c.id == chunk_id)
+    result = await db.execute(stmt)
+    return result.mappings().first()
+
+# --- Citation Management ---
+
+async def create_citation(db: AsyncSession, message_id: int, chunk_id: int, marker_text: str, start_char: int, end_char: int) -> int:
+    """Creates a new citation and returns its ID."""
+    stmt = insert(citations_table).values(
+        message_id=message_id,
+        chunk_id=chunk_id,
+        marker_text=marker_text,
+        start_char=start_char,
+        end_char=end_char
+    ).returning(citations_table.c.id)
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.scalar_one()
+
+async def get_citations_for_message(db: AsyncSession, message_id: int) -> List[Dict[str, Any]]:
+    """Retrieves all citations for a given message."""
+    stmt = select(citations_table).where(citations_table.c.message_id == message_id)
+    result = await db.execute(stmt)
+    return result.mappings().all()
+
+
+async def create_chat_message(
+        db: AsyncSession,
+        session_id: int,
+        sender: str,
+        content: str,
+        meta: Optional[Dict[str, Any]] = None
+) -> int:
+    """
+    Saves a new chat message and updates the parent session's timestamp.
+    Returns the ID of the newly created chat message.
+    """
+    now = datetime.utcnow()
+
+    # 1. Insert the new message
+    msg_stmt = insert(chat_messages_table).values(
+        session_id=session_id,
+        sender=sender,
+        content=content,
+        meta=meta,
+        timestamp=now
+    ).returning(chat_messages_table.c.id)
+
+    # 2. Update the session's 'updated_at' timestamp
+    session_stmt = update(chat_sessions_table).where(
+        chat_sessions_table.c.id == session_id
+    ).values(updated_at=now)
+
+    try:
+        # Execute both statements
+        result = await db.execute(msg_stmt)
+        await db.execute(session_stmt)
+
+        # Commit the transaction
+        await db.commit()
+
+        message_id = result.scalar_one()
+        logger.info(f"Successfully created message {message_id} and updated session {session_id}.")
+        return message_id
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to create chat message or update session {session_id}: {e}", exc_info=True)
+        raise

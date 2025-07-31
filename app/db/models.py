@@ -295,6 +295,28 @@ fine_tuned_models_table = Table(
 )
 
 
+document_chunks_table = Table(
+    "document_chunks", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("document_name", String(512), nullable=False, index=True),
+    Column("chunk_index", Integer, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("page_number", Integer, nullable=True),
+    Column("row_number", Integer, nullable=True),
+    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
+    UniqueConstraint("document_name", "chunk_index", name="uq_document_chunk")
+)
+
+citations_table = Table(
+    "citations", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("message_id", Integer, ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("chunk_id", Integer, ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("marker_text", String(255), nullable=False),
+    Column("start_char", Integer, nullable=False),
+    Column("end_char", Integer, nullable=False),
+)
+
 
 # --- Indexes for Performance ---
 Index("chat_messages_session_ts_idx", chat_messages_table.c.session_id, chat_messages_table.c.timestamp)
