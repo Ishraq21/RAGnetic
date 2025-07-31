@@ -18,7 +18,7 @@ from app.pipelines.embed import embed_agent_data
 from app.core.embed_config import get_embedding_model
 from app.schemas.agent import DataSource
 from app.schemas.security import User
-from app.db import AsyncSessionLocal, get_db
+from app.db import AsyncSessionLocal, get_db # Keep AsyncSessionLocal for now, but not directly used in background task
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import logging
@@ -92,7 +92,8 @@ async def get_agent_by_name(
 async def create_new_agent(
         config: AgentConfig = Body(...),
         bg: BackgroundTasks = BackgroundTasks(),
-        current_user: User = Depends(PermissionChecker(["agent:create"]))
+        current_user: User = Depends(PermissionChecker(["agent:create"])),
+        db: AsyncSession = Depends(get_db)
 ):
     """
     Creates a new agent from a configuration payload and starts the data embedding process.
@@ -110,12 +111,8 @@ async def create_new_agent(
     try:
         save_agent_config(config)
 
-        # **REFINED LOGIC**: Create a helper function to manage the DB session for the background task.
-        async def run_embedding_with_session():
-            async with AsyncSessionLocal() as session:
-                await embed_agent_data(config=config, db=session)
-
-        bg.add_task(run_embedding_with_session) # Call the helper instead of the original function
+        # Pass the already acquired db session to the background task directly
+        bg.add_task(embed_agent_data, config=config, db=db)
 
         logger.info(f"User '{current_user.username}' created agent '{config.name}'.")
         return {"status": "Agent config saved; embedding started.", "agent": config.name}
@@ -129,7 +126,8 @@ async def update_agent_by_name(
         agent_name: str,
         config: AgentConfig = Body(...),
         bg: BackgroundTasks = BackgroundTasks(),
-        current_user: User = Depends(PermissionChecker(["agent:update"]))
+        current_user: User = Depends(PermissionChecker(["agent:update"])),
+        db: AsyncSession = Depends(get_db)
 ):
     """
     Updates an existing agent's configuration and triggers a re-embedding of its data.
@@ -142,12 +140,8 @@ async def update_agent_by_name(
 
         save_agent_config(config)
 
-        # **REFINED LOGIC**: Use the same helper function pattern here for the update.
-        async def run_embedding_with_session():
-            async with AsyncSessionLocal() as session:
-                await embed_agent_data(config=config, db=session)
-
-        bg.add_task(run_embedding_with_session)
+        # Pass the already acquired db session to the background task directly
+        bg.add_task(embed_agent_data, config=config, db=db)
 
         logger.info(f"User '{current_user.username}' updated agent '{agent_name}'.")
         return {"status": "Agent config updated; re-embedding started.", "agent": config.name}

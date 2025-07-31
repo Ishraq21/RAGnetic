@@ -130,7 +130,6 @@ def sync_workflows_from_files():
                 .values(enabled=False, date_changed=func.now())
             )
             made_schedule_changes = True
-            logger.info(f"Disabled schedules for deleted workflow YAMLs: {', '.join(tasks_to_disable)}")
 
         if made_schedule_changes:
             # Touch the `last_update` field to force Celery Beat to reload schedules
