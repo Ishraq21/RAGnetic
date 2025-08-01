@@ -636,17 +636,17 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
             else:
                 listener_task.cancel()
 
-            final_state, ai_response_content_str = await generation_task
+            final_state_dict, ai_response_content_str = await generation_task
 
             # 6. Process Final Result (Simplified)
             # The agent graph has already saved the AI message and citations.
             # We just send the final "done" message with the citation data from the agent.
-            final_citations = final_state.get('citations', [])
+            final_citations = final_state_dict.get('citations', [])
 
             done_message = {
                 "done": True,
-                "error": final_state.get("error", False),
-                "errorMessage": final_state.get("errorMessage"),
+                "error": final_state_dict.get("error", False),
+                "errorMessage": final_state_dict.get("errorMessage"),
                 "request_id": request_id,
                 "user_id": user_db_id,
                 "thread_id": canonical_thread_id,
@@ -656,15 +656,17 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
             await manager.broadcast(channel, json.dumps(done_message))
 
             # Update the agent_runs record with the final state
+            serialized_final_state = _serialize_for_db(final_state_dict)
             await db.execute(update(agent_runs).where(agent_runs.c.id == run_db_id).values(
                 end_time=datetime.utcnow(),
-                status='completed' if not final_state.get("error") else 'failed',
-                final_state=_serialize_for_db(final_state)
+                status='completed' if not final_state_dict.get("error") else 'failed',
+                final_state=serialized_final_state
             ))
             await db.commit()
 
             # 7. Wait for the next user message
-            if listener_task.done() and not listener_task.cancelled() and listener_task.result().get("type") != "interrupt":
+            if listener_task.done() and not listener_task.cancelled() and listener_task.result().get(
+                    "type") != "interrupt":
                 message_data = listener_task.result()
             else:
                 message_data = await ws.receive_json()
@@ -729,6 +731,7 @@ async def redis_listen(ws: WebSocket, channel: str):
         await listener_client.close()
 
 
+
 async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph_agent: Any, thread_id: str,
                                  run_db_id: int, db: AsyncSession) -> Tuple[Dict, str]:
     final_state = {}
@@ -766,17 +769,16 @@ async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph
                         logger.error(f"Failed to process start event for node {name}: {node_start_error}",
                                      exc_info=True)
             elif kind in ("on_chain_end", "on_tool_end"):
-                if name == "retriever":  # Capture retrieved documents from the retriever tool
+                if name == "retriever":
                     retriever_output = event["data"].get("output")
                     if isinstance(retriever_output, list):
                         for doc in retriever_output:
-                            if isinstance(doc, dict) and 'metadata' in doc:  # Check for dict structure
+                            if isinstance(doc, dict) and 'metadata' in doc:
                                 retrieved_documents_meta_for_citation.append(doc['metadata'])
-                            elif hasattr(doc, 'metadata'):  # Check for Langchain Document object
+                            elif hasattr(doc, 'metadata'):
                                 retrieved_documents_meta_for_citation.append(doc.metadata)
                     logger.info(
                         f"Captured {len(retrieved_documents_meta_for_citation)} retrieved document metadata for citation.")
-
                 if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv"]:
                     try:
                         step_db_id = running_step_ids.pop(run_id, None)
@@ -797,13 +799,11 @@ async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph
             elif kind == "on_graph_end":
                 final_state = event['data']['output']
 
-        # Add captured retrieved documents metadata to the final state for access in websocket_chat
         final_state['retrieved_documents_meta_for_citation'] = retrieved_documents_meta_for_citation
-        final_state['accumulated_content'] = accumulated_content  # Ensure accumulated content is also passed back
+        final_state['accumulated_content'] = accumulated_content
 
-        return _serialize_for_db(
-            final_state), accumulated_content  # Keep original return for now, but main will use final_state dict
-
+        # *** CORRECTED: Return the dictionary, not the serialized string. ***
+        return final_state, accumulated_content
 
     except asyncio.CancelledError:
         logger.info(f"[{thread_id}] Generation task cancelled.")

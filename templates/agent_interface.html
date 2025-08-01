@@ -137,7 +137,7 @@
     function renderMath(element) { if (window.MathJax) { window.MathJax.typesetPromise(element ? [element] : []).catch((err) => console.error('MathJax typesetting error:', err)); } }
     function showToast(message, isError = false) { toastNotification.textContent = message; toastNotification.className = isError ? 'error' : 'success'; toastNotification.style.display = 'block'; setTimeout(() => { toastNotification.style.display = 'none'; }, 4000); }
     function scrollToBottom() { window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }); }
-    // MODIFIED: setGeneratingState now also disables/enables quickUploadBtn
+
     function setGeneratingState(generating) {
         isGenerating = generating;
         sendIcon.style.display = generating ? 'none' : 'inline';
@@ -206,16 +206,27 @@
             fetchChatSessions(agent);
             const lastMessage = messagesDiv.lastElementChild;
 
-            if (lastMessage) {
-                lastMessage.dataset.streaming = 'false';
-                lastMessage.classList.remove('streaming-agent-message'); // NEW: Remove the streaming class
-                renderCodeblocks(lastMessage);
-                renderMath(lastMessage);
-                if (data.citations && window.citationRenderer) {
-                    window.citationRenderer.renderCitations(lastMessage, data.citations);
-                    window.citationRenderer.renderSourcesButton(lastMessage, data.citations);
-                }
-            } else {
+                     if (lastMessage) {
+                    lastMessage.dataset.streaming = 'false';
+                    lastMessage.classList.remove('streaming-agent-message');
+                    renderCodeblocks(lastMessage);
+                    renderMath(lastMessage);
+
+                    // CORRECTED: Directly handle the sources button logic instead of relying on an external file.
+                    if (data.citations && data.citations.length > 0) {
+                        // This safely calls the inline citation renderer if it exists, but doesn't fail if it doesn't.
+                        if (window.citationRenderer && typeof window.citationRenderer.renderCitations === 'function') {
+                            window.citationRenderer.renderCitations(lastMessage, data.citations);
+                        }
+                        // Find the sources button on the message bubble.
+                        const sourcesBtn = lastMessage.querySelector('.sources-button');
+                        if (sourcesBtn) {
+                            // Attach the citation data directly to the button and make it visible.
+                            sourcesBtn.dataset.citations = JSON.stringify(data.citations);
+                            sourcesBtn.classList.remove('hidden');
+                        }
+                    }
+                } else {
                 console.warn("Could not find streaming agent message to finalize.");
             }
         }
@@ -390,38 +401,79 @@
      * @returns {HTMLElement} The created message bubble element.
      */
         function createAgentMessageBubble() {
-          const bubble = document.createElement('div');
-          bubble.className = 'message agent';
-          bubble.dataset.rawMarkdown = '';  // will hold the full markdown for copy
-          bubble.dataset.messageId  = '';   // will be set once the WS “done” arrives
+    const bubble = document.createElement('div');
+    bubble.className = 'message agent';
+    bubble.dataset.rawMarkdown = '';
+    bubble.dataset.messageId = '';
 
-          const contentDiv = document.createElement('div');
-          contentDiv.className = 'content';
-          bubble.appendChild(contentDiv);
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'content';
+    bubble.appendChild(contentDiv);
 
-          const sourcesBtn = document.createElement('button');
-          sourcesBtn.className = 'sources-button hidden';
-          sourcesBtn.textContent = 'Sources';
-          bubble.appendChild(sourcesBtn);
+    const sourcesBtn = document.createElement('button');
+    sourcesBtn.className = 'sources-button hidden';
+    sourcesBtn.textContent = 'Sources';
 
-          const copyBtn = document.createElement('button');
-          copyBtn.className = 'copy-btn';
-          copyBtn.innerHTML = svgs.copy;
-          copyBtn.addEventListener('click', () => {
-            const md = bubble.dataset.rawMarkdown;
-            if (!md) return;
-            navigator.clipboard.writeText(md)
-              .then(() => {
+
+    sourcesBtn.addEventListener('click', (event) => {
+        const btn = event.target;
+        const citationsJSON = btn.dataset.citations;
+
+        if (!citationsJSON) {
+            console.warn("Sources button clicked but no citation data found.");
+            return;
+        }
+
+        try {
+            const citations = JSON.parse(citationsJSON);
+            const sourcesPanel = document.getElementById('sources-panel');
+            const sourcesList = document.getElementById('sources-list');
+
+            if (!sourcesPanel || !sourcesList) {
+                console.warn("Sources panel not found. Cannot render sources.");
+                return;
+            }
+
+            sourcesList.innerHTML = '';
+            citations.forEach((c, i) => {
+                const li = document.createElement('li');
+                li.innerHTML = `
+                    <div class="source-title">[${i + 1}] ${c.doc_name || 'Document ' + c.doc_id}</div>
+                    <div class="source-snippet">${c.snippet || 'Snippet not available.'}</div>
+                    <div class="source-meta">
+                        Chunk ${c.chunk_id}
+                        ${c.sentences_range ? `, sentences ${c.sentences_range}` : ''}
+                    </div>
+                `;
+                sourcesList.appendChild(li);
+            });
+            sourcesPanel.classList.add('open');
+        } catch (e) {
+            console.error("Failed to parse citation data from button dataset:", e);
+        }
+    });
+
+    bubble.appendChild(sourcesBtn);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'copy-btn';
+    copyBtn.innerHTML = svgs.copy;
+    copyBtn.addEventListener('click', () => {
+        const md = bubble.dataset.rawMarkdown;
+        if (!md) return;
+        navigator.clipboard.writeText(md)
+            .then(() => {
                 copyBtn.innerHTML = svgs.copied;
                 setTimeout(() => { copyBtn.innerHTML = svgs.copy; }, 2000);
-              });
-          });
-          bubble.appendChild(copyBtn);
+            });
+    });
+    bubble.appendChild(copyBtn);
 
-          messagesDiv.appendChild(bubble);
+    messagesDiv.appendChild(bubble);
 
-          return bubble;
-        }
+    return bubble;
+}
+
 
     /**
      * Renders code blocks with syntax highlighting and copy buttons.
@@ -532,12 +584,17 @@
                     renderCodeblocks(contentDiv);
                     renderMath(contentDiv);
 
-                    if (msg.meta?.citations) {
-                      window.citationRenderer.renderCitations(bubble, msg.meta.citations);
-                      window.citationRenderer.renderSourcesButton(bubble, msg.meta.citations);
-
+                if (msg.meta?.citations && msg.meta.citations.length > 0) {
+                    if (window.citationRenderer && typeof window.citationRenderer.renderCitations === 'function') {
+                        window.citationRenderer.renderCitations(bubble, msg.meta.citations);
                     }
-                  }
+                    const sourcesBtn = bubble.querySelector('.sources-button');
+                    if (sourcesBtn) {
+                        sourcesBtn.dataset.citations = JSON.stringify(msg.meta.citations);
+                        sourcesBtn.classList.remove('hidden');
+                    }
+                }
+                }
                 });
 
                 // wire up the “close sources panel” button once:
@@ -765,7 +822,7 @@
      * Clears local storage, UI, and re-initializes WebSocket.
      * @param {boolean} [showConfirmation=true] - Whether to show a confirmation modal.
      */
-    function startNewSession(showConfirmation = true) { // MODIFIED: Added showConfirmation parameter
+    function startNewSession(showConfirmation = true) {
         const doReset = () => {
             localStorage.removeItem('ragnetic_thread_id'); // Clear stored thread ID
             thread_id = null; // Reset current thread ID
@@ -849,7 +906,7 @@
     });
 
 
-    newChatButton.addEventListener('click', () => startNewSession()); // MODIFIED: Call startNewSession directly, it handles confirmation
+    newChatButton.addEventListener('click', () => startNewSession());
 
     // Agent selection change handler
     agentSelect.addEventListener('change', () => showConfirmationModal(() => {

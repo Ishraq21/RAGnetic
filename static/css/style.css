@@ -1142,9 +1142,7 @@ body:not(.login-body) {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 1px 2px rgba(0, 0, 0, 0.2); /* Subtle press shadow */
 }
 
-.sources-button.hidden {
-    display: none !important;
-}
+
 
 /* The display property is now controlled by the presence of the 'hidden' class */
 .message.agent .sources-button {
@@ -1216,10 +1214,10 @@ body:not(.login-body) {
   color: var(--text);
   margin-top: 4px;
 }
-.sources-button {
-  display: none;
+.sources-button.hidden {
+  display: none !important;   /* used while the message is streaming */
 }
 
 .sources-button.visible {
-  display: inline-block !important;
+  display: inline-block !important;  /* used once citations arrive */
 }
