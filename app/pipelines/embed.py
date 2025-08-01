@@ -8,16 +8,13 @@ from itertools import groupby
 from typing import List, Dict
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-# LangChain vector store components
 from langchain_community.vectorstores import FAISS, Chroma
 from langchain_community.vectorstores.utils import filter_complex_metadata
-# LangChain and LlamaIndex have different Document objects
-from langchain_core.documents import Document as LangChainDocument  # Using canonical import path
+from langchain_core.documents import Document as LangChainDocument
 from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_pinecone import Pinecone as PineconeLangChain
 from langchain_qdrant import Qdrant
 from llama_index.core.node_parser import SemanticSplitterNodeParser
-# LlamaIndex imports for semantic chunking
 from llama_index.core.schema import Document as LlamaDocument
 from llama_index.embeddings.langchain import LangchainEmbedding
 from pinecone import Pinecone as PineconeClient
@@ -190,7 +187,16 @@ def _get_chunks_from_documents(
                     doc_part.metadata["chunk_id"] = cid
                 current_source_chunks.append(doc_part)
 
-        final_chunks_list.extend(current_source_chunks)
+        valid_chunks_for_source = []
+        for chunk in current_source_chunks:
+            page_number = chunk.metadata.get("page_number")
+            if page_number is not None and (not isinstance(page_number, int) or page_number < 1):
+                logger.warning(
+                    f"Invalid page number '{page_number}' for chunk in doc '{doc_name}'. Sanitizing to None.")
+                chunk.metadata["page_number"] = None
+            valid_chunks_for_source.append(chunk)
+
+        final_chunks_list.extend(valid_chunks_for_source)
 
     if not final_chunks_list:
         raise ValueError("No chunks were generated after document splitting across all sources.")

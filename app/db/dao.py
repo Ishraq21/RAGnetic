@@ -127,7 +127,7 @@ async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[Dict[str, A
 
 async def get_user_roles_data(db: AsyncSession, user_id: int) -> List[Dict[str, Any]]:
     """Helper to fetch roles and their permissions for a given user ID."""
-    # Correctly join through user_organizations_table and then to roles_table
+
     stmt = select(
         roles_table.c.id,
         roles_table.c.name,
@@ -181,7 +181,7 @@ async def update_user(db: AsyncSession, user_id: int, user_update: UserUpdate) -
 
             roles_to_add = set(roles_to_assign_or_remove) - set(current_role_names)
             roles_to_remove = set(current_role_names) - set(
-                user_update.roles)  # Corrected: use user_update.roles for comparison
+                user_update.roles)
 
             for role_name in roles_to_add:
                 try:
@@ -499,6 +499,21 @@ async def get_document_chunk(db: AsyncSession, chunk_id: int) -> Optional[Dict[s
     stmt = select(document_chunks_table).where(document_chunks_table.c.id == chunk_id)
     result = await db.execute(stmt)
     return result.mappings().first()
+
+
+async def get_document_chunks(db: AsyncSession, chunk_ids: List[int]) -> List[Dict[str, Any]]:
+    """
+    Retrieves a list of document chunks based on a list of chunk IDs.
+    Returns a list of dictionaries, one for each found chunk.
+    """
+    if not chunk_ids:
+        return []
+
+    stmt = select(document_chunks_table).where(document_chunks_table.c.id.in_(chunk_ids))
+    result = await db.execute(stmt)
+    # The .mappings().all() call returns a list of RowMappings.
+    # We convert each RowMapping to a standard dictionary for consistency.
+    return [row._asdict() for row in result.fetchall()]
 
 # --- Citation Management ---
 

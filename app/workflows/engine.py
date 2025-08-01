@@ -45,7 +45,7 @@ from app.db.models import human_tasks_table, workflow_runs_table, workflows_tabl
 from app.schemas.agent import AgentConfig
 from app.schemas.workflow import (
     AgentCallStep,
-    HumanInTheLoopStep,  # Corrected from HumanIn_the_LoopStep
+    HumanInTheLoopStep,
     IfThenStep,
     LoopStep,
     Skill,

@@ -1727,7 +1727,7 @@ def delete_workflow(
     server_url = _get_server_url()
     api_key = _get_api_key_for_cli()
     headers = {"X-API-Key": api_key}
-    api_url = f"{server_url}/workflows/{workflow_name}"  # Correctly define api_url here
+    api_url = f"{server_url}/workflows/{workflow_name}"
     workflow_file_path = _APP_PATHS["WORKFLOWS_DIR"] / f"{workflow_name}.yaml"
     response = None
 

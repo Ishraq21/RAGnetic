@@ -26,7 +26,6 @@ def initialize_db_connections(conn_name: str):
     parsed_url = urlparse(conn_str)
 
     async_scheme = ""
-    # Corrected logic for handling SQLite URLs with proper path formatting
     if parsed_url.scheme.startswith("sqlite"):
         async_scheme = "sqlite+aiosqlite"
         db_config = get_db_connection_config()
