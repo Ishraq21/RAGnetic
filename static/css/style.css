@@ -1307,3 +1307,13 @@ body:not(.login-body) {
     color: var(--error-color);
     font-style: italic;
 }
+
+#citation-popup {
+  display: block !important;
+}
+
+#citation-popup.visible {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: translateY(0) !important;
+}

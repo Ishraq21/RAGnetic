@@ -1,13 +1,13 @@
 window.citationRenderer = (function() {
   const CITATION_HIGHLIGHT_CLASS = 'citation-marker';
   const API_BASE_URL = window.location.origin + '/api/v1';
-
   const CHAT_API_ENDPOINT = `${API_BASE_URL}/chat/citation-snippet`;
 
   let snippetCache = {};
+  let currentHidePopupCallback = null;
 
   function showCitationPopup(citation, snippet, targetElement) {
-      console.log("Attempting to show popup with snippet:", snippet);
+      console.log("Attempting to show popup for chunk", citation.chunk_id, "with snippet:", snippet);
 
       let popup = document.getElementById('citation-popup');
       if (!popup) {
@@ -34,7 +34,7 @@ window.citationRenderer = (function() {
 
       const closeBtn = popup.querySelector('.popup-close-btn');
       closeBtn.addEventListener('click', () => {
-          popup.style.display = 'none';
+          popup.classList.remove('visible');
       });
 
       const rect = targetElement.getBoundingClientRect();
@@ -46,31 +46,35 @@ window.citationRenderer = (function() {
           left = window.innerWidth - popupWidth - 10;
       }
 
-      if (popup.style.display === 'block' && popup.dataset.chunkId === String(citation.chunk_id)) {
-          popup.style.display = 'none';
+      const isAlreadyOpenForThisChunk = popup.classList.contains('visible') && popup.dataset.chunkId === String(citation.chunk_id);
+      if (isAlreadyOpenForThisChunk) {
+          popup.classList.remove('visible');
           return;
       }
 
-      // CRITICAL FIX: Check if the element exists before trying to access its style
-      const chatContainer = document.getElementById('chat-container');
-      if (chatContainer) {
-          popup.style.top = `${top}px`;
-          popup.style.left = `${left}px`;
-          popup.style.display = 'block';
+      // CRITICAL FIX: The issue is likely in the positioning logic, let's make it more robust.
+      // We will anchor the popup to the viewport by using fixed positioning and then
+      // position it relative to the clicked element.
+      popup.style.position = 'fixed';
+      popup.style.top = `${rect.bottom + 8}px`;
+      popup.style.left = `${rect.left}px`;
+      popup.dataset.chunkId = String(citation.chunk_id);
+      popup.classList.add('visible');
 
-          // Store the chunk_id on the popup element to track which citation it's for
-          popup.dataset.chunkId = String(citation.chunk_id);
-      } else {
-          console.error("Chat container not found. Cannot position popup.");
+      if (currentHidePopupCallback) {
+          document.removeEventListener('click', currentHidePopupCallback);
       }
 
       const hidePopup = (e) => {
           if (!popup.contains(e.target) && e.target !== targetElement) {
-              popup.style.display = 'none';
+              popup.classList.remove('visible');
               document.removeEventListener('click', hidePopup);
+              currentHidePopupCallback = null;
           }
       };
-      document.addEventListener('click', hidePopup);
+
+      currentHidePopupCallback = hidePopup;
+      document.addEventListener('click', currentHidePopupCallback);
   }
 
   /**
@@ -87,7 +91,6 @@ window.citationRenderer = (function() {
           return null;
       }
 
-      // Check cache first
       if (snippetCache[chunkId]) {
           console.log(`Cache hit for chunk ID: ${chunkId}`);
           return snippetCache[chunkId];
