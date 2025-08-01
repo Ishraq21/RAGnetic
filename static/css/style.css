@@ -1142,67 +1142,84 @@ body:not(.login-body) {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 1px 2px rgba(0, 0, 0, 0.2); /* Subtle press shadow */
 }
 
-/* NEW: Styles for Citation Markers */
-.citation-marker {
-    text-decoration: underline dotted var(--accent-color);
-    color: var(--text-color); /* Ensure text is readable */
-    cursor: pointer;
-    font-weight: 500;
-    transition: all 0.2s ease-in-out;
+.sources-button.hidden {
+    display: none !important;
 }
 
-.citation-marker:hover {
-    color: var(--accent-color);
-    background-color: rgba(99, 93, 255, 0.1);
-    border-radius: 4px;
-    padding: 0 2px;
+/* The display property is now controlled by the presence of the 'hidden' class */
+.message.agent .sources-button {
+  background: var(--accent-color);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  margin-top: 8px;
+}
+/* Off-canvas panel hidden by default */
+#sources-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 300px;
+  height: 100%;
+  background: var(--card-background);
+  box-shadow: -4px 0 12px rgba(0,0,0,0.3);
+  transform: translateX(100%);
+  transition: transform 0.3s ease-in-out;
+  z-index: 1000;
+  /* ensure it’s on top */
 }
 
-/* NEW: Styles for Citation Popup */
-.citation-popup {
-    position: absolute;
-    /* The transform will be used by JS if you add positioning logic, but is fine for now */
-    bottom: calc(100% + 5px); /* Position 5px above the marker */
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--card-background);
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-    padding: 10px 15px;
-    min-width: 300px;
-    max-width: 400px;
-    z-index: 10;
-    color: var(--text-color);
-    font-size: 0.85em;
-    line-height: 1.4;
-    text-align: left;
-    /* display: none; /* Let JS handle visibility directly */
+/* Slide in when “open” is added */
+#sources-panel.open {
+  transform: translateX(0);
 }
 
-
-
-
-.citation-popup .popup-header {
-    font-weight: bold;
-    margin-bottom: 5px;
-    color: var(--accent-color);
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 5px;
+/* Header with title and close button */
+.sources-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
 }
 
-.citation-popup .popup-content {
-    max-height: 150px; /* Limit snippet height */
-    overflow-y: auto; /* Enable scrolling for long snippets */
-    font-family: 'JetBrains Mono', monospace; /* Monospaced font for code/data snippets */
-    background-color: #0d0d0d;
-    padding: 8px;
-    border-radius: 4px;
-    white-space: pre-wrap; /* Preserve whitespace and line breaks */
-    word-break: break-word; /* Break long words */
+/* Close (“×”) button styling */
+#sources-panel-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
 }
 
-.citation-popup .popup-content.loading {
-    font-style: italic;
-    color: var(--muted-text);
+/* List of sources */
+#sources-list {
+  padding: 16px;
+  list-style: none;
+  overflow-y: auto;
+  height: calc(100% - 64px); /* leave room for header */
+}
+
+#sources-list li {
+  margin-bottom: 12px;
+}
+
+#sources-list .source-title {
+  font-weight: 600;
+}
+
+#sources-list .source-snippet {
+  display: block;
+  font-size: 0.9rem;
+  color: var(--text);
+  margin-top: 4px;
+}
+.sources-button {
+  display: none;
+}
+
+.sources-button.visible {
+  display: inline-block !important;
 }

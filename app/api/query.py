@@ -22,7 +22,6 @@ from langchain_core.messages import HumanMessage, AIMessage
 from app.core.serialization import _serialize_for_db
 from app.db.dao import save_conversation_metrics_sync
 from app.schemas.security import User
-# NEW: Import citation extraction utility
 from app.core.citation_parser import extract_citations_from_text
 
 logger = logging.getLogger("ragnetic")
@@ -35,7 +34,6 @@ class QueryRequest(BaseModel):
     user_id: Optional[str] = Field(None,
                                    description="A unique identifier for the user (will be overridden by authenticated user_id if available).")
     thread_id: Optional[str] = Field(None, description="A unique identifier for the conversation thread.")
-    # NEW: Add files field to accept temporary document info from frontend
     files: List[Dict[str, str]] = Field(default_factory=list,
                                         description="List of successfully uploaded temporary files with their temp_doc_ids.")
 
@@ -44,7 +42,6 @@ class QueryResponse(BaseModel):
     response: str = Field(..., description="The agent's final response content.")
     run_id: str = Field(..., description="The unique ID for this specific run, for auditing.")
     final_state: Dict[str, Any] = Field(..., description="The final state of the agent graph, containing metrics.")
-    # NEW: Add citations to the response for frontend display
     citations: List[Dict[str, Any]] = Field(default_factory=list,
                                             description="Extracted citations from the AI's response.")
 
@@ -106,7 +103,7 @@ async def query_agent(
             sender="human",
             content=request.query,
             timestamp=datetime.utcnow(),
-            meta=human_message_meta  # NEW: Save meta for human message
+            meta=human_message_meta
         )
     )
     await db.commit()
@@ -193,16 +190,14 @@ async def query_agent(
     #     ai_content = final_state["messages"][-1].content # This can be problematic if last message is tool_call
 
     # NEW: Extract citations from AI response
-    extracted_citations = []
-    if ai_response_content_str:
-        extracted_citations = extract_citations_from_text(
-            llm_response_text=ai_response_content_str,
-            retrieved_documents_metadata=retrieved_documents_meta_for_citation
-        )
-        if extracted_citations:
-            logger.info(f"Extracted {len(extracted_citations)} citations from AI response for run {request_id}.")
-        else:
-            logger.info(f"No citations extracted from AI response for run {request_id}.")
+    extracted_citations = final_state.get("parsed_citations", [])
+    if extracted_citations:
+        logger.info(f"Using {len(extracted_citations)} parsed citations for run {request_id}.")
+    else:
+        logger.info(f"No parsed citations for run {request_id}.")
+
+
+
 
     # Save AI reply with meta if successful
     if ai_response_content_str and not final_state.get("error"):
@@ -250,4 +245,4 @@ async def query_agent(
     logger.info(f"User '{current_user.username}' queried agent '{agent_name}' (Run ID: {request_id}).")
 
     return QueryResponse(response=ai_response_content_str, run_id=request_id, final_state=serialized,
-                         citations=extracted_citations)  # NEW: Return citations
+                         citations=extracted_citations)

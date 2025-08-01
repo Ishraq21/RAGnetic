@@ -59,6 +59,14 @@
     </aside>
     <div id="chat-container">
         <div id="messages"></div>
+
+        <div id="sources-panel">
+          <div class="sources-panel-header">
+            <h2>Sources</h2>
+            <button id="sources-panel-close">&times;</button>
+          </div>
+          <ul id="sources-list"></ul>
+        </div>
         <div id="quickUploadFileList" class="attachment-list"></div>
         <div id="input-form-container">
             <div id="typing-indicator" style="opacity: 0; display:none;">
@@ -186,33 +194,33 @@
         socket.onmessage = (event) => {
             const data = JSON.parse(event.data);
             if (data.token) { typingIndicator.style.display = 'none'; appendAgentToken(data.token); }
-            if (data.done) {
-                setGeneratingState(false);
-                if (data.user_id && data.user_id !== loggedInDbUserId) {
-                    loggedInDbUserId = data.user_id;
-                    localStorage.setItem('ragnetic_db_user_id', loggedInDbUserId);
-                }
-                thread_id = data.thread_id;
-                 setTimeout(() => {
-                    localStorage.setItem('ragnetic_thread_id', thread_id);
-                    localStorage.setItem('ragnetic_agent', agent);
-                }, 10);
-                fetchChatSessions(agent);
-                const lastMessage = messagesDiv.lastElementChild;
-                if (lastMessage && lastMessage.classList.contains('agent')) {
-                    lastMessage.dataset.streaming = 'false';
-                    renderCodeblocks(lastMessage);
-                    renderMath(lastMessage);
-                    // Render citations for the final AI message
-                    // Check if window.citationRenderer is defined and renderCitations is a function
-                    if (data.citations && window.citationRenderer && typeof window.citationRenderer.renderCitations === 'function') {
-                        window.citationRenderer.renderCitations(lastMessage, data.citations);
-                    }
-                }
-
+        if (data.done) {
+            setGeneratingState(false);
+            if (data.user_id && data.user_id !== loggedInDbUserId) {
+                loggedInDbUserId = data.user_id;
+                localStorage.setItem('ragnetic_db_user_id', loggedInDbUserId);
             }
-        };
-    }
+            thread_id = data.thread_id;
+            localStorage.setItem('ragnetic_thread_id', thread_id);
+            localStorage.setItem('ragnetic_agent', agent);
+            fetchChatSessions(agent);
+            const lastMessage = messagesDiv.lastElementChild;
+
+            if (lastMessage) {
+                lastMessage.dataset.streaming = 'false';
+                lastMessage.classList.remove('streaming-agent-message'); // NEW: Remove the streaming class
+                renderCodeblocks(lastMessage);
+                renderMath(lastMessage);
+                if (data.citations && window.citationRenderer) {
+                    window.citationRenderer.renderCitations(lastMessage, data.citations);
+                    window.citationRenderer.renderSourcesButton(lastMessage, data.citations);
+                }
+            } else {
+                console.warn("Could not find streaming agent message to finalize.");
+            }
+        }
+    };
+}
     function handleFormSubmit(event) {
         if (event) event.preventDefault(); // Prevent default form submission
         if (isGenerating) {
@@ -381,29 +389,39 @@
      * Includes basic copy functionality.
      * @returns {HTMLElement} The created message bubble element.
      */
-    function createAgentMessageBubble() {
-        const bubble = document.createElement('div');
-        bubble.className = 'message agent';
-        const contentDiv = document.createElement('div');
-        contentDiv.className = 'content';
-        bubble.appendChild(contentDiv);
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'copy-btn';
-        copyBtn.innerHTML = svgs.copy;
-        copyBtn.onclick = (e) => {
-            const rawMarkdown = e.currentTarget.closest('.message.agent').dataset.rawMarkdown;
-            if (rawMarkdown) {
-                navigator.clipboard.writeText(rawMarkdown).then(() => {
-                    e.currentTarget.innerHTML = svgs.copied;
-                    setTimeout(() => { e.currentTarget.innerHTML = svgs.copy; }, 2000);
-                });
-            }
-        };
-        bubble.appendChild(copyBtn);
-        bubble.dataset.rawMarkdown = ''; // Store raw markdown for copy
-        messagesDiv.appendChild(bubble);
-        return bubble;
-    }
+        function createAgentMessageBubble() {
+          const bubble = document.createElement('div');
+          bubble.className = 'message agent';
+          bubble.dataset.rawMarkdown = '';  // will hold the full markdown for copy
+          bubble.dataset.messageId  = '';   // will be set once the WS “done” arrives
+
+          const contentDiv = document.createElement('div');
+          contentDiv.className = 'content';
+          bubble.appendChild(contentDiv);
+
+          const sourcesBtn = document.createElement('button');
+          sourcesBtn.className = 'sources-button hidden';
+          sourcesBtn.textContent = 'Sources';
+          bubble.appendChild(sourcesBtn);
+
+          const copyBtn = document.createElement('button');
+          copyBtn.className = 'copy-btn';
+          copyBtn.innerHTML = svgs.copy;
+          copyBtn.addEventListener('click', () => {
+            const md = bubble.dataset.rawMarkdown;
+            if (!md) return;
+            navigator.clipboard.writeText(md)
+              .then(() => {
+                copyBtn.innerHTML = svgs.copied;
+                setTimeout(() => { copyBtn.innerHTML = svgs.copy; }, 2000);
+              });
+          });
+          bubble.appendChild(copyBtn);
+
+          messagesDiv.appendChild(bubble);
+
+          return bubble;
+        }
 
     /**
      * Renders code blocks with syntax highlighting and copy buttons.
@@ -450,6 +468,7 @@
             typingIndicator.style.display = 'none'; // Hide typing indicator once content starts flowing
             lastMessage = createAgentMessageBubble(); // Create a new AI message bubble
             lastMessage.dataset.streaming = 'true'; // Mark as streaming
+            lastMessage.classList.add('streaming-agent-message');
         }
         // Append the new token to the raw markdown data stored on the message element.
         lastMessage.dataset.rawMarkdown += token;
@@ -480,52 +499,68 @@
                     'X-API-Key': loggedInUserToken // Authenticate the request
                 }
             });
-            if (!response.ok) {
-                // If session not found or unauthorized (404), start a new session instead.
-                if (response.status === 404) {
-                    console.warn(`History for thread ${threadId} not found or unauthorized.`);
-                    startNewSession(false); // Start a new session without confirmation
+             if (!response.ok) {
+                  if (response.status === 404) {
+                    console.warn(
+                      `History for thread ${threadId} not found or unauthorized.`
+                    );
+                    startNewSession(false); // silent reset on 404
                     return;
+                  }
+                  showToast(`Could not load session (status: ${response.status}).`, true);
+                  return;
                 }
-                // For other errors, show a toast.
-                showToast(`Could not load session (status: ${response.status}).`, true);
-                return;
-            }
-            const history = await response.json();
-            messagesDiv.innerHTML = ''; // Clear current messages display
 
-            // Iterate through historical messages and append them to the display.
-            history.forEach(msg => {
-                if (msg.type === 'human') {
+                const history = await response.json();
+                messagesDiv.innerHTML = ''; // clear existing messages
+
+                history.forEach((msg) => {
+                  if (msg.type === 'human') {
                     appendUserMessage(msg.content);
-                    // Check for and display quick-uploaded files for historical user messages.
-                    // Ensure this matches the format saved in DB meta: [{file_name: ..., file_size: ..., temp_doc_id: ...}]
-                    if (msg.meta && msg.meta.quick_uploaded_files && msg.meta.quick_uploaded_files.length > 0) {
-                        appendAttachedFilesToUserMessage(msg.meta.quick_uploaded_files);
-                    }
-                } else if (msg.type === 'ai') {
-                    const agentMsgBubble = createAgentMessageBubble();
-                    agentMsgBubble.dataset.rawMarkdown = msg.content; // Store raw content for copy
-                    const contentDiv = agentMsgBubble.querySelector('.content');
-                    contentDiv.innerHTML = marked.parse(msg.content); // Render markdown
-                    agentMsgBubble.dataset.streaming = 'false'; // Not streaming historical messages
-                    renderCodeblocks(contentDiv); // Render code blocks
-                    renderMath(contentDiv); // Render math expressions
 
-                    // Render citations for historical AI messages if meta data exists.
-                    if (msg.meta && msg.meta.citations && window.citationRenderer && typeof window.citationRenderer.renderCitations === 'function') {
-                        window.citationRenderer.renderCitations(agentMsgBubble, msg.meta.citations);
+                    if (msg.meta?.quick_uploaded_files?.length) {
+                      appendAttachedFilesToUserMessage(msg.meta.quick_uploaded_files);
                     }
-                }
-            });
-            // Scroll to the bottom after loading history to show the latest messages.
-            setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 100);
-        }
-        catch (error) {
-            console.error("Failed to fetch history:", error);
-            showToast("Could not connect to server to load session.", true);
-        }
-    }
+                  } else if (msg.type === 'ai') {
+                    const bubble = createAgentMessageBubble();
+                    bubble.dataset.rawMarkdown = msg.content;
+                    bubble.dataset.streaming = 'false';
+
+                    const contentDiv = bubble.querySelector('.content');
+                    contentDiv.innerHTML = marked.parse(msg.content);
+
+                    renderCodeblocks(contentDiv);
+                    renderMath(contentDiv);
+
+                    if (msg.meta?.citations) {
+                      window.citationRenderer.renderCitations(bubble, msg.meta.citations);
+                      window.citationRenderer.renderSourcesButton(bubble, msg.meta.citations);
+
+                    }
+                  }
+                });
+
+                // wire up the “close sources panel” button once:
+                document
+                  .getElementById('sources-panel-close')
+                  .addEventListener('click', () => {
+                    document.getElementById('sources-panel').classList.remove('open');
+                  });
+
+                // scroll to bottom
+                setTimeout(
+                  () => window.scrollTo(0, document.body.scrollHeight),
+                  100
+                );
+
+              } catch (error) {
+                console.error("Failed to fetch history:", error);
+                showToast(
+                  "Could not connect to server to load session.",
+                  true
+                );
+              }
+            }
 
     /**
      * Fetches and displays the list of recent chat sessions for the current agent and user.
@@ -778,6 +813,12 @@
 
     // DOMContentLoaded listener for initial setup
     document.addEventListener('DOMContentLoaded', async () => {
+
+        const sourcesPanel = document.getElementById('sources-panel');
+        const sourcesClose = document.getElementById('sources-panel-close');
+        sourcesClose.addEventListener('click', () => {
+          sourcesPanel.classList.remove('open');
+        });
         // Only set up chat environment if user is logged in.
         if (loggedInUserToken && loggedInDbUserId) {
             setupChatEnvironment();
@@ -807,7 +848,7 @@
         }
     });
 
-    // New Chat button click handler
+
     newChatButton.addEventListener('click', () => startNewSession()); // MODIFIED: Call startNewSession directly, it handles confirmation
 
     // Agent selection change handler
