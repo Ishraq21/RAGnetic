@@ -1,19 +1,20 @@
 import logging
-from pathlib import Path
-
-import pandas as pd
 import glob
 import os
+import pandas as pd
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from sqlalchemy.sql import expression
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, status, Path
+from pathlib import Path as FilePath
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, join, and_
 
 from app.db import get_db
-from app.db.models import conversation_metrics_table, chat_sessions_table, users_table
+from app.db.models import conversation_metrics_table, chat_sessions_table, users_table, citations_table, \
+    chat_messages_table, document_chunks_table
 from app.core.security import PermissionChecker
 from app.schemas.security import User
 from pydantic import BaseModel, Field
@@ -42,7 +43,7 @@ class WorkflowRunSummaryEntry(BaseModel):
         from_attributes = True
         populate_by_name = True
 
-# Pydantic model for the aggregated usage summary response
+
 class UsageSummaryEntry(BaseModel):
     agent_name: str = Field(..., description="Name of the agent.")
     llm_model: str = Field(..., description="Name of the LLM model used.")
@@ -169,8 +170,8 @@ async def get_usage_summary(
         raise
     except Exception as e:
         logger.error(f"API: Failed to fetch usage summary: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not retrieve usage summary.")
-
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Could not retrieve usage summary.")
 
 
 class BenchmarkSummaryEntry(BaseModel):
@@ -219,22 +220,24 @@ async def get_benchmark_summary(
 
     try:
         if not os.path.exists(_BENCHMARK_DIR) or not os.listdir(_BENCHMARK_DIR):
-            raise HTTPException(status_code=404,
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail=f"No benchmark results found in '{_BENCHMARK_DIR}'. Run 'ragnetic evaluate benchmark' first.")
 
         all_benchmark_files = sorted(glob.glob(str(_BENCHMARK_DIR / "*.csv")), reverse=True)
 
         if not all_benchmark_files:
-            raise HTTPException(status_code=404, detail=f"No .csv benchmark files found in '{_BENCHMARK_DIR}'.")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail=f"No .csv benchmark files found in '{_BENCHMARK_DIR}'.")
 
         filtered_files = []
         if agent_name:
             for f in all_benchmark_files:
-                filename_parts = Path(f).name.split('_')
+                filename_parts = FilePath(f).name.split('_')
                 if len(filename_parts) >= 2 and filename_parts[1] == agent_name:
                     filtered_files.append(f)
             if not filtered_files:
-                raise HTTPException(status_code=404, detail=f"No benchmark results found for agent: '{agent_name}'.")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                    detail=f"No benchmark results found for agent: '{agent_name}'.")
             all_benchmark_files = filtered_files
 
         if latest and all_benchmark_files:
@@ -268,7 +271,7 @@ async def get_benchmark_summary(
                 }, inplace=True)
 
                 # Add agent_name from filename for consistency
-                df['agent_name'] = Path(f_path).name.split('_')[1]  # Use the top-level imported Path
+                df['agent_name'] = FilePath(f_path).name.split('_')[1]  # Use the new FilePath alias
 
                 all_results_dfs.append(df)
             except Exception as e:
@@ -356,7 +359,8 @@ async def get_benchmark_summary(
         raise
     except Exception as e:
         logger.error(f"API: Failed to fetch benchmark summary: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not retrieve benchmark summary.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Could not retrieve benchmark summary.")
 
 
 @router.get("/workflow-runs", response_model=List[WorkflowRunSummaryEntry])
@@ -456,7 +460,8 @@ async def get_workflow_runs_summary(
         raise
     except Exception as e:
         logger.error(f"API: Failed to fetch workflow run summary: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not retrieve workflow run summary.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Could not retrieve workflow run summary.")
 
 
 class AgentStepSummaryEntry(BaseModel):
@@ -573,7 +578,8 @@ async def get_agent_steps_summary(
         raise
     except Exception as e:
         logger.error(f"API: Failed to fetch agent step summary: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not retrieve agent step summary.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Could not retrieve agent step summary.")
 
 
 class AgentRunSummaryEntry(BaseModel):
@@ -679,4 +685,102 @@ async def get_agent_runs_summary(
         raise
     except Exception as e:
         logger.error(f"API: Failed to fetch agent run summary: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not retrieve agent run summary.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Could not retrieve agent run summary.")
+
+
+
+class CitationReportEntry(BaseModel):
+    message_id: int = Field(..., description="The ID of the chat message containing the citation.")
+    chunk_id: int = Field(..., description="The ID of the document chunk that was cited.")
+    marker_text: str = Field(..., description="The citation marker string (e.g., '[1]').")
+    start_char: int = Field(..., description="The starting character index of the marker in the message content.")
+    end_char: int = Field(..., description="The ending character index of the marker in the message content.")
+    chunk_content_snippet: str = Field(..., description="The full content of the cited chunk.")
+    document_name: str = Field(..., description="The name of the source document for the cited chunk.")
+    page_number: Optional[int] = Field(None, description="The page number of the cited chunk.")
+
+
+class CitationReportResponse(BaseModel):
+    citations: List[CitationReportEntry]
+    session_id: int
+    thread_id: str
+    agent_name: str
+    total_citations: int
+
+
+@router.get("/citation-report/{session_id}", response_model=CitationReportResponse)
+async def get_citation_report(
+
+        session_id: int = Path(..., description="The ID of the chat session."),
+        current_user: User = Depends(PermissionChecker(["analytics:read_benchmarks"])),
+        db: AsyncSession = Depends(get_db),
+):
+    """
+    Retrieves a detailed report of all valid citations for a given chat session.
+    Joins chat messages, citations, and document chunks to provide a full picture.
+    """
+    logger.info(f"API: User '{current_user.username}' fetching citation report for session '{session_id}'.")
+
+    try:
+        # First, get session details
+        session_stmt = select(
+            chat_sessions_table.c.thread_id,
+            chat_sessions_table.c.agent_name,
+        ).where(chat_sessions_table.c.id == session_id)
+        session_info = (await db.execute(session_stmt)).first()
+        if not session_info:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
+
+        thread_id, agent_name = session_info.thread_id, session_info.agent_name
+
+        # Query to join all relevant tables for the report
+        stmt = select(
+            citations_table.c.message_id,
+            citations_table.c.chunk_id,
+            citations_table.c.marker_text,
+            citations_table.c.start_char,
+            citations_table.c.end_char,
+            document_chunks_table.c.content.label("chunk_content_snippet"),
+            document_chunks_table.c.document_name,
+            document_chunks_table.c.page_number
+        ).join(
+            chat_messages_table, citations_table.c.message_id == chat_messages_table.c.id
+        ).join(
+            document_chunks_table, citations_table.c.chunk_id == document_chunks_table.c.id
+        ).where(
+            chat_messages_table.c.session_id == session_id
+        ).order_by(
+            citations_table.c.message_id, citations_table.c.start_char
+        )
+
+        result = await db.execute(stmt)
+        rows = result.fetchall()
+
+        citations_list = [
+            CitationReportEntry(
+                message_id=row.message_id,
+                chunk_id=row.chunk_id,
+                marker_text=row.marker_text,
+                start_char=row.start_char,
+                end_char=row.end_char,
+                chunk_content_snippet=row.chunk_content_snippet,
+                document_name=row.document_name,
+                page_number=row.page_number,
+            ) for row in rows
+        ]
+
+        return CitationReportResponse(
+            citations=citations_list,
+            session_id=session_id,
+            thread_id=thread_id,
+            agent_name=agent_name,
+            total_citations=len(citations_list)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Failed to fetch citation report for session {session_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Could not retrieve citation report.")

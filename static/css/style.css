@@ -1221,3 +1221,89 @@ body:not(.login-body) {
 .sources-button.visible {
   display: inline-block !important;  /* used once citations arrive */
 }
+
+.message.agent .citation-marker {
+    background-color: rgba(99, 93, 255, 0.2);
+    color: var(--accent-color);
+    padding: 2px 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    text-decoration: none;
+    font-weight: bold;
+    transition: background-color 0.2s, box-shadow 0.2s;
+    user-select: none; /* Prevents text from being selected inside the marker */
+}
+
+.message.agent .citation-marker:hover {
+    background-color: rgba(99, 93, 255, 0.4);
+    box-shadow: 0 0 8px var(--accent-color);
+}
+
+.message.agent .citation-marker[data-hallucinated="true"] {
+    background-color: rgba(220, 53, 69, 0.2);
+    color: var(--error-color);
+    text-decoration: dotted underline;
+}
+
+.message.agent .citation-marker[data-hallucinated="true"]:hover {
+    background-color: rgba(220, 53, 69, 0.4);
+    box-shadow: 0 0 8px var(--error-color);
+}
+
+#citation-popup {
+    position: absolute;
+    max-width: 400px;
+    background: var(--card-background);
+    border: 1px solid var(--accent-color);
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(10px);
+    transition: all 0.2s ease-in-out;
+}
+
+#citation-popup.visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+}
+
+.popup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    border-bottom: 1px solid var(--border-color);
+    background-color: rgba(99, 93, 255, 0.1);
+}
+
+.popup-title {
+    font-size: 0.9em;
+    font-weight: bold;
+    color: var(--accent-color);
+}
+
+.popup-close-btn {
+    background: none;
+    border: none;
+    color: var(--muted-text);
+    font-size: 1.2em;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0;
+}
+
+.popup-content {
+    padding: 15px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 0.9em;
+    line-height: 1.6;
+}
+
+.popup-snippet-error {
+    color: var(--error-color);
+    font-style: italic;
+}

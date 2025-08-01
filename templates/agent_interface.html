@@ -36,7 +36,7 @@
     </div>
 
     <div id="ingestion-modal" class="modal">
-        </div>
+    </div>
     <aside id="chat-history-sidebar">
         <div class="sidebar-top">
             <button id="new-chat-btn">
@@ -60,13 +60,8 @@
     <div id="chat-container">
         <div id="messages"></div>
 
-        <div id="sources-panel">
-          <div class="sources-panel-header">
-            <h2>Sources</h2>
-            <button id="sources-panel-close">&times;</button>
-          </div>
-          <ul id="sources-list"></ul>
-        </div>
+        <div id="citation-popup" class="citation-popup" style="display: none;"></div>
+
         <div id="quickUploadFileList" class="attachment-list"></div>
         <div id="input-form-container">
             <div id="typing-indicator" style="opacity: 0; display:none;">
@@ -144,7 +139,7 @@
         stopIcon.style.display = generating ? 'inline' : 'none';
         inputField.disabled = generating;
         sendStopButton.classList.toggle('stop-active', generating);
-        quickUploadBtn.disabled = generating; // NEW: Disable/enable quick upload button
+        quickUploadBtn.disabled = generating;
         if (!generating) {
             typingIndicator.style.display = 'none';
             inputField.focus();
@@ -176,16 +171,15 @@
             wsUrl += `?api_key=${loggedInUserToken}`;
         }
         socket = new WebSocket(wsUrl);
-        socket.onopen = () => { sendStopButton.disabled = false; quickUploadBtn.disabled = false; if (onOpenCallback) { onOpenCallback(); } }; // NEW: Enable quickUploadBtn on open
+        socket.onopen = () => { sendStopButton.disabled = false; quickUploadBtn.disabled = false; if (onOpenCallback) { onOpenCallback(); } };
         socket.onerror = (event) => { console.error("WebSocket error:", event); showToast("Connection error. Check console for details.", true); };
         socket.onclose = (event) => {
             sendStopButton.disabled = true;
-            quickUploadBtn.disabled = true; // NEW: Disable quickUploadBtn on close
+            quickUploadBtn.disabled = true;
             if (isGenerating) setGeneratingState(false);
             if (event.code === 1008) { showToast("Connection rejected: Invalid or missing API Key.", true); }
             else if (event.code !== 1000) { showToast(`WebSocket disconnected: Code ${event.code}`, true); }
             else {
-                // If not logged in, redirect to login page
                 if (!loggedInUserToken || !loggedInDbUserId) {
                     window.location.href = '/login';
                 }
@@ -212,18 +206,10 @@
                     renderCodeblocks(lastMessage);
                     renderMath(lastMessage);
 
-                    // CORRECTED: Directly handle the sources button logic instead of relying on an external file.
+                    // CORRECTED: Use the new citation renderer directly
                     if (data.citations && data.citations.length > 0) {
-                        // This safely calls the inline citation renderer if it exists, but doesn't fail if it doesn't.
                         if (window.citationRenderer && typeof window.citationRenderer.renderCitations === 'function') {
                             window.citationRenderer.renderCitations(lastMessage, data.citations);
-                        }
-                        // Find the sources button on the message bubble.
-                        const sourcesBtn = lastMessage.querySelector('.sources-button');
-                        if (sourcesBtn) {
-                            // Attach the citation data directly to the button and make it visible.
-                            sourcesBtn.dataset.citations = JSON.stringify(data.citations);
-                            sourcesBtn.classList.remove('hidden');
                         }
                     }
                 } else {
@@ -233,59 +219,39 @@
     };
 }
     function handleFormSubmit(event) {
-        if (event) event.preventDefault(); // Prevent default form submission
+        if (event) event.preventDefault();
         if (isGenerating) {
-            // If currently generating, the button becomes a stop button
-            socket.send(JSON.stringify({ type: 'interrupt' })); // Send interrupt signal
-            setGeneratingState(false); // Update UI to stop state
+            socket.send(JSON.stringify({ type: 'interrupt' }));
+            setGeneratingState(false);
         } else {
-            // Otherwise, send the message (and trigger file uploads if any)
             sendMessage();
         }
     }
-
-    /**
-     * Handles sending the user's message and attached files.
-     * This function now manages the sequence of file uploads and then sending the chat query.
-     */
     async function sendMessage() {
         if (!loggedInUserToken || !loggedInDbUserId) {
             showToast("Please log in to chat.", true);
             return;
         }
-
         const query = inputField.value.trim();
-        const attachedFiles = window.quickUploads.getAttachedFiles(); // Get File objects
-
-        // If no query and no files are attached, do nothing.
+        const attachedFiles = window.quickUploads.getAttachedFiles();
         if (!query && attachedFiles.length === 0) {
             showToast("Please enter a query or attach files.", true);
             return;
         }
-
-        // Set the UI to a "generating" state early to disable user input and buttons.
         setGeneratingState(true);
-        // Show the typing indicator.
         typingIndicator.style.opacity = '1';
         typingIndicator.style.display = 'flex';
-        // Scroll to the bottom of the chat window.
         scrollToBottom();
-
-        // --- Step 1: Handle File Uploads (if any) ---
-        const uploadedFileInfos = []; // This array will store {file_name, file_size, temp_doc_id} for the WebSocket payload.
+        const uploadedFileInfos = [];
         if (attachedFiles.length > 0) {
-            appendUserMessage("Uploading files..."); // Provide immediate feedback to the user.
+            appendUserMessage("Uploading files...");
             try {
-                // Ensure a thread_id exists before uploading files.
-                // If it's a new chat, we need to create a session first to get one.
                 if (!thread_id) {
-                    // This assumes a /api/v1/sessions/create endpoint exists that creates a new session.
-                    // If not, this part needs adjustment based on how new sessions are initiated on your backend.
                     const sessionCreationPayload = {
-                        agent_name: agent, // Use the currently selected agent
+                        agent_name: agent,
                         user_id: parseInt(loggedInDbUserId)
                     };
-                    const sessionResponse = await fetch(`${API_BASE_URL}/sessions/create`, { // Assuming /sessions/create
+                    const sessionResponse = await fetch(`${API_BASE_URL}/sessions/create`, {
                         method: 'POST',
                         headers: {
                             'X-API-Key': loggedInUserToken,
@@ -293,79 +259,55 @@
                         },
                         body: JSON.stringify(sessionCreationPayload)
                     });
-
                     if (!sessionResponse.ok) {
                         const errorText = await sessionResponse.text();
                         throw new Error(`Failed to create new session for file upload: ${sessionResponse.status} - ${errorText}`);
                     }
                     const sessionData = await sessionResponse.json();
-                    thread_id = sessionData.thread_id; // Get the newly created thread_id
-                    localStorage.setItem('ragnetic_thread_id', thread_id); // Store it locally
+                    thread_id = sessionData.thread_id;
+                    localStorage.setItem('ragnetic_thread_id', thread_id);
                     showToast("New chat session created for file upload.", false);
-                    fetchChatSessions(agent); // Refresh sidebar to show new session
+                    fetchChatSessions(agent);
                 }
-
-                // Upload each attached file to the backend in parallel.
-                // `window.quickUploads.uploadFileToBackend` returns a promise for each upload.
                 const uploadPromises = attachedFiles.map(file =>
-                    window.quickUploads.uploadFileToBackend(file, thread_id) // Pass the now-guaranteed thread_id
+                    window.quickUploads.uploadFileToBackend(file, thread_id)
                 );
-                const results = await Promise.all(uploadPromises); // Wait for all uploads to complete.
-                uploadedFileInfos.push(...results); // Collect the results (which include `temp_doc_id`).
-
-                // Update UI feedback for the user.
+                const results = await Promise.all(uploadPromises);
+                uploadedFileInfos.push(...results);
                 appendUserMessage("Files uploaded successfully. Processing query...");
             } catch (error) {
-                // An error occurred during file upload.
-                // The `uploadFileToBackend` function already shows a toast message.
-                setGeneratingState(false); // Reset UI state.
+                setGeneratingState(false);
                 showToast(`File upload pre-processing failed: ${error.message}`, true);
-                return; // Stop `sendMessage` execution.
+                return;
             }
         }
-
-        // --- Step 2: Send Chat Query via WebSocket ---
         const payload = {
             agent,
             user_id: parseInt(loggedInDbUserId),
             thread_id,
             query,
-            files: uploadedFileInfos // Crucially, send the collected `uploadedFileInfos` with `temp_doc_id`.
+            files: uploadedFileInfos
         };
         const message = { type: 'query', payload: payload };
-
-        // Define the actual WebSocket send logic as a separate function.
         const doSend = () => {
-            socket.send(JSON.stringify(message)); // Send the WebSocket message.
-            // Remove the empty state message if present.
+            socket.send(JSON.stringify(message));
             const emptyState = document.getElementById('empty-state');
             if (emptyState) emptyState.remove();
-            // Append the user's query to the chat history.
             appendUserMessage(query);
-            // If files were uploaded, display them as part of the user's message in the chat history.
             if (uploadedFileInfos.length > 0) {
                 appendAttachedFilesToUserMessage(uploadedFileInfos);
             }
-            // Clear the input field and reset its height.
             inputField.value = '';
             inputField.style.height = 'auto';
-            // Clear the client-side list of attached files.
             window.quickUploads.clearAttachedFiles();
         };
-
-        // If WebSocket is not open, try to open it and then send the message.
         if (!socket || socket.readyState !== WebSocket.OPEN) {
             showToast("Connecting... Please try again shortly.");
-            openWebSocket(doSend); // Pass `doSend` as a callback for when the WebSocket opens.
+            openWebSocket(doSend);
         } else {
-            doSend(); // If WebSocket is already open, send immediately.
+            doSend();
         }
     }
-
-    /**
-     * Appends a new user message to the chat display.
-     * @param {string} text - The content of the user's message.
-     */
     function appendUserMessage(text) {
         const msg = document.createElement('div');
         msg.className = 'message user';
@@ -373,120 +315,61 @@
         messagesDiv.appendChild(msg);
         scrollToBottom();
     }
-
-    /**
-     * Appends a visual representation of attached files to the last user message.
-     * @param {Array<Object>} uploadedFileInfos - List of objects with file_name, file_size, temp_doc_id.
-     */
     function appendAttachedFilesToUserMessage(uploadedFileInfos) {
         const lastUserMessage = messagesDiv.lastElementChild;
         if (lastUserMessage && lastUserMessage.classList.contains('user')) {
             const attachmentsDiv = document.createElement('div');
-            attachmentsDiv.className = 'user-message-attachments'; // Apply CSS styling
-            // Create a span for each uploaded file's name.
+            attachmentsDiv.className = 'user-message-attachments';
             uploadedFileInfos.forEach(fileInfo => {
                 const fileSpan = document.createElement('span');
                 fileSpan.className = 'attached-file-display';
-                fileSpan.textContent = fileInfo.file_name; // Use file_name from uploaded info
+                fileSpan.textContent = fileInfo.file_name;
                 attachmentsDiv.appendChild(fileSpan);
             });
-            lastUserMessage.appendChild(attachmentsDiv); // Append to the user message bubble.
+            lastUserMessage.appendChild(attachmentsDiv);
             scrollToBottom();
         }
     }
 
     /**
      * Creates a new message bubble for AI responses.
-     * Includes basic copy functionality.
-     * @returns {HTMLElement} The created message bubble element.
+     * REMOVED: `sources-button` creation.
      */
-        function createAgentMessageBubble() {
-    const bubble = document.createElement('div');
-    bubble.className = 'message agent';
-    bubble.dataset.rawMarkdown = '';
-    bubble.dataset.messageId = '';
+    function createAgentMessageBubble() {
+        const bubble = document.createElement('div');
+        bubble.className = 'message agent';
+        bubble.dataset.rawMarkdown = '';
+        bubble.dataset.messageId = '';
 
-    const contentDiv = document.createElement('div');
-    contentDiv.className = 'content';
-    bubble.appendChild(contentDiv);
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'content';
+        bubble.appendChild(contentDiv);
 
-    const sourcesBtn = document.createElement('button');
-    sourcesBtn.className = 'sources-button hidden';
-    sourcesBtn.textContent = 'Sources';
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-btn';
+        copyBtn.innerHTML = svgs.copy;
+        copyBtn.addEventListener('click', () => {
+            const md = bubble.dataset.rawMarkdown;
+            if (!md) return;
+            navigator.clipboard.writeText(md)
+                .then(() => {
+                    copyBtn.innerHTML = svgs.copied;
+                    setTimeout(() => {
+                        copyBtn.innerHTML = svgs.copy;
+                    }, 2000);
+                });
+        });
+        bubble.appendChild(copyBtn);
 
+        messagesDiv.appendChild(bubble);
 
-    sourcesBtn.addEventListener('click', (event) => {
-        const btn = event.target;
-        const citationsJSON = btn.dataset.citations;
-
-        if (!citationsJSON) {
-            console.warn("Sources button clicked but no citation data found.");
-            return;
-        }
-
-        try {
-            const citations = JSON.parse(citationsJSON);
-            const sourcesPanel = document.getElementById('sources-panel');
-            const sourcesList = document.getElementById('sources-list');
-
-            if (!sourcesPanel || !sourcesList) {
-                console.warn("Sources panel not found. Cannot render sources.");
-                return;
-            }
-
-            sourcesList.innerHTML = '';
-            citations.forEach((c, i) => {
-                const li = document.createElement('li');
-                li.innerHTML = `
-                    <div class="source-title">[${i + 1}] ${c.doc_name || 'Document ' + c.doc_id}</div>
-                    <div class="source-snippet">${c.snippet || 'Snippet not available.'}</div>
-                    <div class="source-meta">
-                        Chunk ${c.chunk_id}
-                        ${c.sentences_range ? `, sentences ${c.sentences_range}` : ''}
-                    </div>
-                `;
-                sourcesList.appendChild(li);
-            });
-            sourcesPanel.classList.add('open');
-        } catch (e) {
-            console.error("Failed to parse citation data from button dataset:", e);
-        }
-    });
-
-    bubble.appendChild(sourcesBtn);
-
-    const copyBtn = document.createElement('button');
-    copyBtn.className = 'copy-btn';
-    copyBtn.innerHTML = svgs.copy;
-    copyBtn.addEventListener('click', () => {
-        const md = bubble.dataset.rawMarkdown;
-        if (!md) return;
-        navigator.clipboard.writeText(md)
-            .then(() => {
-                copyBtn.innerHTML = svgs.copied;
-                setTimeout(() => { copyBtn.innerHTML = svgs.copy; }, 2000);
-            });
-    });
-    bubble.appendChild(copyBtn);
-
-    messagesDiv.appendChild(bubble);
-
-    return bubble;
-}
-
-
-    /**
-     * Renders code blocks with syntax highlighting and copy buttons.
-     * Assumes `renderCodeblocks` utility is available.
-     * @param {HTMLElement} scopeElement - The element containing code blocks to render.
-     */
+        return bubble;
+    }
     function renderCodeblocks(scopeElement) {
-        // This function is typically from a separate utility or markdown parser setup.
-        // Its implementation is not included here but is assumed to be correct.
         scopeElement.querySelectorAll('pre > code').forEach((codeBlock) => {
             const pre = codeBlock.parentElement;
-            if (pre.querySelector('.code-header')) return; // Already rendered
-            const lang = codeBlock.className.split('-')[1] || 'text'; // Extract language from class
+            if (pre.querySelector('.code-header')) return;
+            const lang = codeBlock.className.split('-')[1] || 'text';
             const header = document.createElement('div');
             header.className = 'code-header';
             const langSpan = document.createElement('span');
@@ -504,41 +387,25 @@
             };
             header.appendChild(langSpan);
             header.appendChild(copyBtn);
-            pre.insertBefore(header, codeBlock); // Insert header before the code block
+            pre.insertBefore(header, codeBlock);
         });
     }
-
-    /**
-     * Appends a token received from the WebSocket to the last AI message.
-     * Handles creating a new AI message bubble if needed.
-     * @param {string} token - The text token from the AI.
-     */
     function appendAgentToken(token) {
         let lastMessage = messagesDiv.lastElementChild;
-        // Check if the last message is an AI message that is still streaming.
         if (!lastMessage || !lastMessage.classList.contains('agent') || lastMessage.dataset.streaming === 'false') {
-            typingIndicator.style.display = 'none'; // Hide typing indicator once content starts flowing
-            lastMessage = createAgentMessageBubble(); // Create a new AI message bubble
-            lastMessage.dataset.streaming = 'true'; // Mark as streaming
+            typingIndicator.style.display = 'none';
+            lastMessage = createAgentMessageBubble();
+            lastMessage.dataset.streaming = 'true';
             lastMessage.classList.add('streaming-agent-message');
         }
-        // Append the new token to the raw markdown data stored on the message element.
         lastMessage.dataset.rawMarkdown += token;
-        // Render the updated markdown to HTML.
         const contentDiv = lastMessage.querySelector('.content');
         if (contentDiv) {
             contentDiv.innerHTML = marked.parse(lastMessage.dataset.rawMarkdown);
-            renderCodeblocks(contentDiv); // Re-render code blocks to catch any new ones
+            renderCodeblocks(contentDiv);
         }
-        scrollToBottom(); // Keep the chat scrolled to the latest message.
+        scrollToBottom();
     }
-
-    /**
-     * Loads chat history for a specific thread from the backend.
-     * @param {string} agentName - The name of the agent.
-     * @param {string} threadId - The unique ID of the chat thread.
-     * @param {number} userId - The database ID of the current user.
-     */
     async function loadHistory(agentName, threadId, userId) {
         if (!loggedInUserToken || !loggedInDbUserId) {
             showToast("Cannot load history: Not logged in.", true);
@@ -548,7 +415,7 @@
             const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${loggedInDbUserId}`, {
                 method: 'GET',
                 headers: {
-                    'X-API-Key': loggedInUserToken // Authenticate the request
+                    'X-API-Key': loggedInUserToken
                 }
             });
              if (!response.ok) {
@@ -556,7 +423,7 @@
                     console.warn(
                       `History for thread ${threadId} not found or unauthorized.`
                     );
-                    startNewSession(false); // silent reset on 404
+                    startNewSession(false);
                     return;
                   }
                   showToast(`Could not load session (status: ${response.status}).`, true);
@@ -564,7 +431,7 @@
                 }
 
                 const history = await response.json();
-                messagesDiv.innerHTML = ''; // clear existing messages
+                messagesDiv.innerHTML = '';
 
                 history.forEach((msg) => {
                   if (msg.type === 'human') {
@@ -584,27 +451,16 @@
                     renderCodeblocks(contentDiv);
                     renderMath(contentDiv);
 
-                if (msg.meta?.citations && msg.meta.citations.length > 0) {
-                    if (window.citationRenderer && typeof window.citationRenderer.renderCitations === 'function') {
-                        window.citationRenderer.renderCitations(bubble, msg.meta.citations);
+                    if (msg.meta?.citations && msg.meta.citations.length > 0) {
+                        if (window.citationRenderer && typeof window.citationRenderer.renderCitations === 'function') {
+                            window.citationRenderer.renderCitations(bubble, msg.meta.citations);
+                        }
                     }
-                    const sourcesBtn = bubble.querySelector('.sources-button');
-                    if (sourcesBtn) {
-                        sourcesBtn.dataset.citations = JSON.stringify(msg.meta.citations);
-                        sourcesBtn.classList.remove('hidden');
-                    }
-                }
                 }
                 });
 
-                // wire up the “close sources panel” button once:
-                document
-                  .getElementById('sources-panel-close')
-                  .addEventListener('click', () => {
-                    document.getElementById('sources-panel').classList.remove('open');
-                  });
+                // REMOVED: sources panel event listener
 
-                // scroll to bottom
                 setTimeout(
                   () => window.scrollTo(0, document.body.scrollHeight),
                   100
@@ -618,15 +474,9 @@
                 );
               }
             }
-
-    /**
-     * Fetches and displays the list of recent chat sessions for the current agent and user.
-     * Populates the `historyList` sidebar.
-     * @param {string} agentName - The name of the currently selected agent.
-     */
     async function fetchChatSessions(agentName) {
         if (!loggedInUserToken || !loggedInDbUserId) {
-            historyList.innerHTML = ''; // Clear history if not logged in
+            historyList.innerHTML = '';
             return;
         }
         try {
@@ -638,18 +488,16 @@
             });
             if (!response.ok) { throw new Error('Failed to fetch chat sessions.'); }
             const sessions = await response.json();
-            historyList.innerHTML = ''; // Clear existing list
+            historyList.innerHTML = '';
 
             if (sessions.length === 0) {
                  historyList.innerHTML = `<li class="no-history"><p>No chat history available.</p></li>`;
                  return;
             }
-
-            // Populate the history sidebar with session items.
             sessions.forEach(session => {
                 const li = document.createElement('li');
                 li.dataset.threadId = session.thread_id;
-                li.dataset.topicName = session.topic_name; // Store topic name for renaming
+                li.dataset.topicName = session.topic_name;
                 const mainContent = document.createElement('div');
                 mainContent.className = 'history-item-main';
                 mainContent.innerHTML = `
@@ -669,43 +517,35 @@
                     </button>
                 `;
                 li.appendChild(actionsContainer);
-                // Highlight the active session.
                 if (session.thread_id === thread_id) { li.classList.add('active'); }
-                // Attach click handler to load session history.
                 mainContent.onclick = () => {
-                    if (li.classList.contains('editing')) return; // Prevent loading while renaming
+                    if (li.classList.contains('editing')) return;
                     document.querySelectorAll('#history-list li').forEach(item => item.classList.remove('active'));
                     li.classList.add('active');
-                    thread_id = session.thread_id; // Set current thread ID
-                    localStorage.setItem('ragnetic_thread_id', thread_id); // Store for persistence
-                    loadHistory(agent, thread_id, loggedInDbUserId); // Load history for the selected session
-                    openWebSocket(); // Re-open WebSocket for the new session
+                    thread_id = session.thread_id;
+                    localStorage.setItem('ragnetic_thread_id', thread_id);
+                    loadHistory(agent, thread_id, loggedInDbUserId);
+                    openWebSocket();
                 };
-                addRenameFunctionality(li, session.thread_id); // Add rename functionality
-                addDeleteFunctionality(li, session.thread_id); // Add delete functionality
-                historyList.appendChild(li); // Append to the history list
+                addRenameFunctionality(li, session.thread_id);
+                addDeleteFunctionality(li, session.thread_id);
+                historyList.appendChild(li);
             });
         } catch (error) {
             console.error("Failed to fetch chat sessions:", error);
             historyList.innerHTML = `<li class="no-history"><p>No chat history available.</p></li>`;
         }
     }
-
-    /**
-     * Adds rename functionality to a chat session list item.
-     * @param {HTMLElement} liElement - The list item element.
-     * @param {string} currentThreadId - The thread ID of the session.
-     */
     function addRenameFunctionality(liElement, currentThreadId) {
         const renameButton = liElement.querySelector('.rename-btn');
         const textSpan = liElement.querySelector('.history-item-text');
         const renameInput = liElement.querySelector('.rename-input');
         renameButton.onclick = (e) => {
-            e.stopPropagation(); // Prevent loading session when clicking rename
+            e.stopPropagation();
             liElement.classList.add('editing');
             renameInput.style.display = 'block';
             textSpan.style.display = 'none';
-            renameInput.value = textSpan.textContent; // Pre-fill input with current name
+            renameInput.value = textSpan.textContent;
             renameInput.focus();
         };
         const finishEditing = async () => {
@@ -726,21 +566,21 @@
                         body: JSON.stringify({ new_name: newName })
                     });
                     if (!response.ok) throw new Error('Failed to rename session.');
-                    textSpan.textContent = newName; // Update displayed name
+                    textSpan.textContent = newName;
                     showToast('Chat renamed successfully!');
                 } catch (error) {
                     console.error('Rename failed:', error);
                     showToast('Error: Could not rename chat.', true);
                 }
             }
-            liElement.classList.remove('editing'); // Exit editing mode
+            liElement.classList.remove('editing');
             renameInput.style.display = 'none';
             textSpan.style.display = 'block';
         };
-        renameInput.onblur = finishEditing; // Finish editing when input loses focus
+        renameInput.onblur = finishEditing;
         renameInput.onkeydown = (e) => {
             if (e.key === 'Enter') {
-                e.preventDefault(); // Prevent new line in input
+                e.preventDefault();
                 finishEditing();
             } else if (e.key === 'Escape') {
                 liElement.classList.remove('editing');
@@ -749,27 +589,15 @@
             }
         };
     }
-
-    /**
-     * Adds delete functionality to a chat session list item.
-     * @param {HTMLElement} liElement - The list item element.
-     * @param {string} currentThreadId - The thread ID of the session.
-     */
     function addDeleteFunctionality(liElement, currentThreadId) {
         const deleteButton = liElement.querySelector('.delete-btn');
         deleteButton.onclick = (e) => {
-            e.stopPropagation(); // Prevent loading session when clicking delete
+            e.stopPropagation();
             showConfirmationModal(() => {
                 deleteChatSession(liElement, currentThreadId);
             }, "Are you sure you want to delete this chat?", "Delete");
         };
     }
-
-    /**
-     * Deletes a chat session from the backend and updates the UI.
-     * @param {HTMLElement} liElement - The DOM element of the session to delete.
-     * @param {string} currentThreadId - The thread ID of the session to delete.
-     */
     async function deleteChatSession(liElement, currentThreadId) {
         if (!loggedInUserToken || !loggedInDbUserId) {
             showToast("Please log in to delete chats.", true);
@@ -785,9 +613,7 @@
             });
             if (!response.ok) { throw new Error('Failed to delete session.'); }
             showToast('Chat deleted successfully!');
-            liElement.remove(); // Remove from UI
-
-            // If the deleted session was the currently active one, start a new session.
+            liElement.remove();
             if (thread_id === currentThreadId) {
                 startNewSession();
             }
@@ -796,148 +622,100 @@
             showToast('Error: Could not delete chat.', true);
         }
     }
-
-    /**
-     * Displays a confirmation modal to the user.
-     * @param {Function} onConfirm - Callback function to execute if user confirms.
-     * @param {string} text - Message to display in the modal.
-     * @param {string} confirmText - Text for the confirm button.
-     */
     function showConfirmationModal(onConfirm, text = "Are you sure?", confirmText = "Start New") {
-        // If "Start New" and chat is already empty, just proceed without modal.
         if (confirmText === "Start New" && (messagesDiv.children.length === 0 || document.getElementById('empty-state'))) {
             onConfirm();
             return;
         }
         modalText.textContent = text;
         modalConfirmBtn.textContent = confirmText;
-        // Style confirm button based on action (e.g., red for "Delete")
         modalConfirmBtn.className = confirmText === "Delete" ? 'modal-btn confirm error' : 'modal-btn confirm';
-        confirmCallback = onConfirm; // Store callback
-        confirmationModal.style.display = 'flex'; // Show modal
+        confirmCallback = onConfirm;
+        confirmationModal.style.display = 'flex';
     }
-
-    /**
-     * Resets the chat interface to a new session state.
-     * Clears local storage, UI, and re-initializes WebSocket.
-     * @param {boolean} [showConfirmation=true] - Whether to show a confirmation modal.
-     */
     function startNewSession(showConfirmation = true) {
         const doReset = () => {
-            localStorage.removeItem('ragnetic_thread_id'); // Clear stored thread ID
-            thread_id = null; // Reset current thread ID
-            renderEmptyState(); // Show empty chat state
-            openWebSocket(); // Open new WebSocket connection
-            fetchChatSessions(agent); // Reload session list
-            window.quickUploads.clearAttachedFiles(); // Clear any attached files
+            localStorage.removeItem('ragnetic_thread_id');
+            thread_id = null;
+            renderEmptyState();
+            openWebSocket();
+            fetchChatSessions(agent);
+            window.quickUploads.clearAttachedFiles();
         };
 
         if (showConfirmation) {
             showConfirmationModal(doReset, "Start a new chat?", "Start New");
         } else {
-            doReset(); // Directly reset if no confirmation needed (e.g., from 404 in loadHistory)
+            doReset();
         }
     }
-
-
-    // --- Event Listeners for UI Interactions ---
-
-    // Logout button click handler
     logoutBtn.addEventListener('click', () => {
-        // Clear all relevant local storage items
         loggedInUserToken = null;
         loggedInDbUserId = null;
         localStorage.removeItem('ragnetic_user_token');
         localStorage.removeItem('ragnetic_db_user_id');
         localStorage.removeItem('ragnetic_thread_id');
-        localStorage.removeItem('ragnetic_user_id'); // Redundant if db_user_id is used consistently
+        localStorage.removeItem('ragnetic_user_id');
         localStorage.removeItem('ragnetic_agent');
 
         thread_id = null;
         agent = null;
         showToast("Logged out successfully.");
-        window.location.href = '/login'; // Redirect to login page
-        messagesDiv.innerHTML = ''; // Clear chat display
-        historyList.innerHTML = ''; // Clear history sidebar
-        // Close existing WebSocket connection cleanly
+        window.location.href = '/login';
+        messagesDiv.innerHTML = '';
+        historyList.innerHTML = '';
         if (socket && socket.readyState !== WebSocket.CLOSED) {
             socket.close(1000, "User logged out");
         }
-        renderEmptyState(); // Show empty state for new user
-        window.quickUploads.clearAttachedFiles(); // Clear any attached files on logout
+        renderEmptyState();
+        window.quickUploads.clearAttachedFiles();
     });
-
-
-    // DOMContentLoaded listener for initial setup
     document.addEventListener('DOMContentLoaded', async () => {
-
-        const sourcesPanel = document.getElementById('sources-panel');
-        const sourcesClose = document.getElementById('sources-panel-close');
-        sourcesClose.addEventListener('click', () => {
-          sourcesPanel.classList.remove('open');
-        });
-        // Only set up chat environment if user is logged in.
+        // REMOVED: sources-panel logic
         if (loggedInUserToken && loggedInDbUserId) {
             setupChatEnvironment();
-            // Dynamically load ingestion modal HTML
             try {
                 const response = await fetch('/static/html/ingestion_modal.html');
                 if (!response.ok) {
                     throw new Error(`Failed to load ingestion modal HTML from /static/html: ${response.statusText}`);
                 }
                 ingestionModal.innerHTML = await response.text();
-
-                // Initialize ingestion modal logic after its HTML is loaded.
                 if (window.IngestionModal && typeof window.IngestionModal.init === 'function') {
                     window.IngestionModal.init();
                 } else {
                     console.error("IngestionModal.init not found. Script might have failed or not exposed it globally.");
                     showToast("Ingestion modal script failed to load correctly. Please refresh.", true);
                 }
-
             } catch (error) {
                 console.error("Error loading ingestion modal:", error);
                 showToast(`Error loading ingestion modal: ${error.message}`, true);
-                openIngestionModalBtn.disabled = true; // Disable button if modal fails to load
+                openIngestionModalBtn.disabled = true;
             }
         } else {
-            window.location.href = '/login'; // Redirect to login if not authenticated
+            window.location.href = '/login';
         }
     });
-
-
     newChatButton.addEventListener('click', () => startNewSession());
-
-    // Agent selection change handler
     agentSelect.addEventListener('change', () => showConfirmationModal(() => {
-        agent = agentSelect.value; // Update current agent
-        localStorage.setItem('ragnetic_agent', agent); // Persist agent choice
-        startNewSession(false); // Start a new session without confirmation here
-        // If ingestion modal is open, refresh its agent list.
+        agent = agentSelect.value;
+        localStorage.setItem('ragnetic_agent', agent);
+        startNewSession(false);
         if (ingestionModal.style.display === 'flex' && window.IngestionModal && typeof window.IngestionModal.loadAgents === 'function') {
             window.IngestionModal.loadAgents(agent);
         }
-    }, "Change agent and start a new chat?", "Change Agent")); // Keep original modal logic
-
-    // Confirmation modal button handlers
+    }, "Change agent and start a new chat?", "Change Agent"));
     modalCancelBtn.addEventListener('click', () => { confirmationModal.style.display = 'none'; confirmCallback = null; });
     modalConfirmBtn.addEventListener('click', () => { if (confirmCallback) confirmCallback(); confirmationModal.style.display = 'none'; confirmCallback = null; });
-
-    // Input field keydown for Enter to send message, Shift+Enter for new line
     inputField.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             handleFormSubmit();
         }
     });
-
-    // Adjust input field height dynamically based on content
     inputField.addEventListener('input', () => {
         inputField.style.height = 'auto';
         inputField.style.height = `${inputField.scrollHeight}px`;
     });
-
-    // Open Ingestion Modal button handler
     openIngestionModalBtn.addEventListener('click', async () => {
         if (!loggedInUserToken || !loggedInDbUserId) {
             showToast("Please log in to ingest data.", true);
@@ -945,7 +723,7 @@
             return;
         }
         if (window.IngestionModal && typeof window.IngestionModal.loadAgents === 'function') {
-            await window.IngestionModal.loadAgents(agentSelect.value); // Load agents into the modal select
+            await window.IngestionModal.loadAgents(agentSelect.value);
             const ingestionSourceTypeSelectInModal = ingestionModal.querySelector('#ingestionSourceType');
             if (ingestionSourceTypeSelectInModal) {
                 window.IngestionModal.renderIngestionSourceFields(ingestionSourceTypeSelectInModal.value);
@@ -953,28 +731,25 @@
                 console.warn("ingestionSourceTypeSelect not found on modal open, might be timing issue.");
             }
             if (window.IngestionModal && typeof window.IngestionModal.showIngestionFormPanel === 'function') {
-                window.IngestionModal.showIngestionFormPanel(); // Reset and show form panel
+                window.IngestionModal.showIngestionFormPanel();
             }
-            ingestionModal.style.display = 'flex'; // Display the modal
+            ingestionModal.style.display = 'flex';
         } else {
              console.error("Ingestion modal logic not initialized or functions missing.");
              showToast("Ingestion modal not ready. Please refresh.", true);
         }
     });
-
-    // Quick Upload button click handler
     if (quickUploadBtn) {
         quickUploadBtn.addEventListener('click', () => {
-            quickUploadFileInput.click(); // Programmatically click the hidden file input
+            quickUploadFileInput.click();
         });
     }
-    // Quick Upload file input change handler
     if (quickUploadFileInput) {
         quickUploadFileInput.addEventListener('change', (event) => {
             if (window.quickUploads && typeof window.quickUploads.handleFileSelection === 'function') {
                 window.quickUploads.handleFileSelection(event.target.files);
             }
-            event.target.value = ''; // Clear the input so same file can be selected again
+            event.target.value = '';
         });
     }
 </script>

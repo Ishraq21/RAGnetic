@@ -67,7 +67,8 @@ class AgentState(TypedDict):
     temp_document_ids: List[str]
     retrieved_documents_meta_for_citation: List[
         Dict[str, Any]]
-    parsed_citations: List[Dict[str, Any]]
+    citations: List[Dict[str, Any]]
+
 
 async def call_model(state: AgentState, config: RunnableConfig):
     """
@@ -82,7 +83,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
 
     if not db_session:
         logger.critical("Database session not found in config. Cannot save messages or citations.")
-        error_message = AIMessage(content="I'm sorry, but a critical configuration error occurred (DB session missing).")
+        error_message = AIMessage(
+            content="I'm sorry, but a critical configuration error occurred (DB session missing).")
         state.update({"messages": [error_message]})
         return state
     try:
@@ -130,7 +132,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
         if "retriever" in agent_config.tools:
             try:
                 embedding_tokens = count_tokens(query, embedding_model_name)
-                embedding_cost_usd = calculate_cost(embedding_model_name=embedding_model_name, embedding_tokens=embedding_tokens)
+                embedding_cost_usd = calculate_cost(embedding_model_name=embedding_model_name,
+                                                    embedding_tokens=embedding_tokens)
                 retriever_tool = await get_retriever_tool(agent_config)
                 retrieved_docs = await retriever_tool.ainvoke({"query": query, "temp_document_ids": temp_document_ids})
                 if retrieved_docs:
@@ -152,7 +155,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 source_label = f"[{i}] {doc_name}" + (f" (Page {page_num})" if page_num else "")
                 source_strings.append(source_label)
 
-                # CORRECTED: Add the chunk's page_content to the source_map
+
                 meta['chunk_content'] = doc.page_content
                 source_map[i] = meta
             formatted_sources_str = "\n".join(source_strings)
@@ -188,7 +191,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
                                              5.  Each source in the SOURCES list corresponds to a specific chunk of a document. Cite the number of the specific chunk you are using.
                                              6.  You can cite multiple sources for a single sentence, like this: `This is a fact [2][3].`
                                              7.  Do not refer to "the context provided" or "the documents." Respond directly and authoritatively.
-                                      
+
 
                                    IMPORTANT: When explaining any mathematical expressions, YOU MUST USE LaTeX SYNTAX.
                                    IMPORTANT: Wrap inline equations in `$...$`, and display equations in `$$...$$`.
@@ -419,26 +422,27 @@ async def call_model(state: AgentState, config: RunnableConfig):
             retrieved_meta = state.get("retrieved_documents_meta_for_citation", [])
 
             # 2. Parse citations from the response
+            # The extract_citations_from_text function is assumed to return chunk_id = -1 for un-matched markers
             parsed_citations = extract_citations_from_text(response_text, source_map)
             logger.info(f"Final parsed citations from LLM: {parsed_citations}")
 
-
+            # This is what the frontend will use to render the inline markers.
+            ai_message_meta = {"citations": parsed_citations} if parsed_citations else None
 
             message_id = await create_chat_message(
                 db=db_session,
                 session_id=session_id,
                 sender="ai",
                 content=response_text,
-                meta = {"citations": parsed_citations} if parsed_citations else None
+                meta=ai_message_meta
             )
             logger.info(f"AI message saved with ID {message_id}")
 
-            # 3. Save each parsed citation to the database
+            # 3. Save each valid citation to the database
             if parsed_citations:
                 logger.info(f"Saving {len(parsed_citations)} citations for message_id {message_id}.")
                 for cit in parsed_citations:
-                    if cit.get("chunk_id") is not None:
-                        # Note: You might want to save the snippet to the database as well
+                    if cit.get("chunk_id") is not None and cit.get("chunk_id") != -1:
                         await create_citation(
                             db=db_session,
                             message_id=message_id,
@@ -448,25 +452,11 @@ async def call_model(state: AgentState, config: RunnableConfig):
                             end_char=cit['end_char']
                         )
                     else:
-                        logger.warning(f"Skipping citation due to missing chunk_id: {cit}")
-
-            # The state is updated with the final, complete citations here.
+                        logger.warning(f"Skipping citation due to missing or invalid chunk_id (-1): {cit}")
 
         else:
-            # If no AIMessage, ensure parsed_citations is an empty list
-            parsed_citations = [] # <-- Use a local variable here
+            parsed_citations = []
 
-
-
-        '''
-        In state.update and log_metrics_data, estimated_cost_usd is assigned total_estimated_cost_usd. T
-        his means these logs and the internal state reflect the full cost of the interaction.
-
-        In db_metrics_data, estimated_cost_usd is assigned llm_cost_usd. 
-        This is because your conversation_metrics_table schema has a separate column for embedding_cost_usd
-        The estimated_cost_usd column in the database is designed to store only the LLM portion, 
-        while the embedding_cost_usd column stores the embedding cost.
-        '''
         state.update({
             "agent_name": agent_name_from_config,
             "request_id": request_id,
@@ -479,7 +469,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "total_tokens": prompt_tokens + completion_tokens,
             "estimated_cost_usd": total_estimated_cost_usd,
             "retrieved_chunk_ids": retrieved_chunk_ids,
-            "retrieved_documents_meta_for_citation": [doc.metadata for doc in retrieved_docs], # Store for potential future use
+            "retrieved_documents_meta_for_citation": [doc.metadata for doc in retrieved_docs],
             "citations": parsed_citations,
         })
 
@@ -537,7 +527,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
         return state
 
 
-
 def should_continue(state: AgentState) -> str:
     """Routes to the tool node if the model requests it, otherwise ends."""
     if not state or not state.get('messages'):
@@ -568,6 +557,3 @@ def get_agent_workflow(tools: List[BaseTool]):
     workflow.add_edge("call_tool", "agent")
 
     return workflow
-
-
-#22
