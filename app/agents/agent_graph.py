@@ -67,7 +67,7 @@ class AgentState(TypedDict):
     temp_document_ids: List[str]
     retrieved_documents_meta_for_citation: List[
         Dict[str, Any]]
-
+    parsed_citations: List[Dict[str, Any]]
 
 async def call_model(state: AgentState, config: RunnableConfig):
     """
@@ -146,18 +146,21 @@ async def call_model(state: AgentState, config: RunnableConfig):
         if retrieved_docs:
             source_strings = []
             for i, doc in enumerate(retrieved_docs, 1):
-                meta = doc.metadata
+                meta = doc.metadata.copy()
                 doc_name = meta.get('doc_name', 'Unknown')
                 page_num = meta.get('page_number')
                 source_label = f"[{i}] {doc_name}" + (f" (Page {page_num})" if page_num else "")
                 source_strings.append(source_label)
+
+                # CORRECTED: Add the chunk's page_content to the source_map
+                meta['chunk_content'] = doc.page_content
                 source_map[i] = meta
             formatted_sources_str = "\n".join(source_strings)
-            retrieved_docs_str = "\n\n".join([f"## Context from Source [{i}]:\n{doc.page_content}" for i, doc in enumerate(retrieved_docs, 1)])
+            retrieved_docs_str = "\n\n".join(
+                [f"## Context from Source [{i}]:\n{doc.page_content}" for i, doc in enumerate(retrieved_docs, 1)])
         else:
             formatted_sources_str = "No documents were found matching the query."
             retrieved_docs_str = "No context was retrieved."
-
 
         if agent_config.execution_prompt:
             logger.info("Using custom 'execution_prompt' from agent configuration.")
@@ -415,22 +418,34 @@ async def call_model(state: AgentState, config: RunnableConfig):
             response_text = response.content
             retrieved_meta = state.get("retrieved_documents_meta_for_citation", [])
 
-
             # 2. Parse citations from the response
             parsed_citations = extract_citations_from_text(response_text, source_map)
+            logger.info(f"Final parsed citations from LLM: {parsed_citations}")
+
+            for cit in parsed_citations:
+                source_index = cit.get('source_index')
+                if source_index and source_index in source_map:
+                    source_meta = source_map[source_index]
+                    # Pass the full content of the chunk as the snippet
+                    cit['snippet'] = source_meta.get('chunk_content')
+                else:
+                    cit['snippet'] = 'Snippet not available.'
 
             message_id = await create_chat_message(
                 db=db_session,
                 session_id=session_id,
                 sender="ai",
-                content=response_text
+                content=response_text,
+                meta = {"citations": parsed_citations} if parsed_citations else None
             )
+            logger.info(f"AI message saved with ID {message_id}")
 
             # 3. Save each parsed citation to the database
             if parsed_citations:
                 logger.info(f"Saving {len(parsed_citations)} citations for message_id {message_id}.")
                 for cit in parsed_citations:
-                    if 'chunk_id' in cit and cit['chunk_id'] is not None:
+                    if cit.get("chunk_id") is not None:
+                        # Note: You might want to save the snippet to the database as well
                         await create_citation(
                             db=db_session,
                             message_id=message_id,
@@ -441,6 +456,12 @@ async def call_model(state: AgentState, config: RunnableConfig):
                         )
                     else:
                         logger.warning(f"Skipping citation due to missing chunk_id: {cit}")
+
+            # The state is updated with the final, complete citations here.
+            state["parsed_citations"] = parsed_citations
+        else:
+            # If no AIMessage, ensure parsed_citations is an empty list
+            state["parsed_citations"] = []
 
 
 
@@ -553,3 +574,6 @@ def get_agent_workflow(tools: List[BaseTool]):
     workflow.add_edge("call_tool", "agent")
 
     return workflow
+
+
+#22
