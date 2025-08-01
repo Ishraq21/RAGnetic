@@ -170,6 +170,7 @@ async def query_agent(
         # Retrieve the final state and other info from the output
         # `ainvoke` typically returns the final state directly
         final_state = final_state_output  # Assuming ainvoke returns the AgentState dict
+        extracted_citations = final_state.get("citations", [])
 
         # IMPORTANT: Extract retrieved_documents_meta_for_citation and accumulated_content
         # from the final_state returned by the agent.
@@ -183,6 +184,7 @@ async def query_agent(
         final_state = {"error": True, "errorMessage": str(e)}
         retrieved_documents_meta_for_citation = []
         ai_response_content_str = ""
+        extracted_citations = []
 
     # Extract AI reply (safely)
     # ai_content = ""
@@ -190,7 +192,6 @@ async def query_agent(
     #     ai_content = final_state["messages"][-1].content # This can be problematic if last message is tool_call
 
     # NEW: Extract citations from AI response
-    extracted_citations = final_state.get("parsed_citations", [])
     if extracted_citations:
         logger.info(f"Using {len(extracted_citations)} parsed citations for run {request_id}.")
     else:
@@ -208,10 +209,10 @@ async def query_agent(
                 sender="ai",
                 content=ai_response_content_str,
                 timestamp=datetime.utcnow(),
-                meta=ai_message_meta  # NEW: Save meta for AI message
+                meta=ai_message_meta
             )
         )
-        await db.commit()  # Commit after saving AI message
+        await db.commit()
 
     # Save metrics to the database
     if final_state.get("total_tokens") is not None:

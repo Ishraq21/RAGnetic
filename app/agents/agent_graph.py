@@ -422,14 +422,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
             parsed_citations = extract_citations_from_text(response_text, source_map)
             logger.info(f"Final parsed citations from LLM: {parsed_citations}")
 
-            for cit in parsed_citations:
-                source_index = cit.get('source_index')
-                if source_index and source_index in source_map:
-                    source_meta = source_map[source_index]
-                    # Pass the full content of the chunk as the snippet
-                    cit['snippet'] = source_meta.get('chunk_content')
-                else:
-                    cit['snippet'] = 'Snippet not available.'
+
 
             message_id = await create_chat_message(
                 db=db_session,
@@ -458,10 +451,10 @@ async def call_model(state: AgentState, config: RunnableConfig):
                         logger.warning(f"Skipping citation due to missing chunk_id: {cit}")
 
             # The state is updated with the final, complete citations here.
-            state["parsed_citations"] = parsed_citations
+
         else:
             # If no AIMessage, ensure parsed_citations is an empty list
-            state["parsed_citations"] = []
+            parsed_citations = [] # <-- Use a local variable here
 
 
 
@@ -486,7 +479,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "total_tokens": prompt_tokens + completion_tokens,
             "estimated_cost_usd": total_estimated_cost_usd,
             "retrieved_chunk_ids": retrieved_chunk_ids,
-            "retrieved_documents_meta_for_citation": [doc.metadata for doc in retrieved_docs] # Store for potential future use
+            "retrieved_documents_meta_for_citation": [doc.metadata for doc in retrieved_docs], # Store for potential future use
+            "citations": parsed_citations,
         })
 
         current_timestamp = datetime.utcnow()
