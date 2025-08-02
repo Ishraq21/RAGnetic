@@ -17,6 +17,8 @@ from git import Repo, InvalidGitRepositoryError, NoSuchPathError, GitCommandErro
 from langchain_community.document_loaders import GitLoader
 from langchain_core.documents import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter, Language
+from pathlib import PurePosixPath
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -193,13 +195,50 @@ async def _load_and_chunk(repo_path: str, branch: Optional[str], agent_config: O
             splitter = RecursiveCharacterTextSplitter.from_language(
                 language=lang, chunk_size=1000, chunk_overlap=100
             )
-            for chunk in splitter.split_documents([doc]):
+            for idx, chunk in enumerate(splitter.split_documents([doc])):
                 # Preserve all rich metadata from the document onto the chunk
                 chunk.metadata = {**chunk.metadata, **doc.metadata}
+
+
+                rel_path = PurePosixPath(chunk.metadata["file_path_in_repo"]).as_posix()
+                header = f"FILE: {rel_path}\n\n"
+                if not chunk.page_content.startswith("FILE:"):
+                    chunk.page_content = header + chunk.page_content
+
+                chunk_idx = idx  # 'idx' comes from enumerate(...)
+
+                identity_meta = {
+                    "doc_name": rel_path,  # groups chunks from the same file
+                    "source_name": rel_path,  # used by _generate_chunk_id
+                    "chunk_index": chunk_idx,
+                }
+
+                raw_id = f"{rel_path}:{chunk_idx}"
+                full_hash = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
+                short_hash = full_hash[:8]  # shorter but unique per repo
+
+                identity_meta["original_doc_id"] = full_hash
+                chunk.id = short_hash
+
+                chunk.metadata = {**chunk.metadata, **identity_meta}
                 chunked.append(chunk)
 
         logger.info(
             f"Chunked {len(processed_docs)} processed files into {len(chunked)} code chunks for '{repo_path}' with enriched metadata.")
+
+        all_paths = sorted({d.metadata["file_path_in_repo"] for d in processed_docs})
+        listing_doc = Document(
+            page_content="\n".join(all_paths),
+            metadata={
+                **generate_base_metadata(source, source_context=repo_path, source_type="code_repository"),
+                "doc_name": "__repo_file_listing__",
+                "source_name": "__repo_file_listing__",
+                "chunk_index": 0,
+                "original_doc_id": hashlib.sha256(repo_path.encode("utf-8")).hexdigest(),
+            },
+            id=hashlib.sha256(f"{repo_path}:listing".encode()).hexdigest()[:8],
+        )
+        chunked.append(listing_doc)
         return chunked
 
     except (InvalidGitRepositoryError, NoSuchPathError) as git_loader_e:

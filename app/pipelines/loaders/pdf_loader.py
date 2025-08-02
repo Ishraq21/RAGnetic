@@ -82,18 +82,29 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None, sourc
                     continue
 
                 if processed_text.strip():
-                    metadata = generate_base_metadata(source, source_context=safe_file_path.name, source_type="file")
-                    # Add PDF-specific keys
-                    metadata["source_path"] = str(safe_file_path.resolve())
-                    metadata["file_name"] = safe_file_path.name
-                    metadata["file_type"] = safe_file_path.suffix.lower()
-                    metadata["page_number"] = page_num + 1
-                    metadata["num_pages"] = pdf_document.page_count
-
-                    doc = Document(
-                        page_content=processed_text,
-                        metadata={**metadata}
+                    metadata = generate_base_metadata(
+                        source,
+                        source_context=safe_file_path.name,
+                        source_type="file",
                     )
+
+                    # PDF-specific fields plus the three that mark this page as a finished chunk
+                    metadata.update({
+                        "source_path": str(safe_file_path.resolve()),
+                        "file_name": safe_file_path.name,
+                        "file_type": safe_file_path.suffix.lower(),
+                        "page_number": page_num + 1,
+                        "num_pages": pdf_document.page_count,
+                        "doc_name": safe_file_path.name,      # groups all pages of the same file
+                        "source_name": safe_file_path.name,   # used by _generate_chunk_id
+                        "chunk_index": page_num,              # 0-based page index
+                    })
+
+                    doc_id = f"{safe_file_path.stem}-p{page_num}"
+                    metadata.setdefault("original_doc_id", doc_id)
+                    doc = Document(page_content=processed_text, metadata=metadata, id=doc_id)
+
+
                     docs.append(doc)
                 else:
                     logger.debug(f"Page {page_num + 1} of '{safe_file_path.name}' had no content after policy application or was empty.")

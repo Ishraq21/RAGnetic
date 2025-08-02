@@ -106,6 +106,22 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None, sourc
             metadata["file_type"] = safe_file_path.suffix.lower()
             metadata["chunk_index"] = chunk_idx
 
+            metadata.update(
+                {
+                    "source_path": str(safe_file_path.resolve()),
+                    "file_name": safe_file_path.name,
+                    "file_type": safe_file_path.suffix.lower(),
+                    "doc_name": safe_file_path.name,  # groups all chunks of this file
+                    "source_name": safe_file_path.name,  # used by _generate_chunk_id
+                    "chunk_index": chunk_idx,  # 0-based index per chunk
+                }
+            )
+
+            # reproducible, stable ID for each chunk
+            doc_id = f"{safe_file_path.stem}-{chunk_idx}"
+            metadata.setdefault("original_doc_id", doc_id)
+
+            chunk.id = doc_id
             chunk.metadata = {**chunk.metadata, **metadata}
 
         logger.info(f"Successfully chunked {safe_file_path.name} into {len(chunks)} IaC chunks with enriched metadata.")
