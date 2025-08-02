@@ -1251,8 +1251,10 @@ body:not(.login-body) {
 }
 
 #citation-popup {
-    position: absolute;
+    position: fixed;
     max-width: 400px;
+    display: block !important;
+    visibility: hidden;
     background: var(--card-background);
     border: 1px solid var(--accent-color);
     border-radius: 10px;
@@ -1265,27 +1267,31 @@ body:not(.login-body) {
 }
 
 #citation-popup.visible {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateY(0);
+  visibility: visible;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: translateY(0) !important;
 }
 
-.popup-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 15px;
-    border-bottom: 1px solid var(--border-color);
-    background-color: rgba(99, 93, 255, 0.1);
+/* === Popup internals === */
+#citation-popup .popup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--border-color);
+  background-color: rgba(99,93,255,0.1);
 }
 
-.popup-title {
-    font-size: 0.9em;
-    font-weight: bold;
-    color: var(--accent-color);
+#citation-popup .popup-title {
+  font-size: 0.9em;
+  font-weight: bold;
+  color: var(--accent-color);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.popup-close-btn {
+ #citation-popup .popup-close-btn {
     background: none;
     border: none;
     color: var(--muted-text);
@@ -1295,7 +1301,7 @@ body:not(.login-body) {
     padding: 0;
 }
 
-.popup-content {
+#citation-popup .popup-content {
     padding: 15px;
     max-height: 200px;
     overflow-y: auto;
@@ -1303,7 +1309,7 @@ body:not(.login-body) {
     line-height: 1.6;
 }
 
-.popup-snippet-error {
+#citation-popup .popup-snippet-error {
     color: var(--error-color);
     font-style: italic;
 }

@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Coroutine
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -29,17 +29,17 @@ _TEMP_VECTORSTORE_DIR = _APP_PATHS["VECTORSTORE_DIR"] / "temp_chat_data"
 
 class CitationSnippet(BaseModel):
     id: int = Field(..., description="The ID of the document chunk.")
-    content: str = Field(..., description="The full content snippet of the chunk.")
+    snippet: str = Field(..., description="The content snippet of the chunk.")
     document_name: str = Field(..., description="The name of the source document.")
     page_number: Optional[int] = Field(None, description="The page number in the source document.")
 
 
-@router.get("/citation-snippet", response_model=Dict[str, str])
+@router.get("/citation-snippet",  response_model=CitationSnippet)
 async def get_citation_snippet(
         chunk_id: int = Query(..., description="The ID of the document chunk."),
         current_user: User = Depends(get_current_user_from_api_key),
         db: AsyncSession = Depends(get_db)
-) -> Dict[str, str]:
+) -> CitationSnippet:
     """
     Retrieves a single text snippet for a given citation from the database.
     """
@@ -51,7 +51,12 @@ async def get_citation_snippet(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail="Citation source not found.")
 
-    return {"snippet": chunk['content']}
+    return CitationSnippet(
+        id=chunk["id"],
+        snippet=chunk["content"],
+        document_name=chunk["document_name"],
+        page_number=chunk.get("page_number")
+    )
 
 
 @router.get("/citation-snippets", response_model=List[CitationSnippet])
