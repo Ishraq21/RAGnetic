@@ -1,6 +1,7 @@
+# app/pipelines/directory_loader.py
+
 import os
 import logging
-import re
 from pathlib import Path
 from typing import List, Optional
 from langchain_core.documents import Document
@@ -9,7 +10,9 @@ import concurrent.futures
 from datetime import datetime
 
 from app.core.config import get_path_settings
-from app.schemas.agent import AgentConfig, DataPolicy, DataSource  # MODIFIED: Import DataSource
+from app.schemas.agent import AgentConfig, DataSource, DataPolicy
+from app.pipelines.data_policy_utils import apply_data_policies
+from app.pipelines.metadata_utils import generate_base_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -19,17 +22,10 @@ _PROJECT_ROOT_FROM_CONFIG = _PATH_SETTINGS["PROJECT_ROOT"]
 _ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"]
 logger.debug(
     f"Loaded allowed data directories for directory loader from central config: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
-
-
 # --- End Centralized Configuration ---
 
 
 def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
-    """
-    Validates if the input_path resolves to a location within the configured
-    allowed data directories. Raises ValueError if unsafe.
-    Returns the resolved absolute Path if safe.
-    """
     resolved_path = Path(input_path).resolve()
 
     is_safe = False
@@ -44,69 +40,14 @@ def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
     return resolved_path
 
 
-def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bool]:
-    """
-    Applies data policies (redaction/filtering) to the text content.
-    Returns the processed text and a boolean indicating if the document (file) was blocked.
-    """
-    processed_text = text
-    document_blocked = False
-
-    for policy in policies:
-        if policy.type == 'pii_redaction' and policy.pii_config:
-            pii_config = policy.pii_config
-            for pii_type in pii_config.types:
-                pattern = None
-                if pii_type == 'email':
-                    pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-                elif pii_type == 'phone':
-                    pattern = r'\b(?:\+\d{1,3}[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b'
-                elif pii_type == 'ssn':
-                    pattern = r'\b\d{3}[- ]?\d{2}[- ]?\d{4}\b'
-                elif pii_type == 'credit_card':
-                    pattern = r'\b(?:4\d{3}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|5[1-5]\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|3[47]\d{13}|6(?:011|5\d{2})[- ]?\d{4}[- ]?\d{4}[- ]?\d{4})\b'
-                elif pii_type == 'name':
-                    logger.warning(
-                        f"PII type '{pii_type}' (name) is complex and not fully implemented for regex-based redaction. Skipping for now.")
-                    continue
-
-                if pattern:
-                    replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 8)
-                    if pii_type == 'credit_card': replacement = pii_config.redaction_placeholder or (
-                                pii_config.redaction_char * 16)
-                    processed_text = re.sub(pattern, replacement, processed_text)
-                    logger.debug(f"Applied {pii_type} redaction policy. Replaced with: {replacement}")
-
-        elif policy.type == 'keyword_filter' and policy.keyword_filter_config:
-            kw_config = policy.keyword_filter_config
-            for keyword in kw_config.keywords:
-                if keyword in processed_text:
-                    if kw_config.action == 'redact':
-                        replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
-                        processed_text = processed_text.replace(keyword, replacement)
-                        logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
-                    elif kw_config.action == 'block_chunk':
-                        replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
-                        processed_text = processed_text.replace(keyword, replacement)
-                        logger.warning(
-                            f"Keyword '{keyword}' found. This file contains content that should ideally be blocked at chunk level. Currently redacting.")
-                    elif kw_config.action == 'block_document':
-                        logger.warning(
-                            f"Keyword '{keyword}' found. File is marked for blocking by policy. Content will be discarded.")
-                        document_blocked = True
-                        return "", document_blocked
-
-    return processed_text, document_blocked
-
-
 def _process_single_file(file_path: Path, policies: Optional[List[DataPolicy]], source: Optional[DataSource]) -> \
-Optional[Document]:  # MODIFIED: Added source parameter
+Optional[Document]:
     """
     Synchronously processes a single text file from a directory.
     This function is designed to be run in a ThreadPoolExecutor.
     """
     if file_path.is_dir():
-        return None  # Skip directories
+        return None
 
     try:
         if file_path.suffix.lower() == '.txt':
@@ -118,7 +59,7 @@ Optional[Document]:  # MODIFIED: Added source parameter
 
             if policies:
                 logger.debug(f"Applying data policies to {file_path.name} in directory loader (worker)...")
-                processed_text, document_blocked = _apply_data_policies(text, policies)
+                processed_text, document_blocked = apply_data_policies(text, policies, policy_context="file")
 
             if document_blocked:
                 logger.warning(
@@ -126,29 +67,15 @@ Optional[Document]:  # MODIFIED: Added source parameter
                 return None
 
             if processed_text.strip():
-                # Create base metadata for the document
-                metadata = {
-                    "source_path": str(file_path.resolve()),  # Full path for lineage
-                    "file_name": file_path.name,
-                    "file_type": file_path.suffix.lower(),
-                    "load_timestamp": datetime.now().isoformat(),  # Add load timestamp
-                }
-                # Add general source info if available from the DataSource object
-                if source:
-                    metadata["source_type_config"] = source.model_dump()  # Store entire DataSource config
-                    if source.url: metadata["source_url"] = source.url
-                    if source.db_connection: metadata["source_db_connection"] = source.db_connection
-                    if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
-                    if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
-
-                # Note: For directory loader, source_type is typically 'local',
-                # but we're pulling specific file types (like .txt) for processing here.
-                # The primary source type comes from the DataSource object itself.
-                metadata["source_type"] = source.type if source else "local_directory"  # Use DataSource type or default
+                metadata = generate_base_metadata(source, source_context=file_path.name, source_type="file")
+                # Add directory-specific keys
+                metadata["source_path"] = str(file_path.resolve())
+                metadata["file_name"] = file_path.name
+                metadata["file_type"] = file_path.suffix.lower()
 
                 return Document(
                     page_content=processed_text,
-                    metadata={**metadata}  # Use the enriched metadata
+                    metadata={**metadata}
                 )
             else:
                 logger.debug(f"File '{file_path.name}' had no content after policy application or was empty.")
@@ -164,7 +91,7 @@ Optional[Document]:  # MODIFIED: Added source parameter
 
 
 async def load(folder_path: str, agent_config: Optional[AgentConfig] = None, source: Optional[DataSource] = None) -> \
-List[Document]:  # MODIFIED: Added source parameter
+List[Document]:
     """
     Loads all files from a local directory, applying data policies.
     Supports parallel loading of files within the directory based on agent_config.scaling.
@@ -197,7 +124,6 @@ List[Document]:  # MODIFIED: Added source parameter
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
                 tasks = [
                     loop.run_in_executor(executor, _process_single_file, file_path, policies, source)
-                    # <-- Passed source
                     for file_path in all_files_in_dir
                 ]
                 processed_results = await asyncio.gather(*tasks)
@@ -206,10 +132,8 @@ List[Document]:  # MODIFIED: Added source parameter
 
         else:
             logger.info(f"Using sequential ingestion for directory: {safe_folder_path}")
-            # Sequential processing
             for file_path in all_files_in_dir:
-                # MODIFIED: Pass 'source' object to _process_single_file
-                doc = await asyncio.to_thread(_process_single_file, file_path, policies, source)  # <-- Passed source
+                doc = await asyncio.to_thread(_process_single_file, file_path, policies, source)
                 if doc is not None:
                     docs.append(doc)
 

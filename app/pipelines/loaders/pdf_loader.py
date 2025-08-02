@@ -1,7 +1,7 @@
-import fitz  # This is the PyMuPDF library
+# app/pipelines/pdf_loader.py
+
+import fitz
 import logging
-import os
-import re # Added for PII redaction
 from pathlib import Path
 from typing import List, Optional
 from langchain_core.documents import Document
@@ -9,14 +9,16 @@ import asyncio
 from datetime import datetime
 
 from app.core.config import get_path_settings
-from app.schemas.agent import AgentConfig, DataPolicy, DataSource
+from app.schemas.agent import AgentConfig, DataSource
+from app.pipelines.data_policy_utils import apply_data_policies
+from app.pipelines.metadata_utils import generate_base_metadata
 
 logger = logging.getLogger(__name__)
 
 # --- Centralized Path Configuration ---
 _PATH_SETTINGS = get_path_settings()
-_PROJECT_ROOT_FROM_CONFIG = _PATH_SETTINGS["PROJECT_ROOT"] # Store project root if needed
-_ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"] # Store resolved allowed dirs
+_PROJECT_ROOT_FROM_CONFIG = _PATH_SETTINGS["PROJECT_ROOT"]
+_ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"]
 logger.debug(f"Loaded allowed data directories for PDF loader from central config: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
 # --- End Centralized Configuration ---
 
@@ -30,7 +32,7 @@ def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
     resolved_path = Path(input_path).resolve()
 
     is_safe = False
-    for allowed_dir in _ALLOWED_DATA_DIRS_RESOLVED: # This variable now comes from central config
+    for allowed_dir in _ALLOWED_DATA_DIRS_RESOLVED:
         if resolved_path.is_relative_to(allowed_dir):
             is_safe = True
             break
@@ -40,68 +42,8 @@ def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
 
     return resolved_path
 
-def _apply_data_policies(text: str, policies: List[DataPolicy]) -> tuple[str, bool]:
-    """
-    Applies data policies (redaction/filtering) to the text content.
-    Returns the processed text and a boolean indicating if the document (page) was blocked.
-    """
-    processed_text = text
-    document_blocked = False # Renamed from original 'document_blocked' to 'page_blocked' for clarity in PDF context
-
-    for policy in policies:
-        if policy.type == 'pii_redaction' and policy.pii_config:
-            pii_config = policy.pii_config
-            for pii_type in pii_config.types:
-                pattern = None
-                if pii_type == 'email':
-                    pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-                elif pii_type == 'phone':
-                    # Common phone number formats (adjust or enhance regex as needed for international formats)
-                    pattern = r'\b(?:\+\d{1,3}[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b'
-                elif pii_type == 'ssn':
-                    pattern = r'\b\d{3}[- ]?\d{2}[- ]?\d{4}\b'
-                elif pii_type == 'credit_card':
-                    # Basic credit card pattern (major issuers, e.g., Visa, Mastercard, Amex, Discover)
-                    pattern = r'\b(?:4\d{3}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|5[1-5]\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|3[47]\d{13}|6(?:011|5\d{2})[- ]?\d{4}[- ]?\d{4}[- ]?\d{4})\b'
-                elif pii_type == 'name':
-                    # Name redaction is complex and context-dependent.
-                    # For initial phase, might require a simple list of common names or a rule.
-                    # More advanced NLP or entity recognition would be needed for robust name redaction.
-                    logger.warning(f"PII type '{pii_type}' (name) is complex and not fully implemented for regex-based redaction. Skipping for now.")
-                    continue
-
-                if pattern:
-                    replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 8) # Generic length
-                    if pii_type == 'credit_card': replacement = pii_config.redaction_placeholder or (pii_config.redaction_char * 16) # Specific length for CC
-                    processed_text = re.sub(pattern, replacement, processed_text)
-                    logger.debug(f"Applied {pii_type} redaction policy. Replaced with: {replacement}")
-
-        elif policy.type == 'keyword_filter' and policy.keyword_filter_config:
-            kw_config = policy.keyword_filter_config
-            for keyword in kw_config.keywords:
-                if keyword in processed_text:
-                    if kw_config.action == 'redact':
-                        replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
-                        processed_text = processed_text.replace(keyword, replacement)
-                        logger.debug(f"Applied keyword redaction for '{keyword}'. Replaced with: {replacement}")
-                    elif kw_config.action == 'block_chunk':
-                        replacement = kw_config.redaction_placeholder or (kw_config.redaction_char * len(keyword))
-                        processed_text = processed_text.replace(keyword, replacement)
-                        logger.warning(f"Keyword '{keyword}' found. This page contains content that should ideally be blocked at chunk level. Currently redacting.")
-                    elif kw_config.action == 'block_document':
-                        logger.warning(f"Keyword '{keyword}' found. Page is marked for blocking by policy. Content will be discarded.")
-                        document_blocked = True
-                        return "", document_blocked
-
-    return processed_text, document_blocked
-
 
 async def load(file_path: str, agent_config: Optional[AgentConfig] = None, source: Optional[DataSource] = None) -> List[Document]:
-    """
-    Loads a PDF file and creates a Document for each page,
-    with path safety validation, data policy application, and standardized error logging.
-    Now supports asynchronous loading and enriched metadata.
-    """
     docs = []
     pdf_document = None
     try:
@@ -133,40 +75,28 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None, sourc
 
                 if agent_config and agent_config.data_policies:
                     logger.debug(f"Applying data policies to page {page_num + 1} of {safe_file_path.name}...")
-                    processed_text, page_blocked = _apply_data_policies(text, agent_config.data_policies)
+                    processed_text, page_blocked = apply_data_policies(text, agent_config.data_policies, policy_context="page")
 
                 if page_blocked:
                     logger.warning(f"Page {page_num + 1} of '{safe_file_path.name}' was completely blocked by a data policy and will not be processed.")
                     continue
 
                 if processed_text.strip():
-                    # Create base metadata from file itself
-                    metadata = {
-                        "source_path": str(safe_file_path.resolve()),
-                        "file_name": safe_file_path.name,
-                        "file_type": safe_file_path.suffix.lower(),
-                        "load_timestamp": datetime.now().isoformat(),
-                        "page_number": page_num + 1,
-                        "num_pages": pdf_document.page_count
-                    }
-                    # Add granular DataSource info if available
-                    if source: # NEW: Add info from DataSource object
-                        metadata["source_type_config"] = source.model_dump()
-                        # Add specific fields from DataSource for better traceability
-                        if source.url: metadata["source_url"] = source.url
-                        if source.db_connection: metadata["source_db_connection"] = source.db_connection
-                        if source.folder_id: metadata["source_gdoc_folder_id"] = source.folder_id
-                        if source.document_ids: metadata["source_gdoc_document_ids"] = source.document_ids
-
+                    metadata = generate_base_metadata(source, source_context=safe_file_path.name, source_type="file")
+                    # Add PDF-specific keys
+                    metadata["source_path"] = str(safe_file_path.resolve())
+                    metadata["file_name"] = safe_file_path.name
+                    metadata["file_type"] = safe_file_path.suffix.lower()
+                    metadata["page_number"] = page_num + 1
+                    metadata["num_pages"] = pdf_document.page_count
 
                     doc = Document(
                         page_content=processed_text,
-                        metadata={**metadata} # Use the enriched metadata
+                        metadata={**metadata}
                     )
                     docs.append(doc)
                 else:
                     logger.debug(f"Page {page_num + 1} of '{safe_file_path.name}' had no content after policy application or was empty.")
-
 
         logger.info(f"Loaded {len(docs)} processed pages from {safe_file_path.name} with enriched metadata.")
         return docs
