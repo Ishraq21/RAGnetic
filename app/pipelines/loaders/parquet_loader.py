@@ -88,19 +88,31 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None, sourc
                 continue
 
             if processed_text.strip():
-                metadata = generate_base_metadata(source, source_context=safe_file_path.name, source_type="file")
-                # Add Parquet/ORC-specific keys
-                metadata["source_path"] = str(safe_file_path.resolve())
-                metadata["file_name"] = safe_file_path.name
-                metadata["file_type"] = safe_file_path.suffix.lower()
-                metadata["row_number"] = index + 1
-                metadata["record_id"] = record_id
-
-                doc = Document(
-                    page_content=processed_text,
-                    metadata={**metadata}
+                metadata = generate_base_metadata(
+                    source,
+                    source_context=safe_file_path.name,
+                    source_type="file",
                 )
+
+                metadata.update(
+                    {
+                        "source_path": str(safe_file_path.resolve()),
+                        "file_name": safe_file_path.name,
+                        "file_type": safe_file_path.suffix.lower(),
+                        "row_number": index + 1,
+                        "record_id": record_id,
+                        "doc_name": safe_file_path.name,
+                        "source_name": safe_file_path.name,
+                        "chunk_index": index,
+                    }
+                )
+
+                # reproducible row-level ID (optional but helpful)
+                doc_id = f"{safe_file_path.stem}-{index}"
+
+                doc = Document(page_content=processed_text, metadata=metadata, id=doc_id)
                 docs.append(doc)
+
             else:
                 logger.debug(
                     f"Row {index + 1} of '{safe_file_path.name}' (Record ID: {record_id}) had no content after policy application or was empty.")
