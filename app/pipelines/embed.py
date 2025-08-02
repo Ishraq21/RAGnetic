@@ -5,7 +5,7 @@ import logging
 import os
 import uuid
 from itertools import groupby
-from typing import List, Dict
+from typing import List
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS, Chroma
@@ -62,43 +62,56 @@ def _get_chunks_from_documents(
         reproducible_ids: bool,
 ) -> List[LangChainDocument]:
     """
-    Applies a chunking strategy, correctly handling multi-page documents by grouping
-    them by source before assigning chunk indexes to prevent UNIQUE constraint violations.
+    Applies a chunking strategy, correctly handling multi-page/source documents.
     Supports 'none', 'semantic', and 'default' modes.
+    This version intelligently handles documents that are already pre-chunked by loaders.
     """
     final_chunks_list: List[LangChainDocument] = []
     chunking_mode = chunking_config.mode
-    logger.info(f"Applying chunking mode: '{chunking_mode}'")
+    logger.info(f"Applying chunking strategy from config: '{chunking_mode}'")
 
+    # Group documents by their source for consistent chunk indexing
     def get_source_key(doc):
-        return doc.metadata.get('source_path') or doc.metadata.get('source_url') or doc.metadata.get('source')
+        # Using a tuple of standardized metadata keys to create a consistent source key
+        metadata_dict = doc.metadata.get("source_config", {})
+        source_id = metadata_dict.get("path") or metadata_dict.get("url") or metadata_dict.get("db_connection")
+        return source_id
 
     documents.sort(key=get_source_key)
 
-    # Dictionary to hold chunks grouped by their original source
-    grouped_chunks: Dict[str, List[LangChainDocument]] = {}
+    # Check if documents are already pre-chunked by the loader
+    is_pre_chunked = all('chunk_index' in doc.metadata for doc in documents)
+    if is_pre_chunked or chunking_mode == 'none':
+        logger.info(
+            "Documents appear to be pre-chunked by a loader or chunking mode is 'none'. Treating documents directly as chunks.")
+        # Treat each document as a final chunk. We just need to ensure IDs and metadata are correctly set.
+        for idx, doc in enumerate(documents):
+            # If chunk_id is not already present, generate one
+            if "chunk_id" not in doc.metadata or not doc.metadata["chunk_id"]:
+                original_doc_id = doc.metadata.get("original_doc_id", "")
+                cid = _generate_chunk_id(doc.page_content, original_doc_id, reproducible_ids, idx)
+                doc.id = cid
+                doc.metadata["chunk_id"] = cid
 
+            # Ensure doc_name and chunk_index are set for DB persistence
+            if "doc_name" not in doc.metadata:
+                doc.metadata["doc_name"] = os.path.basename(
+                    doc.metadata.get('source_path', doc.metadata.get('source_url', "Unknown Document")))
+            if "chunk_index" not in doc.metadata:
+                doc.metadata["chunk_index"] = idx
+
+            final_chunks_list.append(doc)
+
+        logger.info(f"Accepted {len(final_chunks_list)} pre-chunked documents as final chunks.")
+        return final_chunks_list
+
+    # If documents are not pre-chunked, proceed with the configured strategy
     for source_key, docs_from_source_group in groupby(documents, key=get_source_key):
         docs_from_source = list(docs_from_source_group)
         doc_name = os.path.basename(source_key) if source_key else "Unknown Document"
-
         current_source_chunks: List[LangChainDocument] = []
 
-        if chunking_mode == 'none':
-            logger.info(f"Chunking mode is 'none' for source '{doc_name}'. Treating documents directly as chunks.")
-            for idx, doc_part in enumerate(docs_from_source):
-                # Ensure metadata for doc_name and chunk_index is set
-                doc_part.metadata["doc_name"] = doc_name
-                doc_part.metadata["chunk_index"] = idx
-
-                # Generate and assign chunk_id
-                cid = _generate_chunk_id(doc_part.page_content, doc_part.metadata.get('original_doc_id', ''),
-                                         reproducible_ids, idx)
-                doc_part.id = cid
-                doc_part.metadata["chunk_id"] = cid
-                current_source_chunks.append(doc_part)
-
-        elif chunking_mode == 'semantic':
+        if chunking_mode == 'semantic':
             logger.info(f"Attempting semantic chunking using LlamaIndex for source '{doc_name}'...")
             try:
                 langchain_embeddings = get_embedding_model(embedding_model_name)
@@ -107,26 +120,18 @@ def _get_chunks_from_documents(
                     embed_model=llama_embeddings,
                     breakpoint_percentile_threshold=chunking_config.breakpoint_percentile_threshold,
                 )
-                # Convert LangChainDocuments to LlamaDocuments for the splitter
                 llama_docs = [LlamaDocument(text=doc.page_content, metadata=doc.metadata) for doc in docs_from_source]
                 nodes = semantic_splitter.get_nodes_from_documents(llama_docs)
 
                 for idx, node in enumerate(nodes):
-                    original_doc_id = node.metadata.get("original_doc_id", "")
                     content = node.get_content()
+                    metadata = node.metadata
 
-                    # Generate and assign chunk_id
-                    if reproducible_ids:
-                        content_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
-                        generated_chunk_id = f"{original_doc_id}-{idx}-{content_hash[:8]}"
-                    else:
-                        generated_chunk_id = str(uuid.uuid4())
+                    original_doc_id = metadata.get("original_doc_id", "")
+                    generated_chunk_id = _generate_chunk_id(content, original_doc_id, reproducible_ids, idx)
 
-                    # Update metadata and create new LangChainDocument
-                    metadata = {**node.metadata, "chunk_id": generated_chunk_id, "doc_name": doc_name,
-                                "chunk_index": idx}
-                    new_doc = LangChainDocument(page_content=content, metadata=metadata)
-                    new_doc.id = generated_chunk_id  # Ensure LangChain Document ID is set
+                    metadata = {**metadata, "chunk_id": generated_chunk_id, "doc_name": doc_name, "chunk_index": idx}
+                    new_doc = LangChainDocument(page_content=content, metadata=metadata, id=generated_chunk_id)
                     current_source_chunks.append(new_doc)
                 logger.info(
                     f"Successfully applied semantic chunking for source '{doc_name}'. Resulted in {len(current_source_chunks)} chunks.")
@@ -134,25 +139,19 @@ def _get_chunks_from_documents(
                 logger.error(
                     f"Semantic chunking failed for source '{doc_name}': {e}. Falling back to default recursive splitting.",
                     exc_info=True)
-                # If semantic chunking fails, proceed to default recursive splitting for this source
-                current_source_chunks = []  # Clear any partial semantic chunks
-                chunking_mode_for_fallback = 'default'  # Temporarily set mode for this source's fallback
-
-                splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=chunking_config.chunk_size,
-                    chunk_overlap=chunking_config.chunk_overlap
-                )
+                # Fallback to default chunking for this source
+                splitter = RecursiveCharacterTextSplitter(chunk_size=chunking_config.chunk_size,
+                                                          chunk_overlap=chunking_config.chunk_overlap)
                 for doc_part in docs_from_source:
                     chunks_from_page = splitter.split_documents([doc_part])
                     for sub_chunk_idx, chunk in enumerate(chunks_from_page):
-                        chunk.metadata["doc_name"] = doc_name
-                        chunk.metadata["chunk_index"] = sub_chunk_idx  # Use sub_chunk_idx within this part
-                        cid = _generate_chunk_id(chunk.page_content, chunk.metadata.get('original_doc_id', ''),
-                                                 reproducible_ids, sub_chunk_idx)
+                        original_doc_id = chunk.metadata.get('original_doc_id', '')
+                        cid = _generate_chunk_id(chunk.page_content, original_doc_id, reproducible_ids, sub_chunk_idx)
                         chunk.id = cid
                         chunk.metadata["chunk_id"] = cid
+                        chunk.metadata["doc_name"] = doc_name
+                        chunk.metadata["chunk_index"] = sub_chunk_idx
                         current_source_chunks.append(chunk)
-
 
         elif chunking_mode == 'default':
             logger.info(
@@ -161,45 +160,23 @@ def _get_chunks_from_documents(
                 chunk_size=chunking_config.chunk_size,
                 chunk_overlap=chunking_config.chunk_overlap
             )
-            for doc_part in docs_from_source:  # Iterate over each document from the source
-                chunks_from_page = splitter.split_documents([doc_part])  # Split this individual document
-                for chunk_idx, chunk in enumerate(chunks_from_page):  # Enumerate chunks from this page
-                    chunk.metadata["doc_name"] = doc_name
-                    chunk.metadata["chunk_index"] = chunk_idx  # Assign chunk_index relative to this page/doc_part
-                    cid = _generate_chunk_id(chunk.page_content, chunk.metadata.get('original_doc_id', ''),
-                                             reproducible_ids, chunk_idx)
+            for doc_part in docs_from_source:
+                chunks_from_page = splitter.split_documents([doc_part])
+                for chunk_idx, chunk in enumerate(chunks_from_page):
+                    original_doc_id = chunk.metadata.get('original_doc_id', '')
+                    cid = _generate_chunk_id(chunk.page_content, original_doc_id, reproducible_ids, chunk_idx)
                     chunk.id = cid
                     chunk.metadata["chunk_id"] = cid
-                    current_source_chunks.append(chunk)  # Add to current source's chunks
+                    chunk.metadata["doc_name"] = doc_name
+                    chunk.metadata["chunk_index"] = chunk_idx
+                    current_source_chunks.append(chunk)
             logger.info(f"Default chunking for source '{doc_name}' resulted in {len(current_source_chunks)} chunks.")
 
-        else:  # Fallback for any unknown or unspecified chunking mode (treat as pre-chunked)
-            logger.info(
-                f"Chunking mode is '{chunking_mode}' for source '{doc_name}'. Treating documents as pre-chunked.")
-            for idx, doc_part in enumerate(docs_from_source):
-                doc_part.metadata['doc_name'] = doc_name
-                doc_part.metadata['chunk_index'] = idx
-                # Ensure chunk_id is generated even for pre-chunked docs if not present
-                if "chunk_id" not in doc_part.metadata or not doc_part.metadata["chunk_id"]:
-                    cid = _generate_chunk_id(doc_part.page_content, doc_part.metadata.get('original_doc_id', ''),
-                                             reproducible_ids, idx)
-                    doc_part.id = cid
-                    doc_part.metadata["chunk_id"] = cid
-                current_source_chunks.append(doc_part)
-
-        valid_chunks_for_source = []
-        for chunk in current_source_chunks:
-            page_number = chunk.metadata.get("page_number")
-            if page_number is not None and (not isinstance(page_number, int) or page_number < 1):
-                logger.warning(
-                    f"Invalid page number '{page_number}' for chunk in doc '{doc_name}'. Sanitizing to None.")
-                chunk.metadata["page_number"] = None
-            valid_chunks_for_source.append(chunk)
-
-        final_chunks_list.extend(valid_chunks_for_source)
+        final_chunks_list.extend(current_source_chunks)
 
     if not final_chunks_list:
         raise ValueError("No chunks were generated after document splitting across all sources.")
+
     logger.info(f"Chunking resulted in {len(final_chunks_list)} total chunks across all sources.")
     return final_chunks_list
 
@@ -346,7 +323,8 @@ async def embed_agent_data(config: AgentConfig, db: AsyncSession) -> bool:
                 chunk_index=chunk.metadata.get("chunk_index"),
                 content=chunk.page_content,
                 page_number=chunk.metadata.get("page_number"),
-                row_number=chunk.metadata.get("row_number")
+                row_number=chunk.metadata.get("row_number"),
+
             )
             chunk.metadata['chunk_id'] = chunk_id_from_db
 
