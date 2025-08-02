@@ -1323,3 +1323,17 @@ body:not(.login-body) {
   pointer-events: auto !important;
   transform: translateY(0) !important;
 }
+
+/* In your style.css */
+
+.citation-popup .toggle-snippet {
+  display: inline-block;
+  margin-top: 0.5em;
+  font-size: 0.85em;
+  color: #888888;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.citation-popup .toggle-snippet:hover {
+  text-decoration: none;
+}

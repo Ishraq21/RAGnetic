@@ -159,12 +159,15 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None, sourc
             if processed_text.strip():
                 # Create base metadata for the document (row)
                 metadata = {
-                    "source_path": str(safe_file_path.resolve()),  # Full path for lineage
+                    "source_path": str(safe_file_path.resolve()),
                     "file_name": safe_file_path.name,
                     "file_type": safe_file_path.suffix.lower(),
                     "load_timestamp": datetime.now().isoformat(),
-                    "row_number": index + 1,  # Specific for CSV/Parquet rows
-                    "record_id": record_id  # Specific for CSV/Parquet
+                    "row_number": index + 1,
+                    "record_id": record_id,
+                    "chunk_id": index + 1,
+                    "document_name": safe_file_path.name,
+                    "source_type": source.type if source else "local_file"
                 }
                 # Add general source info if available from the DataSource object
                 if source:
