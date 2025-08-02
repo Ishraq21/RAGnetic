@@ -1,3 +1,5 @@
+# app/pipelines/embed.py
+
 import asyncio
 import hashlib
 import json
@@ -5,7 +7,7 @@ import logging
 import os
 import uuid
 from itertools import groupby
-from typing import List
+from typing import List, Dict, Any, Optional
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS, Chroma
@@ -47,11 +49,14 @@ class VectorStoreCreationError(Exception):
     pass
 
 
-def _generate_chunk_id(content: str, original_id: str = "", reproducible: bool = False, idx: int = None) -> str:
-    """Generates a unique ID for a chunk."""
+def _generate_chunk_id(content: str, source_context: str = "", reproducible: bool = False, idx: int = None) -> str:
+    """
+    Generates a unique and potentially reproducible ID for a chunk.
+    This updated version uses the standardized source_context for consistency.
+    """
     if reproducible:
         hash_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
-        return f"{original_id}-{idx}-{hash_digest}" if idx is not None else f"{original_id}-{hash_digest}"
+        return f"{source_context}-{idx}-{hash_digest}" if idx is not None else f"{source_context}-{hash_digest}"
     return str(uuid.uuid4())
 
 
@@ -63,7 +68,6 @@ def _get_chunks_from_documents(
 ) -> List[LangChainDocument]:
     """
     Applies a chunking strategy, correctly handling multi-page/source documents.
-    Supports 'none', 'semantic', and 'default' modes.
     This version intelligently handles documents that are already pre-chunked by loaders.
     """
     final_chunks_list: List[LangChainDocument] = []
@@ -84,21 +88,13 @@ def _get_chunks_from_documents(
     if is_pre_chunked or chunking_mode == 'none':
         logger.info(
             "Documents appear to be pre-chunked by a loader or chunking mode is 'none'. Treating documents directly as chunks.")
-        # Treat each document as a final chunk. We just need to ensure IDs and metadata are correctly set.
         for idx, doc in enumerate(documents):
-            # If chunk_id is not already present, generate one
+            # Ensure chunk_id is generated even for pre-chunked docs if not present
             if "chunk_id" not in doc.metadata or not doc.metadata["chunk_id"]:
-                original_doc_id = doc.metadata.get("original_doc_id", "")
-                cid = _generate_chunk_id(doc.page_content, original_doc_id, reproducible_ids, idx)
+                source_context = doc.metadata.get("source_name", "unknown_source")
+                cid = _generate_chunk_id(doc.page_content, source_context, reproducible_ids, idx)
                 doc.id = cid
                 doc.metadata["chunk_id"] = cid
-
-            # Ensure doc_name and chunk_index are set for DB persistence
-            if "doc_name" not in doc.metadata:
-                doc.metadata["doc_name"] = os.path.basename(
-                    doc.metadata.get('source_path', doc.metadata.get('source_url', "Unknown Document")))
-            if "chunk_index" not in doc.metadata:
-                doc.metadata["chunk_index"] = idx
 
             final_chunks_list.append(doc)
 
@@ -127,8 +123,8 @@ def _get_chunks_from_documents(
                     content = node.get_content()
                     metadata = node.metadata
 
-                    original_doc_id = metadata.get("original_doc_id", "")
-                    generated_chunk_id = _generate_chunk_id(content, original_doc_id, reproducible_ids, idx)
+                    source_context = metadata.get("source_name", "unknown_source")
+                    generated_chunk_id = _generate_chunk_id(content, source_context, reproducible_ids, idx)
 
                     metadata = {**metadata, "chunk_id": generated_chunk_id, "doc_name": doc_name, "chunk_index": idx}
                     new_doc = LangChainDocument(page_content=content, metadata=metadata, id=generated_chunk_id)
@@ -145,8 +141,8 @@ def _get_chunks_from_documents(
                 for doc_part in docs_from_source:
                     chunks_from_page = splitter.split_documents([doc_part])
                     for sub_chunk_idx, chunk in enumerate(chunks_from_page):
-                        original_doc_id = chunk.metadata.get('original_doc_id', '')
-                        cid = _generate_chunk_id(chunk.page_content, original_doc_id, reproducible_ids, sub_chunk_idx)
+                        source_context = chunk.metadata.get("source_name", "unknown_source")
+                        cid = _generate_chunk_id(chunk.page_content, source_context, reproducible_ids, sub_chunk_idx)
                         chunk.id = cid
                         chunk.metadata["chunk_id"] = cid
                         chunk.metadata["doc_name"] = doc_name
@@ -163,8 +159,8 @@ def _get_chunks_from_documents(
             for doc_part in docs_from_source:
                 chunks_from_page = splitter.split_documents([doc_part])
                 for chunk_idx, chunk in enumerate(chunks_from_page):
-                    original_doc_id = chunk.metadata.get('original_doc_id', '')
-                    cid = _generate_chunk_id(chunk.page_content, original_doc_id, reproducible_ids, chunk_idx)
+                    source_context = chunk.metadata.get("source_name", "unknown_source")
+                    cid = _generate_chunk_id(chunk.page_content, source_context, reproducible_ids, chunk_idx)
                     chunk.id = cid
                     chunk.metadata["chunk_id"] = cid
                     chunk.metadata["doc_name"] = doc_name
@@ -187,6 +183,8 @@ async def load_documents_from_source(source: DataSource, agent_config: AgentConf
     Dispatcher function that calls the appropriate loader based on the source type,
     passing the full agent_config for policy application and scaling settings,
     and the reproducible_ids flag.
+    This updated version no longer re-processes the metadata from the loaders,
+    as each loader is now responsible for producing consistent metadata.
     """
     source_type = source.type
     logger.info(f"Dispatching to loader for source type: '{source_type}'")
@@ -254,38 +252,9 @@ async def load_documents_from_source(source: DataSource, agent_config: AgentConf
                      exc_info=True)
         return []
 
-    final_loaded_docs = []
-    for idx, doc in enumerate(loaded_docs):
-        if not isinstance(doc, LangChainDocument):
-            logger.error(
-                f"DEBUG: Invalid document type returned by loader: Expected LangChainDocument, got {type(doc)}. Skipping. Content snippet: {str(doc)[:100]}")
-            continue
 
-        # Create a copy of metadata to ensure we don't modify original objects if they are shared
-        metadata_copy = doc.metadata.copy()
 
-        # Ensure 'source' metadata is consistently added/updated from the DataSource object
-        metadata_copy['source_type'] = source.type
-        if source.path:
-            metadata_copy['source_path'] = source.path
-        if source.url:
-            metadata_copy['source_url'] = source.url
-        if source.db_connection:
-            metadata_copy['source_db_connection'] = source.db_connection
-
-        # Original doc ID generation as before
-        source_identifier = metadata_copy.get('source', source.path or source.url or source.type)
-        if reproducible_ids:
-            hash_input = f"{source_identifier}-{idx}-{doc.page_content}"
-            metadata_copy['original_doc_id'] = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
-        else:
-            metadata_copy['original_doc_id'] = str(uuid.uuid4())
-
-        # Create a new LangChainDocument instance with updated metadata and original ID
-        new_doc = LangChainDocument(page_content=doc.page_content, metadata=metadata_copy, id=doc.id)
-        final_loaded_docs.append(new_doc)
-
-    return final_loaded_docs
+    return loaded_docs
 
 
 async def embed_agent_data(config: AgentConfig, db: AsyncSession) -> bool:
@@ -314,8 +283,16 @@ async def embed_agent_data(config: AgentConfig, db: AsyncSession) -> bool:
 
     logger.info(f"Saving/updating {len(chunks)} chunks in the database.")
     for chunk in chunks:
-        doc_name = chunk.metadata["doc_name"]
-        chunk_index = chunk.metadata["chunk_index"]
+        # The loaders are now responsible for ensuring these keys exist.
+        doc_name = chunk.metadata.get("doc_name")
+        chunk_index = chunk.metadata.get("chunk_index")
+
+        # Guard against missing metadata from loaders that haven't been fixed yet.
+        if doc_name is None or chunk_index is None:
+            logger.error(
+                f"Skipping database persistence for a chunk due to missing doc_name or chunk_index in metadata.")
+            continue
+
         try:
             chunk_id_from_db = await create_document_chunk(
                 db=db,
@@ -323,8 +300,7 @@ async def embed_agent_data(config: AgentConfig, db: AsyncSession) -> bool:
                 chunk_index=chunk.metadata.get("chunk_index"),
                 content=chunk.page_content,
                 page_number=chunk.metadata.get("page_number"),
-                row_number=chunk.metadata.get("row_number"),
-
+                row_number=chunk.metadata.get("row_number")
             )
             chunk.metadata['chunk_id'] = chunk_id_from_db
 
@@ -346,14 +322,12 @@ async def embed_agent_data(config: AgentConfig, db: AsyncSession) -> bool:
     logger.info("Finished saving/updating chunks in the database.")
 
     # 3) Filter metadata in batch
-    # This loop applies filter_complex_metadata to each chunk individually
-    # filter_complex_metadata expects a Document and returns a Document with filtered metadata.
     chunks_for_store = filter_complex_metadata(chunks)
 
     chunks = filter_complex_metadata(chunks)
     if not chunks_for_store:
         logger.warning("No valid chunks remain after metadata filtering. Vector store will be empty.")
-        return True  # Return True as the process didn't fail, but log the warning.
+        return True
 
     # 4) Build store
     store_dir = os.path.join(_VECTORSTORE_DIR, config.name)

@@ -85,20 +85,31 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None, sourc
                 continue
 
             if processed_text.strip():
-                metadata = generate_base_metadata(source, source_context=safe_file_path.name, source_type="file")
-                # Add CSV-specific keys
-                metadata["source_path"] = str(safe_file_path.resolve())
-                metadata["file_name"] = safe_file_path.name
-                metadata["file_type"] = safe_file_path.suffix.lower()
-                metadata["row_number"] = index + 1
-                metadata["record_id"] = record_id
-                metadata["chunk_id"] = index + 1
-                metadata["document_name"] = safe_file_path.name
-
-                doc = Document(
-                    page_content=processed_text,
-                    metadata={**metadata}
+                metadata = generate_base_metadata(
+                    source,
+                    source_context=safe_file_path.name,
+                    source_type="file",
                 )
+
+                metadata.update(
+                    {
+                        "source_path": str(safe_file_path.resolve()),
+                        "file_name": safe_file_path.name,
+                        "file_type": safe_file_path.suffix.lower(),
+                        "row_number": index + 1,
+                        "record_id": record_id,
+                        # uniquely identify each row
+                        "doc_name": safe_file_path.name,
+                        "source_name": safe_file_path.name,
+                        "chunk_index": index,
+                    }
+                )
+
+                # make sure original_doc_id is present
+                metadata.setdefault("original_doc_id", f"{safe_file_path.stem}-{index}")
+
+                doc_id = f"{safe_file_path.stem}-{index}"  # reproducible row-level ID
+                doc = Document(page_content=processed_text, metadata=metadata, id=doc_id)
                 docs.append(doc)
             else:
                 logger.debug(
