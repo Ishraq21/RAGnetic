@@ -27,7 +27,7 @@ _ALLOWED_DATA_DIRS_RESOLVED = _PATH_SETTINGS["ALLOWED_DATA_DIRS"]
 logger.debug(
     f"Loaded allowed data directories for code repository loader from central config: {[str(d) for d in _ALLOWED_DATA_DIRS_RESOLVED]}")
 
-_CLONE_TEMP_DIR = _PROJECT_ROOT_FROM_CONFIG / ".ragnetic_temp_clones"
+_CLONE_TEMP_DIR = _PROJECT_ROOT_FROM_CONFIG / ".ragnetic" / ".ragnetic_temp_clones"
 
 
 def _is_path_safe_and_within_allowed_dirs(input_path: str) -> Path:
@@ -130,8 +130,9 @@ async def _load_and_chunk(repo_path: str, branch: Optional[str], agent_config: O
             ".rs": Language.RUST, ".php": Language.PHP, ".rb": Language.RUBY,
             ".swift": Language.SWIFT, ".kt": Language.KOTLIN, ".scala": Language.SCALA,
             ".md": Language.MARKDOWN, ".html": Language.HTML,
-            ".yml": Language.YAML, ".yaml": Language.YAML,
-            ".json": Language.JSON
+            ".yml": Language.MARKDOWN, ".yaml": Language.MARKDOWN,
+            ".json": Language.MARKDOWN
+
         }
 
         def file_filter(path: str) -> bool:
