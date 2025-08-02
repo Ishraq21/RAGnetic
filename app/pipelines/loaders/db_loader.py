@@ -101,10 +101,21 @@ async def load(connection_string: str, agent_config: Optional[AgentConfig] = Non
                 metadata["source_db_connection_string"] = connection_string
                 metadata["table_name"] = table_name
 
-                doc = Document(
-                    page_content=processed_text,
-                    metadata={**metadata}
+                metadata.update(
+                    {
+                        "source_db_connection_string": connection_string,
+                        "table_name": table_name,
+                        "doc_name": table_name,  # groups all rows/chunks from this table (here just one)
+                        "source_name": table_name,  # used by _generate_chunk_id
+                        "chunk_index": 0,  # single-chunk per table
+                    }
                 )
+
+                # reproducible, stable ID for the table-chunk
+                doc_id = f"{table_name}"
+                metadata.setdefault("original_doc_id", doc_id)
+
+                doc = Document(page_content=processed_text, metadata=metadata, id=doc_id)
                 docs.append(doc)
             else:
                 logger.debug(f"Table '{table_name}' had no content after policy application or was empty.")

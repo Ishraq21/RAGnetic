@@ -74,16 +74,29 @@ async def load(file_path: str, agent_config: Optional[AgentConfig] = None, sourc
             return []
 
         if processed_text.strip():
-            metadata = generate_base_metadata(source, source_context=safe_file_path.name, source_type="file")
-            metadata["source_path"] = str(safe_file_path.resolve())
-            metadata["file_name"] = safe_file_path.name
-            metadata["file_type"] = safe_file_path.suffix.lower()
-
-            doc = Document(
-                page_content=processed_text,
-                metadata={**metadata}
+            metadata = generate_base_metadata(
+                source,
+                source_context=safe_file_path.name,
+                source_type="file",
             )
-            logger.info(f"Loaded and processed content from {safe_file_path.name} with enriched metadata.")
+
+            metadata.update(
+                {
+                    "source_path": str(safe_file_path.resolve()),
+                    "file_name": safe_file_path.name,
+                    "file_type": safe_file_path.suffix.lower(),
+
+                    "doc_name": safe_file_path.name,
+                    "source_name": safe_file_path.name,
+                    "chunk_index": 0,
+                }
+            )
+
+            # reproducible, stable ID
+            doc_id = safe_file_path.stem
+            metadata.setdefault("original_doc_id", doc_id)
+
+            doc = Document(page_content=processed_text, metadata=metadata, id=doc_id)
             return [doc]
         else:
             logger.warning(f"DOCX file {safe_file_path.name} contained no readable text or all content was redacted/filtered. Skipping document creation.")

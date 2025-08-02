@@ -1,6 +1,8 @@
 # app/pipelines/url_loader.py
-
+import hashlib
 import logging
+from pathlib import PurePosixPath
+
 import trafilatura
 from typing import List, Optional
 from langchain_core.documents import Document
@@ -52,14 +54,30 @@ async def load(url: str, agent_config: Optional[AgentConfig] = None, source: Opt
 
         if processed_text.strip():
             metadata = generate_base_metadata(source, source_context=url, source_type="url")
-            # Add URL-specific keys
+            # URL-specific keys
             metadata["source_url"] = url
             metadata["file_name"] = parsed_url.netloc + parsed_url.path.replace('/', '_')
             metadata["file_path"] = url
 
+            # ---- identity keys & stable ID ----
+            rel_path = PurePosixPath(url).as_posix()  # canonical form of the URL
+            metadata.update(
+                {
+                    "doc_name": rel_path,  # group everything from this URL
+                    "source_name": rel_path,  # used by _generate_chunk_id
+                    "chunk_index": 0,  # single-chunk document
+                }
+            )
+
+            full_hash = hashlib.sha256(rel_path.encode("utf-8")).hexdigest()
+            short_id = full_hash[:8]  # compact but unique
+
+            metadata.setdefault("original_doc_id", full_hash)
+
             doc = Document(
                 page_content=processed_text,
-                metadata={**metadata}
+                metadata=metadata,
+                id=short_id  # set .id for downstream use
             )
             logger.info(f"Successfully extracted and processed content from {url} with enriched metadata.")
             return [doc]

@@ -82,17 +82,31 @@ async def load_notebook(path: str, agent_config: Optional[AgentConfig] = None, s
                 continue
 
             if processed_text.strip():
-                metadata = generate_base_metadata(source, source_context=safe_path.name, source_type="file")
-                # Add notebook-specific keys
-                metadata["source_path"] = str(safe_path.resolve())
-                metadata["file_name"] = safe_path.name
-                metadata["file_type"] = safe_path.suffix.lower()
-                metadata["cell_number"] = doc_index + 1
-                # Merge with existing metadata from NotebookLoader
-                metadata = {**doc.metadata, **metadata}
+                metadata = generate_base_metadata(
+                    source,
+                    source_context=safe_path.name,
+                    source_type="file",
+                )
+
+                # notebook-specific + chunk-identity fields
+                metadata.update({
+                    "source_path": str(safe_path.resolve()),
+                    "file_name": safe_path.name,
+                    "file_type": safe_path.suffix.lower(),
+                    "cell_number": doc_index + 1,
+
+                    "doc_name": safe_path.name,
+                    "source_name": safe_path.name,
+                    "chunk_index": doc_index,  # 0-based cell index
+                })
+
+                # reproducible, row-level ID
+                doc_id = f"{safe_path.stem}-cell{doc_index}"
+                metadata.setdefault("original_doc_id", doc_id)
 
                 doc.page_content = processed_text
-                doc.metadata = metadata
+                doc.metadata = {**doc.metadata, **metadata}  # merge any existing meta first
+                doc.id = doc_id  # give the chunk its stable id
                 processed_documents.append(doc)
             else:
                 logger.debug(f"Notebook cell {doc_index + 1} from '{safe_path.name}' had no content after policy application or was empty.")

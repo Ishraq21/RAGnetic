@@ -1,5 +1,5 @@
 # app/pipelines/web_crawler_loader.py
-
+import hashlib
 import logging
 import trafilatura
 from typing import List, Optional
@@ -69,15 +69,33 @@ async def load(url: str, max_depth: int = 2, agent_config: Optional[AgentConfig]
                 continue
 
             if processed_text.strip():
-                source_context = doc.metadata.get('url', url)
-                metadata = generate_base_metadata(source, source_context=source_context, source_type="web_crawler")
-                # Add web crawler-specific keys
-                metadata["source_url"] = doc.metadata.get('url', url)
-                metadata["file_name"] = urlparse(doc.metadata.get('url', url)).netloc + urlparse(doc.metadata.get('url', url)).path.replace('/', '_')
-                metadata["file_path"] = doc.metadata.get('url', url)
-                metadata["crawl_depth"] = doc.metadata.get('depth', 0)
-                metadata["page_title"] = doc.metadata.get('title', 'N/A')
+                source_context = doc.metadata.get("url", url)
 
+                metadata = generate_base_metadata(
+                    source,
+                    source_context=source_context,
+                    source_type="web_crawler",
+                )
+                metadata.update(
+                    {
+                        "source_url": source_context,
+                        "file_name": urlparse(source_context).netloc
+                                     + urlparse(source_context).path.replace("/", "_"),
+                        "file_path": source_context,
+                        "crawl_depth": doc.metadata.get("depth", 0),
+                        "page_title": doc.metadata.get("title", "N/A"),
+
+                        "doc_name": source_context,  # group by URL
+                        "source_name": source_context,  # used by _generate_chunk_id
+                        "chunk_index": 0,  # one chunk per page
+                    }
+                )
+
+                # reproducible, stable ID (hash of URL works nicely)
+                doc_id = hashlib.sha256(source_context.encode("utf-8")).hexdigest()[:12]
+                metadata.setdefault("original_doc_id", doc_id)
+
+                doc.id = doc_id
                 doc.page_content = processed_text
                 doc.metadata = {**doc.metadata, **metadata}
                 processed_docs.append(doc)

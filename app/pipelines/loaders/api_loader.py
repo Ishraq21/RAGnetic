@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 from langchain_core.documents import Document
 import asyncio
 from datetime import datetime
+import hashlib
 
 from app.schemas.agent import AgentConfig, DataSource
 from app.pipelines.data_policy_utils import apply_data_policies
@@ -103,9 +104,27 @@ async def load(
                 metadata["json_pointer_path"] = json_pointer if json_pointer else "root"
                 metadata["record_number"] = record_idx + 1
 
+                source_ctx = url  # all records from this endpoint share the same group-name
+                chunk_idx = record_idx  # 0-based record number
+
+                identity_meta = {
+                    "doc_name": source_ctx,
+                    "source_name": source_ctx,  # used by embed.py _generate_chunk_id
+                    "chunk_index": chunk_idx,
+                }
+
+                raw_id = f"{source_ctx}:{chunk_idx}"
+                full_hash = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
+                short_hash = full_hash[:8]  # reproducible but concise
+
+                identity_meta["original_doc_id"] = full_hash
+                metadata.update(identity_meta)
+                # -------------------------------------------------
+
                 doc = Document(
                     page_content=processed_text,
-                    metadata={**metadata}
+                    metadata=metadata,
+                    id=short_hash  # stable chunk ID
                 )
                 docs.append(doc)
             else:

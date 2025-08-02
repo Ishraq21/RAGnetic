@@ -106,13 +106,30 @@ async def load(
                 continue
 
             if processed_text.strip():
-                source_context = doc.metadata.get('title', doc.metadata.get('id', 'unknown'))
-                metadata = generate_base_metadata(source, source_context=source_context, source_type="gdoc")
-                # Add GDoc-specific keys
-                metadata["source_gdoc_id"] = doc.metadata.get('id', 'N/A')
-                metadata["source_gdoc_title"] = doc.metadata.get('title', 'N/A')
-                metadata["file_type"] = doc.metadata.get('mimeType', 'N/A')
+                source_context = doc.metadata.get("title") or doc.metadata.get("id", "unknown")
 
+                metadata = generate_base_metadata(
+                    source,
+                    source_context=source_context,
+                    source_type="gdoc",
+                )
+                metadata.update(
+                    {
+                        "source_gdoc_id": doc.metadata.get("id"),
+                        "source_gdoc_title": doc.metadata.get("title"),
+                        "file_type": doc.metadata.get("mimeType"),
+                        # ---- finished-chunk identity keys ----
+                        "doc_name": source_context,
+                        "source_name": source_context,
+                        "chunk_index": 0,
+                    }
+                )
+
+                # reproducible, stable ID (good default = Google file id)
+                doc_id = doc.metadata.get("id", source_context)
+                metadata.setdefault("original_doc_id", doc_id)
+
+                doc.id = doc_id
                 doc.page_content = processed_text
                 doc.metadata = {**doc.metadata, **metadata}
                 processed_docs.append(doc)
