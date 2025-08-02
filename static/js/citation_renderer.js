@@ -1,30 +1,30 @@
 window.citationRenderer = (function() {
-  const CITATION_HIGHLIGHT_CLASS = 'citation-marker';
-  const API_BASE_URL            = window.location.origin + '/api/v1';
-  const CHAT_API_ENDPOINT       = `${API_BASE_URL}/chat/citation-snippet`;
-  const POPUP_MARGIN            = 8;    // px
+  const CITATION_CLASS   = 'citation-marker';
+  const POPUP_ID         = 'citation-popup';
+  const API_BASE         = window.location.origin + '/api/v1';
+  const SNIPPET_ENDPOINT = `${API_BASE}/chat/citation-snippet`;
+  const MARGIN           = 8;  // px
 
-  let snippetCache = {};
-  let currentHideCallback = null;
+  let snippetCache       = {};
+  let hideOnClickOutside = null;
 
-  async function showCitationPopup(citation, snippet, target) {
-    // create or reuse popup container
-    let popup = document.getElementById('citation-popup');
+  async function showCitationPopup(citation, snippet, anchor) {
+    let popup = document.getElementById(POPUP_ID);
     if (!popup) {
       popup = document.createElement('div');
-      popup.id        = 'citation-popup';
+      popup.id = POPUP_ID;
       popup.className = 'citation-popup';
       document.body.appendChild(popup);
-      // prevent clicks inside popup from bubbling out
       popup.addEventListener('click', e => e.stopPropagation());
     }
 
-    // fill content
-    const title = citation.doc_name || 'Document';
-    const page  = citation.page_number ? ` (Page ${citation.page_number})` : '';
+    const title   = citation.doc_name     || 'Document';
+    const hasPage = citation.page_number !== undefined && citation.page_number !== null;
+    const page    = hasPage ? ` • Page ${citation.page_number}` : '';
+    const chunk = ` • Chunk ${citation.chunk_id}`;
     popup.innerHTML = `
       <div class="popup-header">
-        <span class="popup-title">${title}${page}</span>
+        <span class="popup-title">${title}${page}${chunk}</span>
         <button class="popup-close-btn">&times;</button>
       </div>
       <div class="popup-content">
@@ -34,65 +34,54 @@ window.citationRenderer = (function() {
         }
       </div>
     `;
-
-    // wire up close button
     popup.querySelector('.popup-close-btn')
          .onclick = () => popup.classList.remove('visible');
 
-    // if clicking the same marker again, just hide
-    if (popup.dataset.chunkId === String(citation.chunk_id) && popup.classList.contains('visible')) {
+    if (popup.dataset.chunkId === String(citation.chunk_id) &&
+        popup.classList.contains('visible')) {
       return popup.classList.remove('visible');
     }
     popup.dataset.chunkId = citation.chunk_id;
 
-    // Make it visible (but invisible to user) so we can measure
     popup.style.position   = 'fixed';
     popup.style.visibility = 'hidden';
     popup.classList.add('visible');
+    const { width: W, height: H } = popup.getBoundingClientRect();
+    const popupW = Math.min(W, 400);
+    const markerRect = anchor.getBoundingClientRect();
 
-    // measure
-    const popupRect   = popup.getBoundingClientRect();
-    const popupH      = popupRect.height;
-    const popupW      = Math.min(popupRect.width, 400);
-    const markerRect  = target.getBoundingClientRect();
-
-    // horizontal: clamp within viewport
     let left = markerRect.left;
-    if (left + popupW + POPUP_MARGIN > window.innerWidth) {
-      left = window.innerWidth - popupW - POPUP_MARGIN;
-    } else if (left < POPUP_MARGIN) {
-      left = POPUP_MARGIN;
+    if (left + popupW + MARGIN > window.innerWidth) {
+      left = window.innerWidth - popupW - MARGIN;
+    } else if (left < MARGIN) {
+      left = MARGIN;
     }
 
-    // vertical: flip if needed
     let top;
-    if (markerRect.bottom + popupH + POPUP_MARGIN <= window.innerHeight) {
-      // enough space below
-      top = markerRect.bottom + POPUP_MARGIN;
+    if (markerRect.bottom + H + MARGIN <= window.innerHeight) {
+      top = markerRect.bottom + MARGIN;
     } else {
-      // render above
-      top = markerRect.top - popupH - POPUP_MARGIN;
+      top = markerRect.top - H - MARGIN;
     }
 
-    // apply final positioning and show
-    popup.style.top        = `${top}px`;
-    popup.style.left       = `${left}px`;
-    popup.style.visibility = '';
+    Object.assign(popup.style, {
+      top:       `${top}px`,
+      left:      `${left}px`,
+      visibility: ''
+    });
     popup.classList.add('visible');
 
-    // cleanup old outside-click handler
-    if (currentHideCallback) {
-      document.removeEventListener('click', currentHideCallback);
+    if (hideOnClickOutside) {
+      document.removeEventListener('click', hideOnClickOutside);
     }
-    // hide when clicking anywhere else
-    currentHideCallback = e => {
-      if (!popup.contains(e.target) && e.target !== target) {
+    hideOnClickOutside = e => {
+      if (!popup.contains(e.target) && e.target !== anchor) {
         popup.classList.remove('visible');
-        document.removeEventListener('click', currentHideCallback);
-        currentHideCallback = null;
+        document.removeEventListener('click', hideOnClickOutside);
+        hideOnClickOutside = null;
       }
     };
-    document.addEventListener('click', currentHideCallback);
+    document.addEventListener('click', hideOnClickOutside);
   }
 
   async function fetchSnippet(chunkId) {
@@ -105,11 +94,12 @@ window.citationRenderer = (function() {
       return snippetCache[chunkId];
     }
     try {
-      const url = new URL(CHAT_API_ENDPOINT);
-      url.searchParams.append('chunk_id', chunkId);
+      const url = new URL(SNIPPET_ENDPOINT);
+      url.searchParams.set('chunk_id', chunkId);
       const res = await fetch(url, { headers: { 'X-API-Key': token } });
       if (!res.ok) throw new Error(res.statusText);
       const data = await res.json();
+      // Expecting { snippet: "...", page_number: 5 } from your API
       snippetCache[chunkId] = data;
       return data;
     } catch (err) {
@@ -118,45 +108,50 @@ window.citationRenderer = (function() {
     }
   }
 
-  function renderCitations(messageEl, citations) {
+  function renderCitations(msgEl, citations) {
     if (!citations?.length) return;
-    const content = messageEl.querySelector('.content');
+    const content = msgEl.querySelector('.content');
     if (!content) return;
 
-    // build map for quick lookup by "[n]"
-    const map = new Map(citations.map(c => [c.marker_text, c]));
+    // Build lookup: "[n]" → citation
+    const lookup = new Map(citations.map(c => [c.marker_text, c]));
 
-    // wrap markers in <span>
-    content.innerHTML = content.innerHTML.replace(/\[(\d+)\]/g, m => {
-      const c = map.get(m);
-      return c
-        ? `<span class="${CITATION_HIGHLIGHT_CLASS}"
-                  data-chunk-id="${c.chunk_id}"
-                  data-marker-text="${c.marker_text}"
-                  data-doc-name="${c.doc_name||''}"
-                  data-page-number="${c.page_number||''}">${m}</span>`
-        : m;
+    // Wrap each marker in a span
+    content.innerHTML = content.innerHTML.replace(/\[(\d+)\]/g, match => {
+      const c = lookup.get(match);
+      if (!c) return match;
+      return `
+        <span class="${CITATION_CLASS}"
+              data-chunk-id="${c.chunk_id}"
+              data-marker-text="${c.marker_text}"
+              data-doc-name="${c.doc_name||''}"
+              data-page-number="${c.page_number||''}">
+          ${match}
+        </span>`;
     });
 
-    // attach click handlers
-    content.querySelectorAll(`.${CITATION_HIGHLIGHT_CLASS}`)
-      .forEach(span => {
-        const cd = {
-          chunk_id:    parseInt(span.dataset.chunkId),
-          marker_text: span.dataset.markerText,
-          doc_name:    span.dataset.docName,
-          page_number: span.dataset.pageNumber ? parseInt(span.dataset.pageNumber) : null
-        };
-        span.onclick = async e => {
-          e.stopPropagation();
-          if (cd.chunk_id === -1) {
-            showCitationPopup(cd, null, span);
-          } else {
-            const sn = await fetchSnippet(cd.chunk_id);
-            showCitationPopup(cd, sn?.snippet, span);
-          }
-        };
-      });
+    // Attach click handlers
+    content.querySelectorAll(`.${CITATION_CLASS}`).forEach(span => {
+      const cd = {
+        chunk_id:    +span.dataset.chunkId,
+        marker_text: span.dataset.markerText,
+        doc_name:    span.dataset.docName,
+        page_number: span.dataset.pageNumber ? +span.dataset.pageNumber : null
+      };
+      span.onclick = async e => {
+        e.stopPropagation();
+        if (cd.chunk_id === -1) {
+          return showCitationPopup(cd, null, span);
+        }
+        const data = await fetchSnippet(cd.chunk_id);
+        const finalPage = data?.page_number ?? cd.page_number;
+        showCitationPopup(
+          { ...cd, page_number: finalPage },
+          data?.snippet,
+          span
+        );
+      };
+    });
   }
 
   return { renderCitations };
