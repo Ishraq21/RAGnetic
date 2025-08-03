@@ -137,7 +137,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
                                                     embedding_tokens=embedding_tokens)
                 retriever_tool = await get_retriever_tool(agent_config, user_id, thread_id)
                 retrieved_docs = await retriever_tool.ainvoke(
-                    {"query": query, "temp_document_ids": temp_document_ids, "db_session": db_session})
+                    {"query": query, "temp_document_ids": temp_document_ids}
+                )
                 if retrieved_docs:
                     logger.info(f"Successfully retrieved {len(retrieved_docs)} documents.")
                 else:
@@ -183,17 +184,22 @@ async def call_model(state: AgentState, config: RunnableConfig):
                                    **USER'S CUSTOM INSTRUCTIONS (Your Persona):**
                                    {agent_config.persona_prompt}
                                    ---
-                                   Your primary goal is to provide clear and accurate answers based *only* on the information provided to you in the "SOURCES" section.
+                                   Your primary goal is to provide clear and accurate answers based *only* on the information provided to you in the "CONTEXT" section.
                                    **General Instructions:**
-                                             1.  Synthesize an answer from the information given in the "SOURCES" section below.
-                                             2.  Provide a clear, comprehensive answer based **only** on the "CONTEXT" provided below.
-                                             3.  For every piece of information you use from the context, you **MUST** add a citation marker at the end of the sentence.
-                                             4.  Use the format `[number]` for citations, corresponding to the numbered list in the "SOURCES" section. For example: `The sky is blue [3].`
-                                             5.  Each source in the SOURCES list corresponds to a specific chunk of a document. Cite the number of the specific chunk you are using.
-                                             6.  You can cite multiple sources for a single sentence, like this: `This is a fact [2][3].`
-                                             7.  Do not refer to "the context provided" or "the documents." Respond directly and authoritatively.
+                                             1.  Carefully read the "CONTEXT" section and synthesize a comprehensive answer to the user's query.
+                                             2.  For every piece of information you use from the context, you **MUST** add a citation marker at the end of the sentence.
+                                             3.  Use the format `[number]` for citations, corresponding to the numbered source list. For example: `The sky is blue [3].`
+                                             4.  Only cite sources that you have directly used. Do not cite sources that are not in the "SOURCES" section. Do not invent new source numbers.
+                                             5.  You can cite multiple sources for a single sentence, like this: `This is a fact [2][3].`
+                                             6.  Do not refer to "the context provided" or "the documents." Respond directly and authoritatively.
 
-
+                                   **Source Mapping:**
+                                   The following is a list of the sources that have been retrieved. Use the corresponding numbers to cite the information you use.
+                                   {formatted_sources_str}
+                                   ---
+                                   **CONTEXT:**
+                                   {retrieved_docs_str}
+                                   ---
                                    IMPORTANT: When explaining any mathematical expressions, YOU MUST USE LaTeX SYNTAX.
                                    IMPORTANT: Wrap inline equations in `$...$`, and display equations in `$$...$$`.
                                    IMPORTANT: DO NOT use <pre><code> or similar tags for mathematical explanations or calculations.
@@ -208,15 +214,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
                                    - Inline math must be wrapped in `\\( ... \\)`.
                                    - Block math must be wrapped in `$$ ... $$`.
 
-                                   **SOURCES:**
-                                   {formatted_sources_str}
-                                   ---
-                                   **CONTEXT:**
-                                   {retrieved_docs_str}
-                                   ---
-                                    Based on the SOURCES and CONTEXT, answer the user's query.
-
-                                """
+                                   Based on the CONTEXT, answer the user's query.
+                                   """
             prompt_with_history = [SystemMessage(content=system_prompt_content)] + messages
 
         model_kwargs = agent_config.model_params.model_dump(exclude_unset=True) if agent_config.model_params else {}
