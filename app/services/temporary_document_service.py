@@ -4,19 +4,23 @@ import os
 import shutil
 import uuid
 import logging
-import mimetypes
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any
 import asyncio
+import filetype
 
 from fastapi import UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import get_path_settings
 from app.core.embed_config import get_embedding_model
 from app.core.parsing_utils import parse_document_to_chunks
 from app.agents.config_manager import AgentConfig
-from app.db.dao import create_document_chunk
+from app.db.dao import create_document_chunk, create_temp_document, delete_temp_document_data
+from app.db.models import temporary_documents_table
+from app.schemas.agent import DocumentMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -49,184 +53,234 @@ class TemporaryDocumentService:
         )
 
     async def process_and_store_temp_document(
-        self,
-        file: UploadFile,
-        user_id: int,
-        thread_id: str,
-        db: AsyncSession
+            self,
+            file: UploadFile,
+            user_id: int,
+            thread_id: str,
+            db: AsyncSession
     ) -> TemporaryDocumentUploadResult:
         """
         Processes an uploaded file, stores it temporarily, parses, chunks,
         persists each chunk to the DB (so it gets a chunk_id), embeds,
         and stores embeddings in a temporary FAISS store.
         """
-        # 1) Save the uploaded file to a temp directory
-        temp_doc_id = str(uuid.uuid4())
-        upload_dir = _TEMP_CHAT_UPLOADS_DIR / str(user_id) / thread_id
-        upload_dir.mkdir(parents=True, exist_ok=True)
-
-        temp_file_name = f"{temp_doc_id}_{file.filename}"
-        temp_file_path = upload_dir / temp_file_name
-        logger.info(f"Uploading temporary file {file.filename} to {temp_file_path}")
         try:
-            with open(temp_file_path, "wb") as buf:
-                while chunk := await file.read(1024 * 1024):
-                    buf.write(chunk)
-            file_size = temp_file_path.stat().st_size
-        except Exception as e:
-            logger.error(f"Failed to save temporary file {file.filename}: {e}")
-            raise ValueError(f"Failed to save uploaded file: {e}")
-
-        if file_size == 0:
-            temp_file_path.unlink()
-            raise ValueError("Uploaded file is empty.")
-
-        # 2) Validate file type & size
-        MAX_SIZE = 25 * 1024 * 1024
-        ALLOWED = {
-            '.pdf', '.docx', '.txt', '.csv', '.json', '.yaml', '.yml',
-            '.hcl', '.tf', '.ipynb', '.md', '.log'
-        }
-        if file_size > MAX_SIZE:
-            temp_file_path.unlink()
-            raise ValueError(f"File exceeds size limit of {MAX_SIZE // (1024*1024)}MB.")
-        if temp_file_path.suffix.lower() not in ALLOWED:
-            temp_file_path.unlink()
-            raise ValueError(
-                f"Unsupported file type: {temp_file_path.suffix}. "
-                f"Allowed: {', '.join(sorted(ALLOWED))}"
-            )
-
-        # 3) Parse into chunks
-        try:
-            chunks = await parse_document_to_chunks(temp_file_path)
-        except Exception as e:
-            logger.error(f"Parsing failed for {file.filename}: {e}")
-            temp_file_path.unlink()
-            raise ValueError(f"Failed to parse document: {e}")
-
-        if not chunks:
-            temp_file_path.unlink()
-            raise ValueError("No content extracted from document.")
-
-        # 4) Persist each chunk to DB to get chunk_id
-        documents_to_embed: List = []
-        for idx, chunk in enumerate(chunks):
-            # enrich metadata
-            chunk.metadata.update({
-                "user_id": str(user_id),
-                "thread_id": thread_id,
-                "temp_doc_id": temp_doc_id,
-                "doc_name": file.filename,
-                "chunk_index": idx,
-                "original_file_path": str(
-                    temp_file_path.relative_to(_APP_PATHS["PROJECT_ROOT"])  # type: ignore
-                )
-            })
-
-            db_id = await create_document_chunk(
+            temp_doc_record = await create_temp_document(
                 db=db,
-                document_name=f"temp::{temp_doc_id}",
-                chunk_index=idx,
-                content=chunk.page_content,
-                page_number=chunk.metadata.get("page_number"),
-                row_number=chunk.metadata.get("row_number"),
+                user_id=user_id,
+                thread_id=thread_id,
+                original_name=file.filename,
+                file_size=file.size if file.size is not None else 0,
             )
-            chunk.id = str(db_id)
-            chunk.metadata["chunk_id"] = db_id
-            documents_to_embed.append(chunk)
+            temp_doc_id = temp_doc_record['temp_doc_id']
+            temp_doc_db_id = temp_doc_record['id']
+            logger.info(f"Created temp doc record {temp_doc_id} in DB.")
+        except IntegrityError:
+            await db.rollback()
+            raise ValueError("Failed to create unique temp document record.")
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Failed to create temp document DB record: {e}", exc_info=True)
+            raise ValueError("Failed to create temp document record.")
 
-        # 5) Build and save temporary FAISS index
+        temp_file_path = None
+        vs_path = None
         try:
-            from langchain_community.vectorstores import FAISS
+            # 2) Save the uploaded file to a temp directory
+            upload_dir = _TEMP_CHAT_UPLOADS_DIR / str(user_id) / thread_id
+            upload_dir.mkdir(parents=True, exist_ok=True)
 
-            vs_path = _TEMP_VECTORSTORE_DIR / temp_doc_id
-            vs_path.mkdir(parents=True, exist_ok=True)
+            temp_file_name = f"{temp_doc_id}_{file.filename}"
+            temp_file_path = upload_dir / temp_file_name
+            logger.info(f"Uploading temporary file {file.filename} to {temp_file_path}")
 
-            faiss_store = await asyncio.to_thread(
-                FAISS.from_documents,
-                documents_to_embed,
-                self.embedding_model
-            )
-            await asyncio.to_thread(faiss_store.save_local, str(vs_path))
-            logger.info(
-                f"Temporary FAISS store saved at {vs_path} for doc {file.filename}"
+            file.file.seek(0)
+            file_content = await file.read()
+
+            with open(temp_file_path, "wb") as buf:
+                buf.write(file_content)
+
+            file_size = temp_file_path.stat().st_size
+
+            if file_size == 0:
+                raise ValueError("Uploaded file is empty.")
+
+            # --- Advanced File Validation using pure Python 'filetype' library ---
+            MAX_SIZE = 25 * 1024 * 1024
+            ALLOWED_EXTENSIONS = {
+                '.pdf', '.docx', '.txt', '.csv', '.json', '.yaml', '.yml',
+                '.hcl', '.tf', '.ipynb', '.md', '.log', '.html'
+            }
+            ALLOWED_MIMETYPES = {
+                'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'text/plain', 'text/csv', 'application/json', 'text/x-yaml',
+                'application/x-yaml', 'text/x-hcl', 'text/x-terraform',
+                'application/x-ipynb+json', 'text/markdown', 'text/html'
+            }
+
+            if file_size > MAX_SIZE:
+                raise ValueError(f"File exceeds size limit of {MAX_SIZE // (1024 * 1024)}MB.")
+
+            if temp_file_path.suffix.lower() not in ALLOWED_EXTENSIONS:
+                raise ValueError(
+                    f"Unsupported file extension: {temp_file_path.suffix}. "
+                    f"Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+                )
+
+            try:
+                kind = filetype.guess(str(temp_file_path))
+                file_mime_type = kind.mime if kind else 'text/plain'
+
+                if file_mime_type not in ALLOWED_MIMETYPES:
+                    raise ValueError(
+                        f"Unsupported file content type: {file_mime_type}. "
+                        f"Allowed: {', '.join(sorted(ALLOWED_MIMETYPES))}"
+                    )
+                logger.info(f"File {file.filename} passed MIME type validation: {file_mime_type}")
+            except Exception as e:
+                logger.error(f"MIME type check failed for {file.filename}: {e}", exc_info=True)
+                raise ValueError(f"Failed to validate file content: {e}")
+
+            # --- END NEW LOGIC ---
+
+            # 3) Parse into chunks
+            try:
+                chunks = await parse_document_to_chunks(temp_file_path)
+            except Exception as e:
+                logger.error(f"Parsing failed for {file.filename}: {e}", exc_info=True)
+                raise ValueError(f"Failed to parse document: {e}")
+
+            if not chunks:
+                raise ValueError("No content extracted from document.")
+
+            # 4) Persist each chunk to DB to get chunk_id
+            documents_to_embed: List = []
+            unique_document_name = f"temp::{temp_doc_id}::{file.filename}"
+            for idx, chunk in enumerate(chunks):
+                chunk.metadata.update({
+                    "user_id": str(user_id),
+                    "thread_id": thread_id,
+                    "temp_doc_id": temp_doc_id,
+                    "doc_name": file.filename,  # Keep original filename in metadata
+                    "chunk_index": idx,
+                    "original_file_path": str(temp_file_path.relative_to(_APP_PATHS["PROJECT_ROOT"])),
+                })
+                db_id = await create_document_chunk(
+                    db=db,
+                    document_name=unique_document_name,  # Use the new unique name
+                    chunk_index=idx,
+                    content=chunk.page_content,
+                    page_number=chunk.metadata.get("page_number"),
+                    row_number=chunk.metadata.get("row_number"),
+                    temp_document_id=temp_doc_db_id,
+                )
+                chunk.id = str(db_id)
+                chunk.metadata["chunk_id"] = db_id
+                documents_to_embed.append(chunk)
+
+            # 5) Build and save temporary FAISS index
+            try:
+                from langchain_community.vectorstores import FAISS
+
+                vs_path = _TEMP_VECTORSTORE_DIR / temp_doc_id
+                vs_path.mkdir(parents=True, exist_ok=True)
+
+                faiss_store = await asyncio.to_thread(
+                    FAISS.from_documents,
+                    documents_to_embed,
+                    self.embedding_model
+                )
+                await asyncio.to_thread(faiss_store.save_local, str(vs_path))
+                logger.info(
+                    f"Temporary FAISS store saved at {vs_path} for doc {file.filename}"
+                )
+            except Exception as e:
+                logger.error(f"FAISS embedding failed for {file.filename}: {e}", exc_info=True)
+                raise ValueError(f"Failed to embed document: {e}")
+
+            await db.commit()
+
+            return TemporaryDocumentUploadResult(
+                file_name=file.filename,
+                file_size=file.size if file.size is not None else file_size,
+                temp_doc_id=temp_doc_id
             )
 
         except Exception as e:
-            logger.error(f"FAISS embedding failed for {file.filename}: {e}")
-            # cleanup both file and any store
-            if temp_file_path.exists():
+            logger.error(f"Critical failure during temp document processing for {temp_doc_id}: {e}", exc_info=True)
+            await delete_temp_document_data(db, temp_doc_id)
+            if temp_file_path and temp_file_path.exists():
                 temp_file_path.unlink()
-            if vs_path.exists():
+            if vs_path and vs_path.exists():
                 shutil.rmtree(vs_path, ignore_errors=True)
-            raise ValueError(f"Failed to embed document: {e}")
+            raise e
 
-        return TemporaryDocumentUploadResult(
-            file_name=file.filename,
-            file_size=file_size,
-            temp_doc_id=temp_doc_id
-        )
 
     @staticmethod
-    def cleanup_temp_document(temp_doc_id: str):
-        """Removes a temporary document and its associated vector store data."""
-        logger.info(f"Attempting to clean up temporary document: {temp_doc_id}")
+    def cleanup_fs(doc_data: Dict[str, Any]):
+        """
+        Static method to remove a single document's associated vector store data and physical file.
+        This method is called by the cleanup tasks and requires no class instance state.
+        """
+        temp_doc_id = doc_data['temp_doc_id']
+        original_name = doc_data['original_name']
+        user_id = doc_data['user_id']
+        thread_id = doc_data['thread_id']
 
-        file_removed = False
-        for user_dir in _TEMP_CHAT_UPLOADS_DIR.iterdir():
-            if user_dir.is_dir():
-                for thread_dir in user_dir.iterdir():
-                    if thread_dir.is_dir():
-                        for file_in_dir in thread_dir.iterdir():
-                            if file_in_dir.is_file() and file_in_dir.name.startswith(f"{temp_doc_id}_"):
-                                os.remove(file_in_dir)
-                                logger.info(f"Removed temporary document file: {file_in_dir}")
-                                file_removed = True
-                                break
-                        if file_removed:
-                            break
-                if file_removed:
-                    break
+        logger.info(f"Attempting to clean up filesystem for temporary document: {temp_doc_id}")
 
-        if not file_removed:
-            logger.warning(f"Temporary document file not found for cleanup (ID: {temp_doc_id}).")
+        file_path = _TEMP_CHAT_UPLOADS_DIR / str(user_id) / thread_id / f"{temp_doc_id}_{original_name}"
+        if file_path.exists():
+            try:
+                os.remove(file_path)
+                logger.info(f"Removed temporary document file: {file_path}")
+            except OSError as e:
+                logger.warning(f"Failed to remove file {file_path}: {e}")
+        else:
+            logger.warning(f"Temporary document file not found for cleanup: {file_path}")
 
         temp_vector_store_path = _TEMP_VECTORSTORE_DIR / temp_doc_id
-
         if temp_vector_store_path.exists():
-            shutil.rmtree(temp_vector_store_path, ignore_errors=True)
-            logger.info(f"Removed temporary vector store for: {temp_doc_id}")
+            try:
+                shutil.rmtree(temp_vector_store_path, ignore_errors=False)
+                logger.info(f"Removed temporary vector store directory: {temp_vector_store_path}")
+            except OSError as e:
+                logger.error(f"Failed to remove vector store directory {temp_vector_store_path}: {e}")
         else:
-            logger.warning(f"Temporary vector store not found for cleanup: {temp_vector_store_path}")
+            logger.warning(f"Temporary vector store directory not found for cleanup: {temp_vector_store_path}")
 
-    @staticmethod
-    def cleanup_user_thread_temp_documents(user_id: int, thread_id: str):
+    async def cleanup_user_thread_temp_documents(self, user_id: int, thread_id: str, db: AsyncSession):
         """
-        Cleans up all temporary documents for a given user and thread by iterating their files.
+        Cleans up all temporary documents for a given user and thread.
+        This is a transactional operation that deletes files and database records.
         """
+        logger.info(f"Starting cleanup for temporary documents of user {user_id}, thread {thread_id}")
+
+        stmt = select(temporary_documents_table).where(
+            temporary_documents_table.c.user_id == user_id,
+            temporary_documents_table.c.thread_id == thread_id,
+            temporary_documents_table.c.cleaned_up == False
+        )
+        temp_docs_to_clean = (await db.execute(stmt)).mappings().all()
+
+        if not temp_docs_to_clean:
+            logger.info(f"No temporary documents found for user {user_id} and thread {thread_id}. Cleanup finished.")
+            return
+
+        logger.info(f"Found {len(temp_docs_to_clean)} documents to clean.")
+
+        for doc in temp_docs_to_clean:
+            doc_dict = dict(doc)
+            logger.info(f"Processing cleanup for temp doc: {doc_dict['temp_doc_id']}")
+            self.cleanup_fs(doc_dict)
+            await delete_temp_document_data(db, doc_dict['temp_doc_id'])
+
         user_thread_upload_dir = _TEMP_CHAT_UPLOADS_DIR / str(user_id) / thread_id
-
-        logger.info(f"Cleaning up temporary documents for user {user_id}, thread {thread_id}")
-
         if user_thread_upload_dir.exists():
-            for file_path in list(user_thread_upload_dir.iterdir()):
-                if file_path.is_file() and file_path.name.startswith(
-                    f"{str(uuid.UUID(file_path.name.split('_')[0]))}_"
-                ):
-                    try:
-                        extracted_temp_doc_id = file_path.name.split('_', 1)[0]
-                        TemporaryDocumentService.cleanup_temp_document(extracted_temp_doc_id)
-                    except ValueError as e:
-                        logger.warning(
-                            f"Skipping file {file_path.name} during thread cleanup due to unexpected naming: {e}"
-                        )
-                else:
-                    logger.warning(
-                        f"Skipping non-file or non-temp-doc-named item during thread cleanup: {file_path.name}"
-                    )
-
             shutil.rmtree(user_thread_upload_dir, ignore_errors=True)
-            logger.info(f"Removed temporary upload directory: {user_thread_upload_dir}")
-        else:
-            logger.warning(f"Temporary upload directory not found for cleanup: {user_thread_upload_dir}")
+            logger.info(f"Removed empty temporary upload directory: {user_thread_upload_dir}")
+
+        logger.info(f"Finished cleanup for user {user_id} and thread {thread_id}.")
+
+
+#22

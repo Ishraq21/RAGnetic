@@ -6,14 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from app.db.models import conversation_metrics_table, users_table, roles_table, user_api_keys_table, \
     role_permissions_table, user_organizations_table, organizations_table, document_chunks_table, citations_table, \
-    chat_sessions_table
+    chat_sessions_table, temporary_documents_table
 from app.schemas.security import UserCreate, UserUpdate, RoleCreate
 from typing import Optional, List, Dict, Any
 import bcrypt
-from datetime import datetime
+from datetime import datetime, timedelta
 import secrets
 from app.schemas.agent import DocumentMetadata
 from app.db.models import chat_messages_table
+from uuid import uuid4
+from sqlalchemy import func
 
 logger = logging.getLogger("ragnetic")
 
@@ -481,14 +483,23 @@ def save_conversation_metrics_sync(connection, metrics_data: dict):
 
 # --- Document Chunk Management ---
 
-async def create_document_chunk(db: AsyncSession, document_name: str, chunk_index: int, content: str, page_number: Optional[int] = None, row_number: Optional[int] = None) -> int:
+async def create_document_chunk(
+    db: AsyncSession,
+    document_name: str,
+    chunk_index: int,
+    content: str,
+    page_number: Optional[int] = None,
+    row_number: Optional[int] = None,
+    temp_document_id: Optional[int] = None,   # <<< NEW
+) -> int:
     """Creates a new document chunk and returns its ID."""
     stmt = insert(document_chunks_table).values(
         document_name=document_name,
         chunk_index=chunk_index,
         content=content,
         page_number=page_number,
-        row_number=row_number
+        row_number=row_number,
+        temp_document_id=temp_document_id      # <<< NEW
     ).returning(document_chunks_table.c.id)
     result = await db.execute(stmt)
     await db.commit()
@@ -579,3 +590,140 @@ async def create_chat_message(
         await db.rollback()
         logger.error(f"Failed to create chat message or update session {session_id}: {e}", exc_info=True)
         raise
+
+
+
+DEFAULT_TTL_SECONDS = 7 * 24 * 3600   # one week
+
+async def create_temp_document(
+    db: AsyncSession,
+    user_id: int,
+    thread_id: str,
+    original_name: str,
+    file_size: int,
+    ttl_seconds: int = DEFAULT_TTL_SECONDS,
+) -> Dict[str, Any]:
+    """Insert a row in temporary_documents and return it as a dict."""
+    temp_doc_id = str(uuid4())
+    expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+
+    stmt = (
+        insert(temporary_documents_table)
+        .values(
+            temp_doc_id=temp_doc_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            original_name=original_name,
+            file_size=file_size,
+            created_at=datetime.utcnow(),
+            expires_at=expires_at,
+            cleaned_up=False,
+        )
+        .returning(*temporary_documents_table.c)
+    )
+    row = (await db.execute(stmt)).mappings().first()
+    await db.commit()
+    return dict(row)
+
+
+async def get_temp_document(db: AsyncSession, temp_doc_id: str) -> Optional[Dict[str, Any]]:
+    stmt = select(temporary_documents_table).where(
+        temporary_documents_table.c.temp_doc_id == temp_doc_id,
+        temporary_documents_table.c.cleaned_up == False,
+    )
+    row = (await db.execute(stmt)).mappings().first()
+    return dict(row) if row else None
+
+
+async def mark_temp_document_cleaned(db: AsyncSession, row_id: int) -> None:
+    stmt = (
+        update(temporary_documents_table)
+        .where(temporary_documents_table.c.id == row_id)
+        .values(cleaned_up=True, updated_at=datetime.utcnow())
+    )
+    await db.execute(stmt)
+    await db.commit()
+
+
+async def list_expired_temp_documents(db: AsyncSession) -> List[Dict[str, Any]]:
+    """Return all rows from temporary_documents_table whose expires_at ≤ now AND not yet cleaned."""
+    stmt = (
+        select(temporary_documents_table)
+        .where(
+            temporary_documents_table.c.expires_at <= func.now(),
+            temporary_documents_table.c.cleaned_up == False,
+        )
+    )
+    rows = (await db.execute(stmt)).mappings().all()
+    return [dict(r) for r in rows]
+
+async def delete_temp_document_data(db: AsyncSession, temp_doc_id: str) -> bool:
+    """
+    Atomically deletes a temporary document record and all its associated
+    chunks and citations. Returns True on success, False otherwise.
+    """
+    try:
+        # Step 1: Find the temporary document row to get its ID
+        temp_doc_row = (await db.execute(
+            select(temporary_documents_table.c.id)
+            .where(temporary_documents_table.c.temp_doc_id == temp_doc_id)
+        )).scalar_one_or_none()
+
+        if not temp_doc_row:
+            logger.warning(f"Attempted to delete non-existent temp document with ID: {temp_doc_id}")
+            return False
+
+        # Step 2: Get all chunks associated with this temp document
+        chunk_ids_to_delete = (await db.execute(
+            select(document_chunks_table.c.id)
+            .where(document_chunks_table.c.temp_document_id == temp_doc_row)
+        )).scalars().all()
+
+        if chunk_ids_to_delete:
+            # Step 3: Delete citations linked to these chunks
+            await db.execute(
+                delete(citations_table)
+                .where(citations_table.c.chunk_id.in_(chunk_ids_to_delete))
+            )
+            logger.info(f"Deleted citations for chunks of temp doc {temp_doc_id}.")
+
+            # Step 4: Delete the chunks themselves
+            await db.execute(
+                delete(document_chunks_table)
+                .where(document_chunks_table.c.id.in_(chunk_ids_to_delete))
+            )
+            logger.info(f"Deleted {len(chunk_ids_to_delete)} chunks for temp doc {temp_doc_id}.")
+
+        # Step 5: Delete the temporary document record
+        await db.execute(
+            delete(temporary_documents_table)
+            .where(temporary_documents_table.c.id == temp_doc_row)
+        )
+        logger.info(f"Deleted temporary document record for temp doc {temp_doc_id}.")
+
+        await db.commit()
+        return True
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to atomically delete temp document data for {temp_doc_id}: {e}", exc_info=True)
+        return False
+
+
+async def get_temp_document_by_user_thread_id(
+    db: AsyncSession,
+    temp_doc_id: str,
+    user_id: int,
+    thread_id: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a temporary document record if it matches the given
+    temp_doc_id, user_id, and thread_id.
+    """
+    stmt = select(temporary_documents_table).where(
+        temporary_documents_table.c.temp_doc_id == temp_doc_id,
+        temporary_documents_table.c.user_id == user_id,
+        temporary_documents_table.c.thread_id == thread_id,
+        temporary_documents_table.c.cleaned_up == False,
+    )
+    row = (await db.execute(stmt)).mappings().first()
+    return dict(row) if row else None

@@ -80,6 +80,7 @@ dependencies     = [
   "trl",
   "tensorboard",
   "huggingface-hub>=0.34.0",
+   "filetype>=1.2.0"
 
 ]
 

@@ -7,7 +7,7 @@ window.quickUploads = (function() {
     // Constants for client-side file validation.
     const MAX_FILE_SIZE_MB = 25;
     const SUPPORTED_FILE_TYPES = [
-        '.pdf', '.docx', '.txt', '.csv', '.json', '.yaml', '.yml', '.hcl', '.tf', '.ipynb', '.md', '.log'
+        '.pdf', '.docx', '.txt', '.csv', '.json', '.yaml', '.yml', '.hcl', '.tf', '.ipynb', '.md', '.log, .html'
     ];
 
     /**
