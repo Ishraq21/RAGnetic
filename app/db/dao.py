@@ -714,16 +714,15 @@ async def get_temp_document_by_user_thread_id(
     temp_doc_id: str,
     user_id: int,
     thread_id: str
-) -> Optional[Dict[str, Any]]:
+) -> bool:
     """
-    Retrieves a temporary document record if it matches the given
-    temp_doc_id, user_id, and thread_id.
+    Returns True if a non-cleaned temp‐doc with (temp_doc_id, user_id, thread_id) exists.
     """
-    stmt = select(temporary_documents_table).where(
+    stmt = select(temporary_documents_table.c.id).where(
         temporary_documents_table.c.temp_doc_id == temp_doc_id,
-        temporary_documents_table.c.user_id == user_id,
-        temporary_documents_table.c.thread_id == thread_id,
-        temporary_documents_table.c.cleaned_up == False,
+        temporary_documents_table.c.user_id      == user_id,
+        temporary_documents_table.c.thread_id    == thread_id,
+        temporary_documents_table.c.cleaned_up   == False,
     )
-    row = (await db.execute(stmt)).mappings().first()
-    return dict(row) if row else None
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None
