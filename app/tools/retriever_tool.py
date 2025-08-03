@@ -17,11 +17,15 @@ from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_core.documents import Document
 from langchain_core.tools import BaseTool, Tool
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from sqlalchemy.ext.asyncio import AsyncSession
+from contextlib import asynccontextmanager
 
 from pinecone import Pinecone as PineconeClient
 
+from app import db
 from app.core.embed_config import get_embedding_model
 from app.core.config import get_path_settings, get_api_key
+from app.db.dao import get_temp_document_by_user_thread_id
 from app.schemas.agent import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -31,14 +35,24 @@ _VECTORSTORE_DIR = _APP_PATHS["VECTORSTORE_DIR"]
 _TEMP_VECTORSTORE_DIR = _APP_PATHS["VECTORSTORE_DIR"] / "temp_chat_data"
 
 
-async def get_retriever_tool(agent_config: AgentConfig) -> Tool:
+async def get_retriever_tool(
+        agent_config: AgentConfig,
+        user_id: int,
+        thread_id: str
+) -> Tool:
     """
     Creates a LangChain Tool for document retrieval.
     This tool encapsulates the logic for combining permanent and
     dynamically loaded temporary vector stores on each invocation.
+
+    This version now enforces isolation for temporary documents based on user_id and thread_id.
     """
     agent_name = agent_config.name
     vs_config = agent_config.vector_store
+
+    # We will assume temporary documents are always stored locally as FAISS files.
+    # The permanent store type can still be configured in the YAML.
+    # We don't need a `temp_vs_config` as it's now a fixed choice.
 
     try:
         embeddings = get_embedding_model(agent_config.embedding_model)
@@ -152,17 +166,24 @@ async def get_retriever_tool(agent_config: AgentConfig) -> Tool:
             embeddings: Any
             vs_config: Any
             agent_config: Any
+            user_id: int
+            thread_id: str
 
             class Config:
                 # Allow Pydantic to handle complex, non-serializable objects
                 arbitrary_types_allowed = True
 
-            async def _arun(self, query: str, temp_document_ids: Optional[List[str]] = None) -> List[Document]:
-                logger.info(f"Retriever tool running with query: '{query}' and temp_doc_ids: {temp_document_ids}")
+            async def _arun(self, query: str, temp_document_ids: Optional[List[str]] = None,
+                            db_session: Optional[AsyncSession] = None) -> List[Document]:
+                logger.info(
+                    f"Retriever tool running with query: '{query}' for thread '{self.thread_id}' (user {self.user_id}). Temp doc IDs: {temp_document_ids}")
+
+                if db_session is None:
+                    logger.error("Database session is required for temporary document isolation.")
+                    return []
 
                 current_retrievers = []
 
-                # Use the initialized retrievers from instance fields
                 if self.permanent_bm25_retriever:
                     current_retrievers.append(self.permanent_bm25_retriever)
                 if self.permanent_semantic_retriever:
@@ -173,20 +194,34 @@ async def get_retriever_tool(agent_config: AgentConfig) -> Tool:
                 if temp_document_ids:
                     logger.info(f"Attempting to load {len(temp_document_ids)} temporary documents for retrieval.")
                     for temp_doc_id in temp_document_ids:
+                        is_owned = await get_temp_document_by_user_thread_id(
+                            db=db_session,
+                            temp_doc_id=temp_doc_id,
+                            user_id=self.user_id,
+                            thread_id=self.thread_id
+                        )
+
+                        if not is_owned:
+                            logger.warning(
+                                f"Skipping temporary document '{temp_doc_id}' as it does not belong to user '{self.user_id}' and thread '{self.thread_id}'. Possible data leakage attempt blocked.")
+                            continue
+
                         temp_doc_vector_path = _TEMP_VECTORSTORE_DIR / temp_doc_id
-                        if temp_doc_vector_path.exists() and self.vs_config.type == 'faiss':
+                        if temp_doc_vector_path.exists():
                             try:
                                 temp_vectorstore = await asyncio.to_thread(FAISS.load_local,
-                                                                           str(temp_doc_vector_path), self.embeddings,
+                                                                           str(temp_doc_vector_path),
+                                                                           self.embeddings,
                                                                            allow_dangerous_deserialization=True)
                                 temp_retrievers_instances.append(
                                     temp_vectorstore.as_retriever(search_kwargs={"k": self.vs_config.semantic_k}))
                                 logger.info(f"Loaded temporary FAISS vector store for temp_doc_id: {temp_doc_id}")
                             except Exception as e:
-                                logger.error(f"Failed to load temporary FAISS store {temp_doc_id}: {e}", exc_info=True)
+                                logger.error(f"Failed to load temporary FAISS store {temp_doc_id}: {e}",
+                                             exc_info=True)
                         else:
                             logger.warning(
-                                f"Temporary document '{temp_doc_id}' not found or unsupported for type {self.vs_config.type}. Only FAISS temp stores are directly loaded via file path.")
+                                f"Temporary FAISS document '{temp_doc_id}' not found at {temp_doc_vector_path}.")
 
                 current_retrievers.extend(temp_retrievers_instances)
 
@@ -229,16 +264,25 @@ async def get_retriever_tool(agent_config: AgentConfig) -> Tool:
                 return retrieved_docs
 
             def _run(self, query: str, temp_document_ids: Optional[List[str]] = None) -> List[Document]:
-                logger.warning("Synchronous _run called for DynamicRetrieverTool. Using asyncio.run to call _arun.")
-                return asyncio.run(self._arun(query, temp_document_ids))
+                """Synchronous version of the tool. Must create its own async loop and db session."""
+                logger.warning("Synchronous _run called for DynamicRetrieverTool. Using new async session.")
 
-        # Instantiate the tool, passing the complex objects as arguments
+                async def sync_runner():
+                    async for session in db.get_db():
+                        return await self._arun(query=query, temp_document_ids=temp_document_ids, db_session=session)
+
+                return asyncio.run(sync_runner())
+
+        # Instantiate the tool, passing the complex objects and new parameters
         return DynamicRetrieverTool(
-            permanent_semantic_retriever=permanent_vectorstore.as_retriever(search_kwargs={"k": vs_config.semantic_k}) if permanent_vectorstore else None,
+            permanent_semantic_retriever=permanent_vectorstore.as_retriever(
+                search_kwargs={"k": vs_config.semantic_k}) if permanent_vectorstore else None,
             permanent_bm25_retriever=bm25_permanent,
             embeddings=embeddings,
             vs_config=vs_config,
-            agent_config=agent_config
+            agent_config=agent_config,
+            user_id=user_id,
+            thread_id=thread_id
         )
 
     except Exception as initialization_err:

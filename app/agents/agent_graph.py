@@ -93,10 +93,11 @@ async def call_model(state: AgentState, config: RunnableConfig):
         tools = config['configurable'].get('tools', [])
         messages = state['messages']
 
-        # Extract session_id and other configurable items directly from config
+        # Extract session_id, user_id and thread_id from config
         session_id = config['configurable'].get("session_id")
+        user_id = config['configurable'].get("user_id")
+        thread_id = config['configurable'].get("thread_id")
         request_id = config['configurable'].get("request_id") or state["request_id"]
-        # In a chat context, the agent name from config might be more reliable
         agent_name_from_config = config['configurable'].get("agent_name", agent_config.name)
 
         temp_document_ids = state.get("temp_document_ids", [])
@@ -134,8 +135,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 embedding_tokens = count_tokens(query, embedding_model_name)
                 embedding_cost_usd = calculate_cost(embedding_model_name=embedding_model_name,
                                                     embedding_tokens=embedding_tokens)
-                retriever_tool = await get_retriever_tool(agent_config)
-                retrieved_docs = await retriever_tool.ainvoke({"query": query, "temp_document_ids": temp_document_ids})
+                retriever_tool = await get_retriever_tool(agent_config, user_id, thread_id)
+                retrieved_docs = await retriever_tool.ainvoke(
+                    {"query": query, "temp_document_ids": temp_document_ids, "db_session": db_session})
                 if retrieved_docs:
                     logger.info(f"Successfully retrieved {len(retrieved_docs)} documents.")
                 else:
@@ -154,7 +156,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 page_num = meta.get('page_number')
                 source_label = f"[{i}] {doc_name}" + (f" (Page {page_num})" if page_num else "")
                 source_strings.append(source_label)
-
 
                 meta['chunk_content'] = doc.page_content
                 source_map[i] = meta
@@ -424,7 +425,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
             # 2. Parse citations from the response
             # The extract_citations_from_text function is assumed to return chunk_id = -1 for un-matched markers
             parsed_citations = extract_citations_from_text(response_text, source_map)
-            logger.info(f"Final parsed citations from LLM: {parsed_citations}")
+            logger.debug(f"Final parsed citations from LLM: {parsed_citations}")
 
             # This is what the frontend will use to render the inline markers.
             ai_message_meta = {"citations": parsed_citations} if parsed_citations else None

@@ -27,7 +27,7 @@ class HyperparametersConfig(BaseModel):
     save_total_limit: Optional[int] = Field(1, description="Maximum number of checkpoints to keep.")
     cost_per_gpu_hour: Optional[float] = Field(0.5, description="Estimated cost in USD per GPU hour for metrics tracking.")
 
-    # NEW: Mixed precision dtype configuration
+
     mixed_precision_dtype: Optional[Literal['no', 'fp16', 'bf16']] = Field(
         'no', # Default to 'no' mixed precision for widest compatibility
         description="Type of mixed precision to use ('no', 'fp16', or 'bf16'). 'fp16' is for most NVIDIA GPUs, 'bf16' for newer NVIDIA and some Apple Silicon. 'no' for full float32."

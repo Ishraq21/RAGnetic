@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, update
-from typing import Any, Dict, Optional, List  # Added List for payload.files
+from typing import Any, Dict, Optional, List
 from datetime import datetime
 from pydantic import BaseModel, Field
 from uuid import uuid4
@@ -31,8 +31,6 @@ router = APIRouter(prefix="/api/v1/agents", tags=["Query API"])
 
 class QueryRequest(BaseModel):
     query: str = Field(..., description="The user's query to the agent.")
-    user_id: Optional[str] = Field(None,
-                                   description="A unique identifier for the user (will be overridden by authenticated user_id if available).")
     thread_id: Optional[str] = Field(None, description="A unique identifier for the conversation thread.")
     files: List[Dict[str, str]] = Field(default_factory=list,
                                         description="List of successfully uploaded temporary files with their temp_doc_ids.")
@@ -111,7 +109,7 @@ async def query_agent(
     # Re-load full history (including meta)
     history_rows = (await db.execute(
         select(chat_messages_table.c.sender, chat_messages_table.c.content,
-               chat_messages_table.c.meta)  # NEW: Select meta
+               chat_messages_table.c.meta)
         .where(chat_messages_table.c.session_id == session_id)
         .order_by(chat_messages_table.c.timestamp.asc())
     )).fetchall()
@@ -135,9 +133,9 @@ async def query_agent(
 
     # Build and execute the agent
     tools = []
-    # MODIFIED: Pass temp_document_ids to get_retriever_tool
     if "retriever" in agent_config.tools:
-        tools.append(get_retriever_tool(agent_config, temp_document_ids_for_this_query))
+        retriever_tool = await get_retriever_tool(agent_config, user_db_id, safe_thread_id)
+        tools.append(retriever_tool)
     if "arxiv" in agent_config.tools:
         tools.extend(get_arxiv_tool())
     if "search_engine" in agent_config.tools:
@@ -157,27 +155,27 @@ async def query_agent(
         "messages": history,
         "request_id": request_id,
         "agent_config": agent_config,
-        "temp_document_ids": temp_document_ids_for_this_query,  # NEW: Pass temp document IDs to agent state
+        "temp_document_ids": temp_document_ids_for_this_query,
     }
 
     final_state = {}
     try:
-        # Pass an empty configurable for now, as direct ainvoke doesn't use it the same way as astream_events
-        # If your agent relies on `config['configurable']` during `ainvoke`, you might need to adapt.
-        # However, AgentState should carry most of what's needed for this flow.
-        final_state_output = await agent.ainvoke(initial_state)
+        # Pass a custom `RunnableConfig` for the LangGraph agent
+        # to inject the DB session, user_id, and thread_id.
+        run_config = {
+            "configurable": {
+                "db_session": db,
+                "user_id": user_db_id,
+                "thread_id": safe_thread_id,
+            }
+        }
 
-        # Retrieve the final state and other info from the output
-        # `ainvoke` typically returns the final state directly
-        final_state = final_state_output  # Assuming ainvoke returns the AgentState dict
+        # Ainvoke the agent with the initial state and config.
+        final_state_output = await agent.ainvoke(initial_state, config=run_config)
+
+        final_state = final_state_output
         extracted_citations = final_state.get("citations", [])
-
-        # IMPORTANT: Extract retrieved_documents_meta_for_citation and accumulated_content
-        # from the final_state returned by the agent.
-        # Ensure that your `call_model` in `agent_graph.py` puts these into the state.
-        retrieved_documents_meta_for_citation = final_state.get('retrieved_documents_meta_for_citation', [])
         ai_response_content_str = final_state.get('messages', [])[-1].content if final_state.get('messages') else ""
-
 
     except Exception as e:
         logger.error(f"Agent run {request_id} failed: {e}", exc_info=True)
@@ -186,21 +184,11 @@ async def query_agent(
         ai_response_content_str = ""
         extracted_citations = []
 
-    # Extract AI reply (safely)
-    # ai_content = ""
-    # if final_state.get("messages"):
-    #     ai_content = final_state["messages"][-1].content # This can be problematic if last message is tool_call
-
-    # NEW: Extract citations from AI response
     if extracted_citations:
         logger.info(f"Using {len(extracted_citations)} parsed citations for run {request_id}.")
     else:
         logger.info(f"No parsed citations for run {request_id}.")
 
-
-
-
-    # Save AI reply with meta if successful
     if ai_response_content_str and not final_state.get("error"):
         ai_message_meta = {"citations": extracted_citations} if extracted_citations else None
         await db.execute(
@@ -214,7 +202,6 @@ async def query_agent(
         )
         await db.commit()
 
-    # Save metrics to the database
     if final_state.get("total_tokens") is not None:
         metrics_data = {
             "session_id": session_id,
@@ -225,13 +212,12 @@ async def query_agent(
             "retrieval_time_s": final_state.get("retrieval_time_s"),
             "generation_time_s": final_state.get("generation_time_s"),
             "estimated_cost_usd": final_state.get("estimated_cost_usd"),
-            "llm_model": agent_config.llm_model,  # Get LLM model from config
-            "embedding_cost_usd": final_state.get("embedding_cost_usd"),  # Get embedding cost
+            "llm_model": agent_config.llm_model,
+            "embedding_cost_usd": final_state.get("embedding_cost_usd"),
             "timestamp": datetime.utcnow()
         }
         await save_conversation_metrics_sync(db, metrics_data)
 
-    # Finalize audit run with serialized final_state
     serialized = _serialize_for_db(final_state)
     await db.execute(
         update(agent_runs)

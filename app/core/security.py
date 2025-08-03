@@ -90,8 +90,6 @@ async def get_websocket_api_key(
     )
 
 
-# --- User Authentication and Authorization (RBAC) ---
-
 async def get_current_user_from_api_key(
         api_key: str = Depends(get_http_api_key),
         db: AsyncSession = Depends(get_db)
@@ -126,6 +124,42 @@ async def get_current_user_from_api_key(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials or user is inactive.",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+    return User(**user_data)
+
+async def get_current_user_from_websocket(
+        api_key: str = Depends(get_websocket_api_key),
+        db: AsyncSession = Depends(get_db)
+) -> User:
+    """
+    Dependency to retrieve the current authenticated user from a WebSocket connection.
+    This also handles the 'master' RAGNETIC_API_KEYS giving superuser access.
+    """
+    # If the master key is used, construct a virtual superuser
+    server_keys = get_server_api_keys()
+    if api_key in server_keys:
+        return User(
+            id=0,  # Placeholder ID for master key user
+            user_id="master_admin",
+            username="master_admin",
+            email="admin@ragnetic.ai",
+            hashed_password="",  # Not applicable for virtual user
+            is_active=True,
+            is_superuser=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+            roles=[
+                {"id": 0, "name": "master_admin_role", "description": "Master administrative role",
+                 "permissions": ["*"]}
+            ]
+        )
+
+    # Otherwise, retrieve the actual user from the database
+    user_data = await db_dao.get_user_by_api_key(db, api_key)
+    if not user_data or not user_data.get("is_active"):
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="Could not validate credentials or user is inactive.",
         )
     return User(**user_data)
 

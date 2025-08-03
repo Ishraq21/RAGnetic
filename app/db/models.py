@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, MetaData, Table,
-    UniqueConstraint, Float, Boolean, Enum, Index, JSON
+    UniqueConstraint, Float, Boolean, Enum, Index, JSON, BigInteger, ForeignKeyConstraint
 )
 from datetime import datetime
 import logging
@@ -8,9 +8,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 # --- Standardized Setup ---
-metadata = MetaData()
 # Use a standard Python function for timestamps to ensure compatibility
-metadata = MetaData()
+naming_convention = {
+    "ix":  "ix_%(table_name)s_%(column_0_name)s",
+    "uq":  "uq_%(table_name)s_%(column_0_name)s",
+    "ck":  "ck_%(table_name)s_%(constraint_name)s",
+    "fk":  "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk":  "pk_%(table_name)s"
+}
+metadata = MetaData(naming_convention=naming_convention)
 utc_timestamp = datetime.utcnow
 sender_enum = Enum("human", "ai", name="sender_enum")
 workflow_status_enum = Enum("running", "completed", "failed", "paused", name="workflow_status_enum")
@@ -22,7 +28,7 @@ agent_status_enum = Enum("running", "completed", "failed", name="agent_status_en
 organizations_table = Table(
     "organizations", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("name", String(255), nullable=False, unique=True, index=True),
+    Column("name", String(255), nullable=False, unique=True),
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
     Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False)
 )
@@ -30,7 +36,7 @@ organizations_table = Table(
 roles_table = Table(
     "roles", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("name", String(50), nullable=False, unique=True, index=True),
+    Column("name", String(50), nullable=False, unique=True),
     Column("description", Text, nullable=True)
 )
 
@@ -56,10 +62,10 @@ role_permissions_table = Table(
 users_table = Table(
     "users", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("user_id", String(255), nullable=False, unique=True, index=True),
+    Column("user_id", String(255), nullable=False, unique=True),
     Column("email", String(255), nullable=True, unique=True),
-    Column("first_name", String(100), nullable=True), # New: First Name
-    Column("last_name", String(100), nullable=True),  # New: Last Name
+    Column("first_name", String(100), nullable=True),
+    Column("last_name", String(100), nullable=True),
     Column("hashed_password", String(255), nullable=False), # Store hashed passwords
     Column("is_active", Boolean, nullable=False, default=True), # User account status
     Column("is_superuser", Boolean, nullable=False, default=False), # For master admin accounts
@@ -74,7 +80,7 @@ chat_sessions_table = Table(
     Column("agent_name", String(255), nullable=False),
     Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
     Column("topic_name", String(255), nullable=True),
-    Column("thread_id", String(255), nullable=False, unique=True, index=True),
+    Column("thread_id", String(255), nullable=False, unique=True),
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
     Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
 )
@@ -116,7 +122,7 @@ ragnetic_logs_table = Table(
 agents_table = Table(
     "agents", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("name", String(255), nullable=False, unique=True, index=True),
+    Column("name", String(255), nullable=False, unique=True),
     Column("display_name", String(255), nullable=True),
     Column("description", Text, nullable=True),
     Column("model_name", String(255), nullable=False),
@@ -154,7 +160,7 @@ conversation_metrics_table = Table(
 user_api_keys_table = Table(
     "user_api_keys", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
     Column("api_key", String(255), nullable=False, unique=True),
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
     Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
@@ -165,7 +171,7 @@ user_api_keys_table = Table(
 agent_runs = Table(
     'agent_runs', metadata,
     Column('id', Integer, primary_key=True),
-    Column('run_id', String(255), unique=True, nullable=False, index=True),
+    Column('run_id', String(255), unique=True, nullable=False),
     Column('session_id', Integer, ForeignKey('chat_sessions.id'), nullable=False, index=True),
     Column('start_time', DateTime, nullable=False),
     Column('end_time', DateTime, nullable=True),
@@ -178,7 +184,7 @@ agent_runs = Table(
 agent_run_steps = Table(
     'agent_run_steps', metadata,
     Column('id', Integer, primary_key=True),
-    Column('agent_run_id', Integer, ForeignKey('agent_runs.id'), nullable=False, index=True),
+    Column('agent_run_id', Integer, ForeignKey('agent_runs.id'), nullable=False),
     Column('node_name', String(255), nullable=False),
     Column('start_time', DateTime, nullable=False),
     Column('end_time', DateTime, nullable=True),
@@ -191,7 +197,7 @@ agent_run_steps = Table(
 workflows_table = Table(
     "workflows", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("name", String(255), nullable=False, unique=True, index=True),
+    Column("name", String(255), nullable=False, unique=True),
     Column("agent_name", String(255), nullable=True),
     Column("description", Text, nullable=True),
     Column("definition", JSON, nullable=False),
@@ -203,7 +209,7 @@ workflows_table = Table(
 workflow_runs_table = Table(
     "workflow_runs", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("run_id", String(255), unique=True, nullable=False, index=True),
+    Column("run_id", String(255), unique=True, nullable=False),
     Column("workflow_id", Integer, ForeignKey("workflows.id"), nullable=False, index=True),
     Column("status", workflow_status_enum, nullable=False, default="running"), # Use the new enum here
     Column("user_id", Integer, ForeignKey("users.id"), nullable=True, index=True),
@@ -217,7 +223,7 @@ workflow_runs_table = Table(
 human_tasks_table = Table(
     "human_tasks", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("run_id", Integer, ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("run_id", Integer, ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False),
     Column("task_name", String(255), nullable=False),
     Column("status", String(50), nullable=False, default="pending"), # e.g., pending, completed, cancelled
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
@@ -275,7 +281,7 @@ fine_tuning_status_enum = Enum("pending", "running", "completed", "failed", "pau
 fine_tuned_models_table = Table(
     "fine_tuned_models", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("adapter_id", String(255), nullable=False, unique=True, index=True), # System-generated UUID for the adapter
+    Column("adapter_id", String(255), nullable=False, unique=True), # System-generated UUID for the adapter
     Column("job_name", String(255), nullable=False, index=True), # User-defined name from YAML for tracking
     Column("base_model_name", String(255), nullable=False),      # e.g., 'ollama/llama2', 'mistral'
     Column("adapter_path", String(512), nullable=False),         # Absolute file path to saved weights
@@ -294,17 +300,41 @@ fine_tuned_models_table = Table(
     Index("fine_tuned_models_base_model_idx", "base_model_name"),
 )
 
+temporary_documents_table = Table(
+    "temporary_documents", metadata,
+    Column("id",           Integer,       primary_key=True, autoincrement=True),
+    Column("temp_doc_id",  String(36),    unique=True,      nullable=False),
+    Column("user_id",      Integer,       ForeignKey("users.id", ondelete="CASCADE"), index=True),
+    Column("thread_id",    String(255),   index=True),
+    Column("original_name",Text,          nullable=False),
+    Column("file_size",    BigInteger,    nullable=False),
+    Column("created_at",   DateTime,      default=utc_timestamp, nullable=False),
+    Column("expires_at",   DateTime),                    # optional TTL; nullable
+    Column("cleaned_up",   Boolean,       default=False),# set → True after sweep
+)
 
 document_chunks_table = Table(
-    "document_chunks", metadata,
+    "document_chunks",
+    metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("document_name", String(512), nullable=False, index=True),
     Column("chunk_index", Integer, nullable=False),
     Column("content", Text, nullable=False),
-    Column("page_number", Integer, nullable=True),
-    Column("row_number", Integer, nullable=True),
+    Column("page_number", Integer),
+    Column("row_number", Integer),
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
-    UniqueConstraint("document_name", "chunk_index", name="uq_document_chunk")
+
+    # Link back to a temp doc (nullable)
+    Column("temp_document_id", Integer, nullable=True, index=True),
+
+    UniqueConstraint("document_name", "chunk_index", name="uq_document_chunk"),
+
+    ForeignKeyConstraint(
+        ["temp_document_id"],
+        ["temporary_documents.id"],
+        name="fk_document_chunks_temp_document",  # named via convention but explicit is clearer
+        ondelete="CASCADE",
+    ),
 )
 
 citations_table = Table(
@@ -319,6 +349,8 @@ citations_table = Table(
 
 
 # --- Indexes for Performance ---
+Index("tmp_docs_exp_idx", temporary_documents_table.c.expires_at)
+
 Index("chat_messages_session_ts_idx", chat_messages_table.c.session_id, chat_messages_table.c.timestamp)
 Index("conv_metrics_session_ts_idx", conversation_metrics_table.c.session_id, conversation_metrics_table.c.timestamp)
 Index("workflow_runs_workflow_idx", workflow_runs_table.c.workflow_id)

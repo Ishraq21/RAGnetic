@@ -44,7 +44,8 @@ from app.core.config import get_path_settings, get_log_storage_config, \
     get_memory_storage_config, get_db_connection_config, get_db_connection, get_cors_settings, _get_config_parser
 from app.db import initialize_db_connections, get_db
 from app.core.validation import sanitize_for_path
-from app.core.security import get_http_api_key, get_websocket_api_key, get_current_user_from_api_key
+from app.core.security import get_http_api_key, get_websocket_api_key, get_current_user_from_api_key, \
+    get_current_user_from_websocket
 from app.agents.config_manager import get_agent_configs, load_agent_config
 from app.core.serialization import _serialize_for_db
 from app.workflows.sync import sync_workflows_from_files, is_db_configured_sync
@@ -245,7 +246,7 @@ async def startup_event():
                     logger.info(f"Registered webhook: {route.path} → {route.methods}")
 
             conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
-                "connection_name")
+                    "connection_name")
             if not conn_name:
                 raise RuntimeError("Database connection name not found for async initialization.")
             initialize_db_connections(conn_name)
@@ -318,7 +319,6 @@ class WebSocketUploadedFileItem(BaseModel):
 # Your actual chat message model (if it exists) might need updating.
 class ChatMessagePayloadWithFiles(BaseModel):
     agent: str
-    user_id: int
     thread_id: Optional[str] = None
     query: str
     # List of dictionaries, each with 'file_name' and 'temp_doc_id'
@@ -341,7 +341,7 @@ async def create_new_session(
     """
     session_id, topic_name, thread_id = await _get_or_create_session(
         db,
-        thread_id_from_frontend=None, # Force creation of a new session
+        thread_id_from_frontend=None,
         agent_name=request.agent_name,
         user_db_id=request.user_id
     )
@@ -473,25 +473,10 @@ async def _get_or_create_session(db: AsyncSession, thread_id_from_frontend: Opti
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="Failed to create new chat session.")
 
-"""
-async def _save_message_and_update_session(db: AsyncSession, session_id: int, sender: str, content: str,
-                                           meta: Optional[Dict] = None):
-    now = datetime.utcnow()
-    msg_stmt = insert(chat_messages_table).values(session_id=session_id, sender=sender, content=content, timestamp=now,
-                                                  meta=meta)
-    session_stmt = update(chat_sessions_table).where(chat_sessions_table.c.id == session_id).values(updated_at=now)
-    await db.execute(msg_stmt)
-    await db.execute(session_stmt)
-    await db.commit()
-
-
-"""
-
-
-
 
 @app.websocket("/ws")
-async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api_key),
+async def websocket_chat(ws: WebSocket,
+                         current_user: User = Depends(get_current_user_from_websocket),
                          db: AsyncSession = Depends(get_db)):
     await ws.accept()
     canonical_thread_id: str = "uninitialized_thread"
@@ -516,7 +501,7 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
             return
 
         agent_name = payload.agent
-        user_db_id = payload.user_id
+        user_db_id = current_user.id
         if not isinstance(user_db_id, int):
             logger.error(f"WebSocket received non-integer user_id: {user_db_id}. Closing connection.")
             await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Invalid 'user_id' type. Expected integer.")
@@ -548,7 +533,12 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
                 all_tools.extend(create_sql_toolkit(db_connection_string=db_source.db_connection,
                                                     llm_model_name=agent_config.llm_model))
 
+        if "retriever" in agent_config.tools:
+            retriever_tool = await get_retriever_tool(agent_config, user_db_id, canonical_thread_id)
+            all_tools.append(retriever_tool)
+
         langgraph_agent = get_agent_workflow(all_tools).compile()
+
 
         # Main message loop
         while True:
@@ -616,7 +606,7 @@ async def websocket_chat(ws: WebSocket, api_key: str = Depends(get_websocket_api
                     "session_id": session_id,
                     "user_id": user_db_id,
                     "agent_name": agent_name,
-                    "db_session": db,  # CRITICAL: Pass the DB session to the agent
+                    "db_session": db,
                     "callbacks": [UsageMetadataCallbackHandler()]
                 }
             }
@@ -943,29 +933,58 @@ async def rename_session(thread_id: str, request: RenameRequest, agent_name: str
 
 
 @app.delete("/sessions/{thread_id}", tags=["Memory"], status_code=status.HTTP_200_OK)
-async def delete_session(thread_id: str, agent_name: str, user_id: int, api_key: str = Depends(get_http_api_key),
-                         db: AsyncSession = Depends(get_db)):
+async def delete_session(
+        thread_id: str,
+        agent_name: str,
+        user_id: int,
+        api_key: str = Depends(get_http_api_key),
+        db: AsyncSession = Depends(get_db)
+):
     if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Functionality not supported without a database.")
+
     safe_thread_id = sanitize_for_path(thread_id)
     safe_agent_name = sanitize_for_path(agent_name)
+
     try:
+        # First, retrieve the agent config to initialize the TemporaryDocumentService
+        agent_config = load_agent_config(safe_agent_name)
+        temp_doc_service = TemporaryDocumentService(agent_config=agent_config)
+
+        # Before deleting the session record, perform a comprehensive cleanup of temporary files
+        await temp_doc_service.cleanup_user_thread_temp_documents(
+            user_id=user_id,
+            thread_id=safe_thread_id,
+            db=db
+        )
+
+        # Now, proceed with deleting the chat history and session record
         session_id = (await db.execute(select(chat_sessions_table.c.id).where(
             (chat_sessions_table.c.thread_id == safe_thread_id) &
             (chat_sessions_table.c.agent_name == safe_agent_name) &
             (chat_sessions_table.c.user_id == user_id)
         ))).scalar_one_or_none()
+
         if not session_id:
             raise HTTPException(status_code=404, detail="Chat session not found or permission denied.")
+
         await db.execute(delete(chat_messages_table).where(chat_messages_table.c.session_id == session_id))
         await db.execute(delete(chat_sessions_table).where(chat_sessions_table.c.id == session_id))
         await db.commit()
-        return JSONResponse({"status": "ok", "message": "Chat session deleted successfully."})
+
+        return JSONResponse(
+            {"status": "ok", "message": "Chat session and all temporary documents deleted successfully."})
+
     except SQLAlchemyError as e:
         await db.rollback()
         logger.error(f"A database error occurred while deleting session {safe_thread_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500,
                             detail="A database error occurred while deleting the session. Please try again or create a GitHub issue.")
+    except Exception as e:
+        # If any other part of the cleanup or deletion fails, log it and return an error.
+        logger.error(f"An unexpected error occurred during session deletion for {safe_thread_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500,
+                            detail="An unexpected error occurred during session deletion. Please check server logs for details.")
 
 
 #22

@@ -8,7 +8,7 @@ from pathlib import Path
 import csv
 from io import StringIO
 import yaml
-import asyncio # New: Import asyncio for to_thread when parsing PDF/DOCX
+import asyncio
 
 from langchain_core.documents import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
