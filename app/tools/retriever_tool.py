@@ -206,11 +206,7 @@ async def get_retriever_tool(
                 # Allow Pydantic to handle complex, non-serializable objects
                 arbitrary_types_allowed = True
 
-            async def _arun(
-                    self,
-                    query: str,
-                    temp_document_ids: Optional[List[str]] = None
-            ) -> List[Document]:
+            async def _arun(self, query: str, temp_document_ids: Optional[List[str]] = None) -> List[Document]:
                 logger.info(
                     f"Retriever tool running with query: '{query}' "
                     f"for thread '{self.thread_id}' (user {self.user_id}). "
@@ -226,59 +222,44 @@ async def get_retriever_tool(
                 temp_retrievers_instances: List[Any] = []
 
                 if temp_document_ids:
-                    logger.info(
-                        f"Attempting to load {len(temp_document_ids)} temporary documents for retrieval."
-                    )
+                    logger.info(f"Attempting to load {len(temp_document_ids)} temporary documents for retrieval.")
+                    async for temp_db in get_db():
 
-                    # open a single isolated session for all ownership checks
-                    async for isolation_db in get_db():
-                        # iterate through each temp_doc_id
                         for temp_doc_id in temp_document_ids:
-                            is_owned = await get_temp_document_by_user_thread_id(
-                                db=isolation_db,
-                                temp_doc_id=temp_doc_id,
-                                user_id=self.user_id,
-                                thread_id=self.thread_id
-                            )
-                            if not is_owned:
-                                logger.warning(
-                                    f"Skipping temporary document '{temp_doc_id}' as it does not belong to "
-                                    f"user '{self.user_id}' and thread '{self.thread_id}'."
-                                )
+                            # ownership check
+                            if not await get_temp_document_by_user_thread_id(
+                                    db=temp_db,
+                                    temp_doc_id=temp_doc_id,
+                                    user_id=self.user_id,
+                                    thread_id=self.thread_id
+                            ):
+                                logger.warning(f"Skipping temp doc {temp_doc_id}: not owned by this user/thread.")
                                 continue
 
-                            # load its FAISS index
-                            temp_doc_vector_path = _TEMP_VECTORSTORE_DIR / temp_doc_id
-                            if temp_doc_vector_path.exists():
-                                try:
-                                    temp_vectorstore = await asyncio.to_thread(
-                                        FAISS.load_local,
-                                        str(temp_doc_vector_path),
-                                        self.embeddings,
-                                        allow_dangerous_deserialization=True
-                                    )
-                                    temp_retrievers_instances.append(
-                                        temp_vectorstore.as_retriever(
-                                            search_kwargs={"k": self.vs_config.semantic_k}
-                                        )
-                                    )
-                                    logger.info(
-                                        f"Loaded temporary FAISS vector store for temp_doc_id: {temp_doc_id}"
-                                    )
-                                except Exception as e:
-                                    logger.error(
-                                        f"Failed to load temporary FAISS store {temp_doc_id}: {e}",
-                                        exc_info=True
-                                    )
-                            else:
-                                logger.warning(
-                                    f"Temporary FAISS document '{temp_doc_id}' not found at {temp_doc_vector_path}."
-                                )
-                        break  # exit after one pass through get_db()
+                            temp_store_path = _TEMP_VECTORSTORE_DIR / temp_doc_id
+                            if not temp_store_path.exists():
+                                logger.warning(f"No FAISS store found at {temp_store_path}.")
+                                continue
 
-                # combine permanent + temporary retrievers
-                current_retrievers.extend(temp_retrievers_instances)
+                            # load the FAISS index only once
+                            temp_vs = await asyncio.to_thread(
+                                FAISS.load_local,
+                                str(temp_store_path),
+                                self.embeddings,
+                                allow_dangerous_deserialization=True
+                            )
 
+                            # stage-1: semantic search on that one temp doc
+                            temp_retriever = temp_vs.as_retriever(search_kwargs={"k": self.vs_config.semantic_k})
+                            hits = await temp_retriever.ainvoke(query)
+                            if not hits:
+                                logger.info(f"Temp doc {temp_doc_id}: no relevant chunks. Skipping.")
+                                continue
+
+                            # only if we got hits do we add this retriever to the mix
+                            logger.info(f"Temp doc {temp_doc_id}: {len(hits)} relevant chunks—adding to retrievers.")
+                            current_retrievers.append(temp_retriever)
+                        break
                 if not current_retrievers:
                     logger.warning(
                         "No retrievers (permanent or temporary) are available. Returning empty documents."
