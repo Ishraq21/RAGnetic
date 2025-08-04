@@ -298,6 +298,8 @@ app.include_router(training_api_router)
 app.include_router(workflows.router, prefix="/api/v1")
 app.include_router(webhooks.router, prefix="/webhooks/v1")
 app.include_router(citations_api_router)
+app.include_router(evaluation_api_router)
+
 
 
 

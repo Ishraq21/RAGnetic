@@ -13,7 +13,7 @@ import configparser
 # Import core components
 from app.agents.config_manager import get_agent_configs
 from app.pipelines.embed import embed_agent_data
-from app.core.config import get_path_settings, get_memory_storage_config, get_log_storage_config
+from app.core.config import get_path_settings, get_memory_storage_config, get_log_storage_config, get_server_api_keys
 from app.db import initialize_db_connections, AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,7 @@ class AgentDataEventHandler(FileSystemEventHandler):
         self.config = configparser.ConfigParser()
         self.config.read(_CONFIG_FILE)
         self.server_url = self._get_server_url()
+        self.api_key = self._get_api_key()
         self.last_event_time = {} # To debounce events
         self.workflows_dir = _WORKFLOWS_DIR # Ensure _WORKFLOWS_DIR is accessible as an attribute
         self.uploaded_temp_dir = _DATA_DIR / "uploaded_temp" # Define the temp upload directory
@@ -57,6 +58,13 @@ class AgentDataEventHandler(FileSystemEventHandler):
         except Exception as e:
             logger.error(f"Watcher: Failed to initialize database connections: {e}", exc_info=True)
 
+    def _get_api_key(self) -> str:
+        """Retrieves the first server API key for authentication."""
+        keys = get_server_api_keys()
+        if not keys:
+            logger.warning("No RAGNETIC_API_KEYS found. Webhook syncs will likely fail with 401 Unauthorized errors.")
+            return ""
+        return keys[0]
 
     def _get_server_url(self) -> str:
         """Constructs the server URL from the config file."""
@@ -165,7 +173,9 @@ class AgentDataEventHandler(FileSystemEventHandler):
                     "file_path": str(file_path.relative_to(_PROJECT_ROOT))
                 }
             }
-            response = requests.post(url, json=payload, timeout=5)
+            # NEW: Add headers with the API key
+            headers = {"X-API-Key": self.api_key}
+            response = requests.post(url, json=payload, headers=headers, timeout=5)
             response.raise_for_status()
             logger.info(f"Successfully triggered workflow '{workflow_name}' for new file: {file_path}")
         except requests.exceptions.RequestException as e:
@@ -175,7 +185,9 @@ class AgentDataEventHandler(FileSystemEventHandler):
         """Calls the API endpoint to sync workflow definitions from files to database."""
         try:
             url = f"{self.server_url}/workflows/sync"
-            response = requests.post(url, timeout=5)
+            # NEW: Add headers with the API key
+            headers = {"X-API-Key": self.api_key}
+            response = requests.post(url, headers=headers, timeout=5)
             response.raise_for_status()
             logger.info(f"Successfully triggered workflow sync API. Response: {response.json()}")
         except requests.exceptions.RequestException as e:

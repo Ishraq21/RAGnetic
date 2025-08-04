@@ -33,13 +33,14 @@ from pinecone import Pinecone as PineconeClient
 # IMPORTS for connection checks
 from sqlalchemy import create_engine, text, select, func, case
 from sqlalchemy.sql import expression
-from app.core.tasks import get_beat_db_uri
 
+import app.db as db
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file
 # Import core components from the application
 from app.core.config import get_path_settings, get_api_key, get_server_api_keys, get_log_storage_config, \
     get_memory_storage_config, get_db_connection, get_cors_settings
 from app.core.embed_config import get_embedding_model
+from app.core.tasks import get_beat_db_uri
 from app.core.validation import is_valid_agent_name_cli
 from app.db.models import conversation_metrics_table
 from app.db.models import metadata, agent_runs, chat_sessions_table, users_table, agent_run_steps, workflows_table, \
@@ -49,12 +50,9 @@ from app.evaluation.dataset_generator import generate_test_set
 from app.pipelines.embed import embed_agent_data
 from app.schemas.data_prep import DatasetPreparationConfig
 from app.schemas.fine_tuning import FineTuningJobConfig, FineTuningStatus
-from app.training.data_prep.jsonl_instruction_loader import JsonlInstructionLoader
+from app.schemas.orchestrator import OrchestratorConfig
 from app.training.data_prep.conversational_jsonl_loader import ConversationalJsonlLoader
-from app.schemas.data_prep import DatasetPreparationConfig
-from app.db import AsyncSessionLocal, initialize_db_connections
-import app.db as db
-
+from app.training.data_prep.jsonl_instruction_loader import JsonlInstructionLoader
 
 # --- Centralized Path Configuration ---
 _APP_PATHS = get_path_settings()
@@ -259,7 +257,75 @@ def _validate_agent_name_cli(agent_name: str):
         typer.secho(error_message, fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
+def _load_orchestrator_config(orchestrator_name: str) -> OrchestratorConfig:
+    """Loads an orchestrator config from a YAML file and validates it."""
+    config_path = _AGENTS_DIR / f"{orchestrator_name}.yaml"
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Orchestrator config file not found at {config_path}")
 
+    with open(config_path, "r", encoding="utf-8") as f:
+        yaml_data = yaml.safe_load(f)
+    return OrchestratorConfig(**yaml_data)
+
+
+def _fetch_and_format_orchestration_tree(connection, parent_run_id: str, indent: str = "", is_last: bool = False):
+    """
+    Recursively fetches and formats child runs from both the workflow_runs and agent_runs tables
+    for a given parent run ID.
+    """
+    lines = []
+
+    # Fetch direct child runs from workflow_runs table
+    workflow_children_stmt = select(
+        workflow_runs_table.c.run_id,
+        workflow_runs_table.c.status,
+        workflows_table.c.name.label("workflow_name"),
+        workflow_runs_table.c.start_time,
+        workflow_runs_table.c.end_time,
+    ).join(
+        workflows_table, workflow_runs_table.c.workflow_id == workflows_table.c.id
+    ).where(workflow_runs_table.c.parent_run_id == parent_run_id).order_by(workflow_runs_table.c.start_time)
+
+    workflow_children = connection.execute(workflow_children_stmt).fetchall()
+
+    # Fetch direct child runs from agent_runs table
+    agent_children_stmt = select(
+        agent_runs.c.run_id,
+        agent_runs.c.status,
+        chat_sessions_table.c.agent_name.label("agent_name"),
+        agent_runs.c.start_time,
+        agent_runs.c.end_time,
+    ).join(
+        chat_sessions_table, agent_runs.c.session_id == chat_sessions_table.c.id
+    ).where(agent_runs.c.parent_run_id == parent_run_id).order_by(agent_runs.c.start_time)
+
+    agent_children = connection.execute(agent_children_stmt).fetchall()
+
+    # Combine and sort all children by start time
+    all_children = sorted(workflow_children + agent_children, key=lambda x: x.start_time)
+
+    for i, child in enumerate(all_children):
+        is_last_child = (i == len(all_children) - 1)
+        prefix = "└── " if is_last_child else "├── "
+        child_indent = "    " if is_last_child else "│   "
+
+        status_color = typer.colors.GREEN if child.status == 'completed' else (
+            typer.colors.YELLOW if child.status == 'running' else typer.colors.RED)
+
+        duration = (child.end_time - child.start_time).total_seconds() if child.end_time else "N/A"
+
+        # Determine the type (Workflow or Agent) and name
+        run_type = "Workflow" if "workflow_name" in child else "Agent"
+        run_name = child.workflow_name if run_type == "Workflow" else child.agent_name
+
+        line = f"{indent}{prefix}{run_type}: {run_name} | Run ID: {typer.style(child.run_id, fg=typer.colors.CYAN)} | Status: {typer.style(child.status, fg=status_color)} | Duration: {duration:.2f}s"
+        lines.append(line)
+
+        # Recursively fetch grandchildren
+        lines.extend(
+            _fetch_and_format_orchestration_tree(connection, child.run_id, indent + child_indent, is_last_child))
+
+    return lines
 
 
 def _get_sync_db_engine():
@@ -427,7 +493,6 @@ def migrate(
 
     typer.echo(f"Preparing to apply database migrations to revision: {revision}...")
 
-    # Add a status check before attempting to upgrade
     try:
         engine = _get_sync_db_engine() # Re-using existing helper for sync engine
         with engine.connect() as connection:
@@ -915,7 +980,6 @@ def start_server(
             typer.secho("Please install Redis (e.g., 'brew install redis') or start it manually.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
 
-    # MODIFIED: Get beat_db_uri from app.core.tasks
     beat_db_uri = get_beat_db_uri()
 
     # Prepare a custom environment for Celery worker and beat processes
@@ -945,7 +1009,6 @@ def start_server(
     # Determine concurrency for Celery worker
     final_concurrency = worker_concurrency if worker_concurrency is not None else 4  # Default to 4
 
-    # MODIFIED: Point Celery worker and beat to app.core.tasks
     # Base Celery worker command arguments
     base_worker_args = [
         "celery", "-A", "app.core.tasks", "worker",
@@ -1412,6 +1475,10 @@ def inspect_run(
         typer.echo(f"  {'Start Time:':<12} {run.start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
         typer.echo(f"  {'End Time:':<12} {run.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') if run.end_time else 'N/A'}")
         typer.echo(f"  {'Duration:':<12} {duration:.2f}s")
+        typer.echo(f"  {'Run ID:':<12} {typer.style(run.run_id, fg=typer.colors.CYAN)}")
+
+        if run.parent_run_id:
+            typer.echo(f"  {'Parent ID:':<12} {typer.style(run.parent_run_id, fg=typer.colors.BRIGHT_MAGENTA)}")
 
         # Display Steps
         typer.secho("\n--- Steps ---", bold=True)
@@ -1464,7 +1531,6 @@ def list_runs(
     if agent_name:
         stmt = stmt.where(chat_sessions_table.c.agent_name == agent_name)
 
-    # Add ordering and limit to the final statement
     stmt = stmt.order_by(agent_runs.c.start_time.desc()).limit(limit)
 
     try:
@@ -1845,12 +1911,12 @@ def list_users():
         # Prepare rows for width calculation (using raw string values)
         raw_rows_for_width_calc = []
         for user in users_data:
-            full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "N/A" # New: Full Name
+            full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "N/A"
             roles_str = ", ".join([role['name'] for role in user.get('roles', [])]) or "None"
             raw_rows_for_width_calc.append([
                 str(user['id']),
                 user['username'],
-                full_name, # New: Full Name
+                full_name,
                 user.get('email', 'N/A'),
                 "Yes" if user['is_active'] else "No",
                 "Yes" if user['is_superuser'] else "No",
@@ -1867,12 +1933,12 @@ def list_users():
         # Prepare rows for display (with styling)
         display_rows = []
         for user in users_data:
-            full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "N/A" # New: Full Name
+            full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "N/A"
             roles_str = ", ".join([role['name'] for role in user.get('roles', [])]) or "None"
             display_rows.append([
                 str(user['id']),
                 user['username'],
-                full_name, # New: Full Name
+                full_name,
                 user.get('email', 'N/A'),
                 typer.style("Yes", fg=typer.colors.GREEN) if user['is_active'] else typer.style("No", fg=typer.colors.RED),
                 typer.style("Yes", fg=typer.colors.GREEN) if user['is_superuser'] else "No",
@@ -2288,8 +2354,8 @@ def whoami():
         typer.secho("\n--- Current CLI User ---", bold=True)
         typer.echo(f"  Username: {user_info.get('username', 'N/A')}")
         typer.echo(f"  Email:    {user_info.get('email', 'N/A')}")
-        typer.echo(f"  First Name: {user_info.get('first_name', 'N/A')}")  # New: First Name
-        typer.echo(f"  Last Name: {user_info.get('last_name', 'N/A')}")  # New: Last Name
+        typer.echo(f"  First Name: {user_info.get('first_name', 'N/A')}")
+        typer.echo(f"  Last Name: {user_info.get('last_name', 'N/A')}")
         typer.echo(
             f"  Active:   {typer.style('Yes', fg=typer.colors.GREEN) if user_info.get('is_active') else typer.style('No', fg=typer.colors.RED)}")
         typer.echo(
@@ -2486,7 +2552,6 @@ def analytics_benchmarks_command(
     for f_path in all_benchmark_files:
         try:
             df = pd.read_csv(f_path)
-            # Add a column for the benchmark filename/ID for display
             df['benchmark_id'] = Path(f_path).name.replace('.csv', '')
             all_results_dfs.append(df)
         except Exception as e:
@@ -3129,7 +3194,7 @@ def dataset_prepare_command(
 
             typer.secho(f"Successfully prepared {len(prepared_data)} records and saved to '{output_path}'.",
                         fg=typer.colors.GREEN)
-        elif prep_config.format_type == "conversational-jsonl":  # ADD THIS NEW ELIF BLOCK
+        elif prep_config.format_type == "conversational-jsonl":
             loader = ConversationalJsonlLoader(prep_config.input_file)
             prepared_data = loader.load()
 
@@ -3152,6 +3217,126 @@ def dataset_prepare_command(
         raise typer.Exit(code=1)
     except Exception as e:
         typer.secho(f"An unexpected error occurred during dataset preparation: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="deploy-orchestrator", help="Deploys an orchestrator agent and all its sub-agents.")
+def deploy_orchestrator(
+        orchestrator_name: str = typer.Argument(..., help="The name of the orchestrator agent to deploy."),
+        force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation and overwrite existing data."),
+):
+    """
+    Deploys an orchestrator agent by deploying all agents listed in its roster.
+    """
+    _validate_agent_name_cli(orchestrator_name)
+    logger = logging.getLogger(__name__)
+
+    try:
+        # Load the orchestrator's configuration using the new helper function
+        orchestrator_config = _load_orchestrator_config(orchestrator_name)
+    except FileNotFoundError as e:
+        typer.secho(f"Error: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.secho(f"Error loading orchestrator config '{orchestrator_name}': {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    typer.secho(f"\n--- Deploying Orchestrator: '{orchestrator_name}' ---", bold=True, fg=typer.colors.CYAN)
+
+    # Deploy the orchestrator itself
+    deploy_agent_by_name(orchestrator_name, force)
+
+    # Iterate through the roster and deploy each sub-agent
+    if orchestrator_config.roster:
+        typer.secho("\n--- Deploying Sub-Agents from Roster ---", bold=True, fg=typer.colors.CYAN)
+        for sub_agent_name in orchestrator_config.roster:
+            typer.echo(f"\nFound sub-agent '{sub_agent_name}' in the roster. Starting deployment...")
+            try:
+                # Reuse the existing deploy function
+                deploy_agent_by_name(sub_agent_name, force)
+                typer.secho(f"Successfully deployed sub-agent '{sub_agent_name}'.", fg=typer.colors.GREEN)
+            except typer.Exit as e:
+                typer.secho(f"Deployment of sub-agent '{sub_agent_name}' failed with code {e.code}. Skipping remaining sub-agents.", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
+            except Exception as e:
+                typer.secho(f"An unexpected error occurred during deployment of sub-agent '{sub_agent_name}': {e}. Skipping remaining sub-agents.", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
+    else:
+        typer.secho("No sub-agents found in the orchestrator's roster. Deployment complete.", fg=typer.colors.YELLOW)
+
+    typer.secho(f"\n--- Orchestrator '{orchestrator_name}' and all sub-agents deployed successfully! ---", bold=True, fg=typer.colors.GREEN)
+
+
+
+@app.command(name="inspect-orchestration", help="Inspects a full orchestration, showing all sub-runs in a tree view.")
+def inspect_orchestration(
+        run_id: str = typer.Argument(..., help="The unique ID of the top-level orchestration run to inspect.")
+):
+    """
+    Fetches and displays a hierarchical view of a nested orchestration,
+    starting from a top-level workflow or agent run ID.
+    """
+    if not _is_db_configured():
+        typer.secho("Audit trails require a database. Please configure one using 'ragnetic configure'.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    engine = _get_sync_db_engine()
+
+    try:
+        with engine.connect() as connection:
+            # First, try to fetch the top-level run from the workflow_runs table
+            top_run_stmt = select(
+                workflow_runs_table.c.run_id,
+                workflow_runs_table.c.status,
+                workflows_table.c.name.label("workflow_name"),
+                workflow_runs_table.c.start_time,
+                workflow_runs_table.c.end_time,
+            ).join(
+                workflows_table, workflow_runs_table.c.workflow_id == workflows_table.c.id
+            ).where(workflow_runs_table.c.run_id == run_id)
+
+            top_run = connection.execute(top_run_stmt).first()
+
+            # If not found in workflow_runs, try the agent_runs table
+            if not top_run:
+                top_run_stmt = select(
+                    agent_runs.c.run_id,
+                    agent_runs.c.status,
+                    chat_sessions_table.c.agent_name.label("agent_name"),
+                    agent_runs.c.start_time,
+                    agent_runs.c.end_time,
+                ).join(
+                    chat_sessions_table, agent_runs.c.session_id == chat_sessions_table.c.id
+                ).where(agent_runs.c.run_id == run_id)
+
+                top_run = connection.execute(top_run_stmt).first()
+                if not top_run:
+                    typer.secho(f"Error: Top-level run with ID '{run_id}' not found in either workflow or agent tables.", fg=typer.colors.RED)
+                    raise typer.Exit(code=1)
+
+            typer.secho(f"\n--- Orchestration Tree for Run: {top_run.run_id} ---", bold=True)
+            status_color = typer.colors.GREEN if top_run.status == 'completed' else (
+                typer.colors.YELLOW if top_run.status == 'running' or top_run.status == 'paused' else typer.colors.RED)
+            duration = (top_run.end_time - top_run.start_time).total_seconds() if top_run.end_time else "N/A"
+
+            # Determine the type (Workflow or Agent) and name
+            run_type = "Workflow" if "workflow_name" in top_run else "Agent"
+            run_name = top_run.workflow_name if run_type == "Workflow" else top_run.agent_name
+
+            typer.echo(f"Root Run ID: {typer.style(top_run.run_id, fg=typer.colors.CYAN)}")
+            typer.echo(f"  Type: {run_type}")
+            typer.echo(f"  Name: {run_name}")
+            typer.echo(f"  Status: {typer.style(top_run.status, fg=status_color)}")
+            typer.echo(f"  Duration: {duration:.2f}s")
+
+            # Use the new recursive helper function to build the tree from the top-level run ID
+            child_tree_lines = _fetch_and_format_orchestration_tree(connection, run_id, indent="")
+            for line in child_tree_lines:
+                typer.echo(line)
+
+    except Exception as e:
+        typer.secho(f"An error occurred while inspecting the orchestration: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
 

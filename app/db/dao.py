@@ -8,6 +8,8 @@ from app.db.models import conversation_metrics_table, users_table, roles_table, 
     role_permissions_table, user_organizations_table, organizations_table, document_chunks_table, citations_table, \
     chat_sessions_table, temporary_documents_table
 from app.schemas.security import UserCreate, UserUpdate, RoleCreate
+from app.db.models import conversation_metrics_table
+
 from typing import Optional, List, Dict, Any
 import bcrypt
 from datetime import datetime, timedelta
@@ -726,3 +728,10 @@ async def get_temp_document_by_user_thread_id(
     )
     result = await db.execute(stmt)
     return result.scalar_one_or_none() is not None
+
+async def save_conversation_metrics(
+    db: AsyncSession,
+    metrics_data: dict
+) -> None:
+    await db.execute(conversation_metrics_table.insert().values(**metrics_data))
+    await db.commit()

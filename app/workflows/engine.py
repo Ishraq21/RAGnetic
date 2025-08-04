@@ -1,3 +1,5 @@
+# app/workflows/engine.py
+
 # --- IMPORTANT NOTE ON SKILLS ---
 # While this engine contains underlying code for managing and executing 'Skills'
 # (formal capabilities defined in separate YAML files), these are currently
@@ -29,19 +31,25 @@ from app.tools.email_tool import EmailTool
 from types import SimpleNamespace
 import ast
 
-from pydantic.v1 import ValidationError
+from pydantic import ValidationError, PrivateAttr
+import asyncio
+
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, BaseMessage, ToolMessage
-from sqlalchemy import select, update, insert # Ensure 'insert' is imported
-from langchain_core.exceptions import OutputParserException
+from langchain_core.tools.base import ToolException
 
-# ADDED IMPORTS FOR GENERIC RETRY LOGIC
+from sqlalchemy import select, update, insert  # Ensure 'insert' is imported
+from langchain_core.exceptions import OutputParserException
+from app.schemas.orchestrator import OrchestratorConfig
+from langchain_core.tools import BaseTool
+
 import httpx
 import openai
 
 from app.agents.config_manager import load_agent_config
 from app.core.config import get_path_settings, get_llm_model
-from app.db.models import human_tasks_table, workflow_runs_table, workflows_table # Ensure workflow_runs_table is imported
+from app.db.models import human_tasks_table, workflow_runs_table, \
+    workflows_table  # Ensure workflow_runs_table is imported
 from app.schemas.agent import AgentConfig
 from app.schemas.workflow import (
     AgentCallStep,
@@ -53,7 +61,9 @@ from app.schemas.workflow import (
     ToolCallStep,
     Workflow,
     WorkflowStep,
-    Plan
+    Plan,
+    HierarchicalPlan,
+    StepPlan
 )
 from app.tools.parsers.code_parser_tool import CodeParserTool
 from app.tools.parsers.notebook_parser_tool import NotebookParserTool
@@ -72,6 +82,40 @@ logger = logging.getLogger(__name__)
 _APP_PATHS = get_path_settings()
 
 
+
+class AgentTool(BaseTool):
+    name: str
+    description: str
+    sub_agent_name: str
+
+    # private (non‐model) attribute must be sundered
+    _engine: Any = PrivateAttr()
+
+    def __init__(self, *, engine: Any, **data):
+        super().__init__(**data)
+        # stash the engine privately
+        object.__setattr__(self, "_engine", engine)
+
+    def _run(self, **kwargs) -> Any:
+        return asyncio.run(self._arun(**kwargs))
+
+    async def _arun(self, **kwargs) -> Any:
+        # This method is correct and already uses 'await'
+        orchestrator_context = self._engine.context
+        sub_run_input = {"task": kwargs.get("task", ""), **orchestrator_context}
+        parent_run_id = kwargs.pop("parent_run_id", None)
+        # Here, we 'await' the call to the now-async run_workflow
+        return await self._engine.run_workflow(
+            workflow_name   = self.sub_agent_name,
+            initial_input   = sub_run_input,
+            is_sub_run      = True,
+            parent_run_id   = parent_run_id,
+            user_id=self._engine.user_id
+        )
+
+
+
+
 def _to_namespace(obj):
     """
     Recursively convert dicts/lists into SimpleNamespace (allowing dot access),
@@ -82,6 +126,7 @@ def _to_namespace(obj):
     if isinstance(obj, list):
         return [_to_namespace(v) for v in obj]
     return obj
+
 
 def _safe_eval_condition(condition: str, context: Dict[str, Any]) -> bool:
     """
@@ -120,7 +165,6 @@ def _safe_eval_condition(condition: str, context: Dict[str, Any]) -> bool:
         raise ValueError(f"Could not safely evaluate condition '{condition}': {e}") from e
 
 
-
 def _serialize_for_db(data: Any) -> Any:
     if isinstance(data, Document):
         return {"page_content": data.page_content, "metadata": data.metadata}
@@ -133,37 +177,33 @@ def _serialize_for_db(data: Any) -> Any:
 
 class WorkflowEngine:
     MAX_REACT_ITERATIONS = 10
-    # Added constants for backoff strategy
     BASE_BACKOFF_SECONDS = 1.0  # Initial delay for exponential backoff
     MAX_BACKOFF_SECONDS = 60.0  # Maximum delay for exponential backoff
 
     # Universal Tool Policy to be injected into the system prompt
     UNIVERSAL_TOOL_POLICY = """
     --- UNIVERSAL TOOL POLICY ---
-    1. Your action must be a valid JSON object matching the `Plan` schema.
-    2. Pay close attention to the `action_input` field:
-        • It MUST be a JSON object.
-        • Keys must exactly match the parameter names in the “Input Parameters” for your chosen action.
-        • All **required** parameters must be present.
-    3. When using a [TOOL] action:
-        • Select the tool that is most relevant and efficient for the current sub-objective.
-        • Fill in all required parameters. If a parameter can be safely defaulted or inferred, inject it.
-        • ALWAYS process the `result` from a tool. Do NOT assume the tool's return is the final answer without processing.
-    4. As soon as the user's objective is **fully and completely met** by processed information or a tool's result, you **MUST** use the `"finish"` action.
-        • If the user's objective was to retrieve specific data (like a fact, a piece of information, or a calculation result), the `action_input.final_answer` MUST contain **ONLY** that requested data, concise and direct. Remove any API metadata, thoughts, or extra commentary.
-        • If the objective was to perform an action (e.g., send a message, update a record), the `action_input.final_answer` should be a brief confirmation of success to the user.
-    5. Continue iterating only if further actions are strictly necessary to fully achieve the user's objective. Do not generate extraneous steps.
+    1. Your plan must be a valid JSON object matching the `HierarchicalPlan` schema.
+    2. Pay close attention to the `plan` field, which is a list of sequential steps.
+    3. Each step within the `plan` is a JSON object with `action` and `action_input`.
+        • The `action` is the name of a tool, skill, or sub-agent.
+        • The `action_input` MUST be a JSON object with keys that exactly match the parameters of the chosen action.
+        • All **required** parameters for a given action must be present.
+    4. When a task is fully and completely met by the results of your planned steps, the final step **MUST** use the `"finish"` action.
+        • The `action_input` for the `"finish"` action must contain a concise and direct `final_answer`. Remove any API metadata, thoughts, or extra commentary.
+    5. Continue planning only if further actions are strictly necessary to achieve the user's objective. Do not generate extraneous steps.
     6. If you encounter an error or cannot fulfill the objective, explain clearly to the user why and suggest what they might do next.
     --- END UNIVERSAL TOOL POLICY ---
     """
 
-    def __init__(self, db_engine: Any):
+    def __init__(self, db_engine: Any, user_id: Optional[int] = None, run_id: Optional[str] = None):
         self.db_engine = db_engine
         self.context: Dict[str, Any] = {}
         self.agent_config: Optional[AgentConfig] = None
         self.tools: Dict[str, Any] = {}
         self.skills: Dict[str, Skill] = {}
         self.llm: Optional[Any] = None
+        self.agent_tools: Dict[str, AgentTool] = {}
         self.step_handlers = {
             StepType.AGENT_CALL: self._handle_agent_call,
             StepType.TOOL_CALL: self._handle_tool_call,
@@ -172,31 +212,64 @@ class WorkflowEngine:
             StepType.HUMAN_IN_THE_LOOP: self._handle_human_in_the_loop,
         }
 
+        self.user_id = user_id if user_id is not None else 0
+        self.run_id = run_id
+
     def _get_llm(self) -> Any:
         if self.llm:
             return self.llm
         if not self.agent_config:
             raise ValueError("Agent configuration is not loaded.")
         model_name = self.agent_config.llm_model
-        model_params = self.agent_config.model_params  # Get the model_params object
-
+        model_params = self.agent_config.model_params
         self.llm = get_llm_model(
             model_name=model_name,
             model_params=model_params,
-            # Ensuring max_retries and timeout from model_params are explicitly passed
-            retries=model_params.max_retries if model_params and model_params.max_retries is not None else 0,
-            timeout=model_params.timeout if model_params and model_params.timeout is not None else 60,
+            retries=model_params.llm_retries if model_params and model_params.llm_retries is not None else 0,
+            timeout=model_params.llm_timeout if model_params and model_params.llm_timeout is not None else 60,
         )
         return self.llm
 
-    def run_workflow(
+    def _parse_hierarchical_plan_fallback(self, raw_response: Any) -> HierarchicalPlan:
+        """Fallback to parse LLM output into a HierarchicalPlan."""
+        text = getattr(raw_response, "content", "") or str(raw_response)
+        logger.debug(f"Attempting fallback parse of raw LLM response: {text[:200]}...")
+
+        try:
+            match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```|(\{.*?\})', text, re.DOTALL)
+            if match:
+                json_str = match.group(1) if match.group(1) else match.group(2)
+                data = json.loads(json_str)
+                logger.debug("Successfully extracted JSON block for fallback plan parsing.")
+                return HierarchicalPlan(**data)
+            else:
+                data = json.loads(text)
+                logger.debug("Successfully parsed raw text as JSON for fallback plan parsing.")
+                return HierarchicalPlan(**data)
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning(f"Fallback JSON parsing failed: {e}. Raw output: {text[:200]}...", exc_info=True)
+            return HierarchicalPlan(thought=f"Could not parse LLM output: {e}. Raw output: {text[:100]}...", plan=[
+                StepPlan(action="finish", action_input={"final_answer": "Error: Could not understand agent's plan."})])
+        except Exception as e:
+            logger.error(f"Unexpected error during fallback plan parsing: {e}", exc_info=True)
+            return HierarchicalPlan(thought=f"Unexpected error parsing LLM output: {e}", plan=[
+                StepPlan(action="finish", action_input={"final_answer": "Error: Agent internal parsing failed."})])
+
+    async def run_workflow(
             self,
             workflow_name: str,
             initial_input: Optional[Dict[str, Any]] = None,
             resume_run_id: Optional[str] = None,
-            user_id: Optional[int] = None, # ADDED user_id
+            user_id: Optional[int] = None,
+            is_sub_run: bool = False,
+            parent_run_id: Optional[str] = None
     ):
-        logger.info(f"Starting or resuming workflow run for: {workflow_name} (User ID: {user_id or 'N/A'})") # Log user_id
+        if is_sub_run and workflow_name == self.agent_config.name:
+            raise ValueError("Recursive call detected: An orchestrator cannot call itself as a sub-agent.")
+        if is_sub_run and initial_input:
+            self.context.update(initial_input)
+
+        logger.info(f"Starting or resuming workflow run for: {workflow_name} (User ID: {user_id or 'N/A'})")
         with self.db_engine.connect() as connection:
             row = connection.execute(
                 select(workflows_table).where(workflows_table.c.name == workflow_name)
@@ -221,7 +294,16 @@ class WorkflowEngine:
 
             if workflow.agent_name:
                 try:
-                    self.agent_config = load_agent_config(workflow.agent_name)
+                    config_path = os.path.join(_APP_PATHS["AGENTS_DIR"], f"{workflow.agent_name}.yaml")
+                    with open(config_path, 'r') as f:
+                        yaml_content = yaml.safe_load(f)
+                    try:
+                        self.agent_config = OrchestratorConfig.model_validate(yaml_content)
+                        logger.info(f"Loaded OrchestratorConfig for agent: '{workflow.agent_name}'")
+                    except ValidationError:
+                        self.agent_config = AgentConfig.model_validate(yaml_content)
+                        logger.info(f"Loaded generic AgentConfig for agent: '{workflow.agent_name}'")
+
                     self._load_skills()
                     logger.info(
                         f"Loaded config and skills for agent: '{workflow.agent_name}'"
@@ -236,6 +318,8 @@ class WorkflowEngine:
                     return
 
         run_id = resume_run_id or str(uuid.uuid4())
+        self.run_id = run_id
+        self.user_id = user_id
         start_step_index = 0
 
         if resume_run_id:
@@ -258,11 +342,12 @@ class WorkflowEngine:
                     .values(status="running")
                 )
                 connection.commit()
-        else:
+        elif not is_sub_run:
             logger.info(f"Starting new workflow run: {run_id}")
             self.context = {"trigger": initial_input or {}}
             try:
                 with self.db_engine.connect() as connection:
+                    # CORRECTED LINE: Removed the named argument 'insert_stmt'
                     connection.execute(
                         insert(workflow_runs_table).values(
                             run_id=run_id,
@@ -270,7 +355,8 @@ class WorkflowEngine:
                             status="running",
                             initial_input=initial_input,
                             start_time=datetime.utcnow(),
-                            user_id=user_id, # ADDED user_id
+                            user_id=user_id,
+                            parent_run_id=parent_run_id,
                         )
                     )
                     connection.commit()
@@ -279,17 +365,19 @@ class WorkflowEngine:
                 return
 
         try:
-            asyncio.run(self._execute_steps(
+            await self._execute_steps(
                 workflow.steps, start_index=start_step_index, run_id=run_id
-            ))
+            )
             logger.info(f"Workflow run '{run_id}' completed successfully.")
             self._update_run_status(run_id, "completed", self.context)
+            return self.context
         except Exception as e:
             logger.error(
                 f"Workflow run '{run_id}' failed with unexpected error: {e}",
                 exc_info=True,
             )
             self._update_run_status(run_id, "failed", {"error": str(e)})
+            return {"error": str(e)}
 
     async def _execute_steps(
             self, steps: Sequence[WorkflowStep], start_index: int = 0, run_id: str = ""
@@ -306,7 +394,7 @@ class WorkflowEngine:
                     f"Skipping unsupported step type: {step.type} for step '{step.name}'"
                 )
 
-    def _get_tool(self, tool_name: str) -> Any:
+    async def _get_tool(self, tool_name: str) -> Any:
         """Lazy-init and cache tools."""
         if tool_name in self.tools:
             return self.tools[tool_name]
@@ -314,7 +402,11 @@ class WorkflowEngine:
         tool = None
         if self.agent_config:
             if tool_name == "retriever":
-                tool = get_retriever_tool(self.agent_config)
+                tool = await get_retriever_tool(
+                    agent_config=self.agent_config,
+                    user_id=self.user_id,
+                    thread_id=self.run_id
+                )
             elif tool_name == "sql_toolkit":
                 db_source = next(
                     (s for s in self.agent_config.sources if s.type == "db"), None
@@ -379,7 +471,8 @@ class WorkflowEngine:
                         f"Failed to load skill '{filename}': {e}", exc_info=True
                     )
 
-    def _get_available_actions(self) -> Dict[str, Dict[str, Any]]:
+    async def _get_available_actions(self) -> Dict[str, Dict[str, Any]]:
+
         actions: Dict[str, Dict[str, Any]] = {}
 
         for name, skill in self.skills.items():
@@ -389,10 +482,33 @@ class WorkflowEngine:
                 "parameters": skill.parameters
             }
 
+        if isinstance(self.agent_config, OrchestratorConfig) and self.agent_config.roster:
+            for sub_agent_name in self.agent_config.roster:
+                try:
+                    workflow_path = _APP_PATHS["WORKFLOWS_DIR"] / f"{sub_agent_name}.yaml"
+                    with open(workflow_path, 'r') as f:
+                        workflow_content = yaml.safe_load(f)
+
+                    sub_agent_config = load_agent_config(workflow_content.get("agent_name"))
+
+                    actions[sub_agent_name] = {
+                        "type": "sub_agent",
+                        "description": sub_agent_config.description or f"Executes the '{sub_agent_name}' workflow.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "task": {"type": "string",
+                                         "description": "The task for the sub-agent's workflow to perform."}},
+                            "required": ["task"]
+                        }
+                    }
+                except Exception as e:
+                    logger.warning(f"Could not load sub-agent '{sub_agent_name}' for orchestrator tool: {e}")
+
         if self.agent_config and self.agent_config.tools:
             for tool_name in self.agent_config.tools:
                 try:
-                    tool = self._get_tool(tool_name)
+                    tool = await self._get_tool(tool_name)
                     tool_params = tool.args_schema.schema() if hasattr(tool, 'args_schema') and tool.args_schema else {}
                     actions[tool_name] = {
                         "type": "tool",
@@ -432,26 +548,25 @@ class WorkflowEngine:
                 if 'required' in details['parameters'] and details['parameters']['required']:
                     action_details_str += f"NOTE: For this action, you MUST provide these required parameters: {', '.join(details['parameters']['required'])}.\n"
 
-        system_prompt = f"""You are a helpful AI agent. Complete the objective by thinking step-by-step and choosing one action at a time.
-{self.UNIVERSAL_TOOL_POLICY}
+        system_prompt = f"""You are a helpful AI agent. Your task is to complete the objective by creating a detailed, multi-step plan.
+        {self.UNIVERSAL_TOOL_POLICY}
 
---- AVAILABLE ACTIONS AND THEIR PARAMETERS ---
-{action_details_str}
---- END AVAILABLE ACTIONS ---
+        --- AVAILABLE ACTIONS AND THEIR PARAMETERS ---
+        {action_details_str}
+        --- END AVAILABLE ACTIONS ---
 
---- WORKFLOW CONTEXT (Results from previous steps) ---
-{ctx_json}
---- END CONTEXT ---
+        --- WORKFLOW CONTEXT (Results from previous steps) ---
+        {ctx_json}
+        --- END CONTEXT ---
 
-**Execution Guidelines:**
-- For data retrieval tasks (e.g., "get X", "find Y", "fetch Z"), you are expected to:
-    1. Select and use the appropriate tool to get the raw data.
-    2. Immediately process the tool's `result` to extract the specific information requested.
-    3. Conclude the turn by using the `finish` action, with the extracted, refined answer in `action_input.final_answer`.
-- If the objective is ambiguous or requires more information from the user, you may ask clarifying questions.
-- Always provide direct answers based on your capabilities and tools.
+        **Execution Guidelines:**
+        - Your response MUST be a JSON object with a `thought` field and a `plan` field.
+        - The `plan` field MUST be an ordered list of steps. Each step can either be a single action (a JSON object) or a list of actions (a list of JSON objects) to be run in parallel.
+        - Use a list of actions `[action1, action2, ...]` to indicate that actions can be performed at the same time. This is a powerful feature and should be used whenever a single task requires multiple, independent actions.
+        - Your final planned step MUST be the "finish" action, with a `final_answer` in its `action_input`.
 
-Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
+        Return a JSON object matching this schema: {HierarchicalPlan.schema_json(indent=2)}"""
+
         return [
             SystemMessage(content=system_prompt),
             *history,
@@ -462,8 +577,9 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
         logger.info(f"--- Agent Step: '{step.name}' ---")
 
         task_template = getattr(step, "task", "")
+        context_map = {k: _to_namespace(v) for k, v in self.context.items()}
         try:
-            task = task_template.format(**self.context)
+            task = task_template.format(**context_map)
         except KeyError as e:
             logger.warning(
                 f"Could not format task for step '{step.name}'. Missing key: {e}. Using raw task."
@@ -478,213 +594,224 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
         max_iterations = getattr(step, "max_iterations", self.MAX_REACT_ITERATIONS)
         history: List[BaseMessage] = []
         trace: List[Dict[str, Any]] = []
-        # Re-added the actions list acquisition
-        available_actions = self._get_available_actions()
-        plan = None  # Initialize plan as None
+        available_actions = await self._get_available_actions()
+
+        hierarchical_plan: Optional[HierarchicalPlan] = None
 
         for i in range(max_iterations):
             logger.debug(f"[{step.name}] ReAct iteration {i + 1}/{max_iterations}")
+
+            # We need to rebuild the prompt before every call to ensure the history is included
             prompt = self._build_agent_prompt(task, available_actions, history)
 
-            # Retrieve retry parameters from agent_config.model_params
-            llm_max_retries = self.agent_config.model_params.max_retries if self.agent_config.model_params and self.agent_config.model_params.max_retries is not None else 3  # Default to 3 retries
-
-            # Use fixed base for backoff, capped at MAX_BACKOFF_SECONDS
-            # initial_backoff_delay is BASE_BACKOFF_SECONDS for the first retry, then exponential
-
-            for api_retry_count in range(
-                    llm_max_retries + 1):  # Loop from 0 to llm_max_retries (total attempts = llm_max_retries + 1)
+            llm_max_retries = self.agent_config.model_params.llm_retries if self.agent_config.model_params and self.agent_config.model_params.llm_retries is not None else 3
+            for api_retry_count in range(llm_max_retries + 1):
                 try:
                     llm = self._get_llm()
-
-                    # Attempt structured output first
                     if hasattr(llm, "with_structured_output"):
-                        structured_llm = llm.with_structured_output(Plan, method="function_calling")
+                        structured_llm = llm.with_structured_output(HierarchicalPlan, method="function_calling")
                         try:
-                            plan = await structured_llm.ainvoke(prompt)
-                            if not isinstance(plan.action_input, dict):
-                                raise ValidationError([{"loc": ("action_input",), "msg": "value is not a valid dict",
-                                                        "type": "type_error.dict"}], Plan)
-                            logger.info(f"Thought: {plan.thought}")
-                            break  # Exit inner api_retry loop on successful structured parse
+                            hierarchical_plan = await structured_llm.ainvoke(prompt)
+                            if not isinstance(hierarchical_plan.plan, list):
+                                raise ValidationError(
+                                    [{"loc": ("plan",), "msg": "value is not a valid list", "type": "type_error.list"}],
+                                    HierarchicalPlan)
+                            logger.info(f"Thought: {hierarchical_plan.thought}")
+                            break
                         except (httpx.RequestError, openai.APIConnectionError) as e:
                             logger.debug(
                                 f"Connection error during structured LLM call (ReAct iter {i + 1}, api_retry {api_retry_count + 1}/{llm_max_retries}): {e}. Retrying...")
-                            if api_retry_count < llm_max_retries:  # Only sleep if more retries are available
+                            if api_retry_count < llm_max_retries:
                                 await asyncio.sleep(
                                     min(self.BASE_BACKOFF_SECONDS * (2 ** api_retry_count), self.MAX_BACKOFF_SECONDS))
-                            continue  # Continue to next api_retry
+                            continue
                         except (ValidationError, OutputParserException) as e:
-                            # Parsing/Validation error, not a network error. Try fallback.
                             logger.error(
                                 f"LLM structured output validation/parsing failed (ReAct iter {i + 1}, api_retry {api_retry_count}): {e}")
-                            # Fallback to raw invoke and custom parsing
                             try:
                                 raw_llm_output = await llm.ainvoke(prompt)
-                                plan = self._parse_plan_fallback(raw_llm_output)
-                                if not isinstance(plan.action_input, dict):
-                                    raise ValidationError(
-                                        [{"loc": ("action_input",), "msg": "value is not a valid dict",
-                                          "type": "type_error.dict"}], Plan)
-                                logger.info(f"Fallback successful. Thought: {plan.thought}")
-                                break  # Exit inner api_retry loop on successful fallback parse
-                            except (httpx.RequestError, openai.APIConnectionError) as conn_err_fallback:
-                                logger.debug(
-                                    f"Connection error during fallback LLM call (ReAct iter {i + 1}, api_retry {api_retry_count + 1}/{llm_max_retries}): {conn_err_fallback}. Retrying...")
-                                if api_retry_count < llm_max_retries:  # Only sleep if more retries are available
-                                    await asyncio.sleep(min(self.BASE_BACKOFF_SECONDS * (2 ** api_retry_count),
-                                                            self.MAX_BACKOFF_SECONDS))
-                                continue  # Continue to next api_retry
+                                hierarchical_plan = self._parse_hierarchical_plan_fallback(raw_llm_output)
+                                if not isinstance(hierarchical_plan.plan, list):
+                                    raise ValidationError([{"loc": ("plan",), "msg": "value is not a valid list",
+                                                            "type": "type_error.list"}], HierarchicalPlan)
+                                logger.info(f"Fallback successful. Thought: {hierarchical_plan.thought}")
+                                break
                             except Exception as fallback_e:
                                 logger.error(
                                     f"Fallback parsing also failed (ReAct iter {i + 1}, api_retry {api_retry_count}): {fallback_e}",
                                     exc_info=True)
-                                # If all retries are exhausted, or this is a non-retriable parsing error after all attempts, break and let outer loop handle.
-                                break  # Break inner retry loop, plan remains None or invalid if not set.
-                    else:  # For LLMs without structured_output built-in
+                                break
+                    else:
                         try:
                             raw = await llm.ainvoke(prompt)
-                            plan = self._parse_plan_fallback(raw)
-                            if not isinstance(plan.action_input, dict):
+                            hierarchical_plan = self._parse_hierarchical_plan_fallback(raw)
+                            if not isinstance(hierarchical_plan.plan, list):
                                 raise ValidationError(
-                                    [{"loc": ("action_input",), "msg": "value is not a valid dict",
-                                      "type": "type_error.dict"}],
-                                    Plan)
-                            logger.info(f"Thought: {plan.thought}")
-                            break  # Exit inner api_retry loop on success
+                                    [{"loc": ("plan",), "msg": "value is not a valid list", "type": "type_error.list"}],
+                                    HierarchicalPlan)
+                            logger.info(f"Fallback successful. Thought: {hierarchical_plan.thought}")
+                            break
                         except (httpx.RequestError, openai.APIConnectionError) as conn_err:
                             logger.debug(
                                 f"Connection error during LLM call (ReAct iter {i + 1}, api_retry {api_retry_count + 1}/{llm_max_retries}): {conn_err}. Retrying...")
-                            if api_retry_count < llm_max_retries:  # Only sleep if more retries are available
+                            if api_retry_count < llm_max_retries:
                                 await asyncio.sleep(
                                     min(self.BASE_BACKOFF_SECONDS * (2 ** api_retry_count), self.MAX_BACKOFF_SECONDS))
-                            continue  # Continue to next api_retry
+                            continue
                         except Exception as e:
                             logger.error(
                                 f"An unexpected error occurred during agent call without structured output (ReAct iter {i + 1}, api_retry {api_retry_count}): {e}",
                                 exc_info=True)
-                            break  # Break inner retry loop, plan remains None or invalid.
-
-                except (httpx.RequestError, openai.APIConnectionError) as e:
-                    # This catches any network errors if they occur directly outside the specific invoke attempts
-                    logger.debug(
-                        f"Connection error during agent call (ReAct iter {i + 1}, api_retry {api_retry_count + 1}/{llm_max_retries}): {e}. Retrying...")
-                    if api_retry_count < llm_max_retries:  # Only sleep if more retries are available
-                        await asyncio.sleep(min(self.BASE_BACKOFF_SECONDS * (2 ** api_retry_count),
-                                                self.MAX_BACKOFF_SECONDS))  # Exponential backoff
-                    continue  # Continue to next api_retry
+                            break
                 except Exception as e:
-                    # Catch any other unexpected errors that are not connection or parsing related
                     logger.error(
                         f"An unexpected non-connection/non-parsing error occurred during agent call (ReAct iter {i + 1}, api_retry {api_retry_count}): {e}",
                         exc_info=True)
-                    # No retry for these types of errors in this loop, so we break out of the retry loop.
                     break
-
-                    # After the inner api_retry loop, check if a valid plan was obtained
-            if plan:  # If plan was set successfully in the inner loop
-                break  # Exit the outer ReAct iteration loop, as we have a valid plan
+            if hierarchical_plan:
+                break
             else:
-                # If plan is still None here, it means the LLM did not provide a parseable plan for this ReAct iteration,
-                # even after retries for connection issues. Log a warning and the outer `for i in range(max_iterations)` loop will handle proceeding to the next ReAct iteration.
                 logger.warning(
                     f"No valid plan obtained from LLM after all attempts in ReAct iteration {i + 1}. Moving to next iteration (if allowed).")
 
-        # Final check and processing of the obtained plan
-        # This block is executed AFTER all MAX_REACT_ITERATIONS attempts.
-        if plan is None:
+        if hierarchical_plan is None:
             raise RuntimeError(
                 f"Failed to get a valid plan after {max_iterations} ReAct iterations, possibly due to persistent issues with the LLM API or its output format.")
 
-        # Always capture trace and log step end here, after plan is confirmed not None
-        # and before any early exit on "finish" or further action execution.
-        self.context[f"{step.name}_trace"] = trace
-        logger.debug(f"Action: {plan.action} | Input: {plan.action_input}")  # Moved here, now guarded by `if plan`
-        history.append(AIMessage(content=plan.json()))  # Ensure history is updated after plan is confirmed
-        trace.append(  # Ensure trace is updated after plan is confirmed
-            {"iteration": i + 1, "plan": json.loads(plan.json())})
+        # Process each step in the plan
+        for planned_step in hierarchical_plan.plan:
+            action_type = available_actions.get(planned_step.action, {}).get("type")
 
-        # This log now runs after the trace is fully captured for the step
-        logger.info(f"--- End Agent Step: '{step.name}' ---")
-
-        if plan.action == "finish":
-            logger.info("Agent signaled finish.")
-            ai_input = plan.action_input  # this is already a dict
-
-            # 1) If the model returned our fields directly (category, is_urgent, summary),
-            #    just store the dict.
-            if isinstance(ai_input, dict) and "is_urgent" in ai_input:
-                self.context[step.name] = ai_input
+            if planned_step.action == "finish":
+                logger.info("Agent signaled finish.")
+                ai_input = planned_step.action_input
+                final = ai_input.get("final_answer", "")
+                parsed = None
+                if isinstance(final, dict):
+                    parsed = final
+                elif isinstance(final, str):
+                    try:
+                        parsed = json.loads(final)
+                    except json.JSONDecodeError:
+                        try:
+                            tmp = ast.literal_eval(final)
+                            if isinstance(tmp, dict):
+                                parsed = tmp
+                        except Exception:
+                            parsed = None
+                self.context[step.name] = parsed if isinstance(parsed, dict) else final
+                # A 'finish' action stops the entire plan execution.
                 return
 
-            # 2) Otherwise, fall back to a final_answer string
-            final = ai_input.get("final_answer", "")
-
-            parsed = None
-            if isinstance(final, dict):
-                parsed = final
-            elif isinstance(final, str):
-                # try JSON
-                try:
-                    parsed = json.loads(final)
-                except json.JSONDecodeError:
-                    # try Python literal_eval (handles single‐quoted dicts)
-                    try:
-                        tmp = ast.literal_eval(final)
-                        if isinstance(tmp, dict):
-                            parsed = tmp
-                    except Exception:
-                        parsed = None
-
-            # 3) store either the dict or the raw string
-            self.context[step.name] = parsed if isinstance(parsed, dict) else final
-            return
-        else:
-            try:
-                if plan.action in self.skills:
-                    result = await self._execute_skill(
-                        self.skills[plan.action], plan.action_input
-                    )
-                elif self.agent_config and plan.action in (
-                        self.agent_config.tools or []
-                ):
-                    result = await self._invoke_tool(plan.action, plan.action_input)
-                else:
-                    raise ValueError(
-                        f"Unknown action '{plan.action}'. Valid actions are: {list(available_actions.keys())}"
-                    )
-
-                serialized_result = _serialize_for_db(result)
-                logger.debug(f"Result: {str(serialized_result)[:500]}")
-                history.append(
-                    ToolMessage(content=json.dumps({"result": serialized_result}), tool_name=plan.action,
-                                tool_call_id=str(uuid.uuid4()))
+            elif action_type == "sub_agent":
+                logger.info(f"Orchestrator calling sub-agent: '{planned_step.action}'")
+                sub_agent_tool = AgentTool(
+                    name=planned_step.action,
+                    description=available_actions[planned_step.action]["description"],
+                    engine=self,
+                    sub_agent_name=planned_step.action
                 )
-                trace[-1]["result"] = serialized_result
-                self.context[f"{step.name}_{plan.action}_result"] = serialized_result
-            except Exception as e:
-                err = f"Error executing action '{plan.action}': {e}"
-                logger.error(err, exc_info=True)
-                history.append(HumanMessage(content=json.dumps(
-                    {"error": str(e)})))
-                trace[-1]["error"] = str(e)
+                sub_agent_input = planned_step.action_input.get("task", planned_step.action_input)
+                try:
+                    # Execute the sub-agent and get its final context.
+                    sub_agent_final_context = await sub_agent_tool._arun(
+                        task=sub_agent_input,
+                        parent_run_id=run_id
+                    )
+                    self.context.update(sub_agent_final_context)
 
-        # Removed redundant trace assignment from here, it's now handled before the 'if plan.action == "finish"' block.
-        # Removed redundant end logging from here.
+                    result = sub_agent_final_context.get(planned_step.action, {}).get('final_answer') or json.dumps(
+                        sub_agent_final_context)
+
+                    serialized_result = _serialize_for_db(result)
+                    logger.debug(f"Sub-agent result merged into context: {str(sub_agent_final_context)[:500]}")
+                    history.append(
+                        ToolMessage(content=json.dumps({"result": serialized_result}), tool_name=planned_step.action,
+                                    tool_call_id=str(uuid.uuid4()))
+                    )
+                    trace.append({"iteration": i + 1, "plan": planned_step.model_dump(), "result": serialized_result})
+                    self.context[f"{step.name}_{planned_step.action}_result"] = serialized_result
+                except Exception as e:
+                    err = f"Error executing sub-agent '{planned_step.action}': {e}"
+                    logger.error(err, exc_info=True)
+                    history.append(HumanMessage(content=json.dumps({"error": str(e)})))
+                    trace.append({"iteration": i + 1, "plan": planned_step.model_dump(), "error": str(e)})
+
+            elif planned_step.action in self.skills:
+                try:
+                    result = await self._execute_skill(
+                        self.skills[planned_step.action], planned_step.action_input
+                    )
+                    serialized_result = _serialize_for_db(result)
+                    logger.debug(f"Result: {str(serialized_result)[:500]}")
+                    history.append(
+                        ToolMessage(content=json.dumps({"result": serialized_result}), tool_name=planned_step.action,
+                                    tool_call_id=str(uuid.uuid4()))
+                    )
+                    trace.append({"iteration": i + 1, "plan": planned_step.model_dump(), "result": serialized_result})
+                    self.context[f"{step.name}_{planned_step.action}_result"] = serialized_result
+                except Exception as e:
+                    err = f"Error executing action '{planned_step.action}': {e}"
+                    logger.error(err, exc_info=True)
+                    history.append(HumanMessage(content=json.dumps(
+                        {"error": str(e)})))
+                    trace.append({"iteration": i + 1, "plan": planned_step.model_dump(), "error": str(e)})
+            elif self.agent_config and planned_step.action in (self.agent_config.tools or []):
+                try:
+                    result = await self._invoke_tool(planned_step.action, planned_step.action_input)
+                    serialized_result = _serialize_for_db(result)
+                    logger.debug(f"Result: {str(serialized_result)[:500]}")
+                    history.append(
+                        ToolMessage(content=json.dumps({"result": serialized_result}), tool_name=planned_step.action,
+                                    tool_call_id=str(uuid.uuid4()))
+                    )
+                    trace.append({"iteration": i + 1, "plan": planned_step.model_dump(), "result": serialized_result})
+                    self.context[f"{step.name}_{planned_step.action}_result"] = serialized_result
+                except Exception as e:
+                    err = f"Error executing action '{planned_step.action}': {e}"
+                    logger.error(err, exc_info=True)
+                    history.append(HumanMessage(content=json.dumps(
+                        {"error": str(e)})))
+                    trace.append({"iteration": i + 1, "plan": planned_step.model_dump(), "error": str(e)})
+            else:
+                raise ValueError(
+                    f"Unknown action '{planned_step.action}'. Valid actions are: {list(available_actions.keys())}"
+                )
+
+        self.context[f"{step.name}_trace"] = trace
+        logger.info(f"--- End Agent Step: '{step.name}' ---")
 
     async def _invoke_tool(self, tool_name: str, params: Dict[str, Any]):
-        tool = self._get_tool(tool_name)
-        if asyncio.iscoroutinefunction(tool.run):
+        tool = await self._get_tool(tool_name)
+        # Check if tool is the fallback error tool
+        if hasattr(tool, 'name') and tool.name == 'retriever_error':
+            error_message = tool.run(
+                params)  # This was the old error. Tool.from_function creates a func(input) not func(**kwargs)
+            # But even better, this fallback path should be removed entirely
+            # by fixing the user_id problem.
+            raise ValueError(error_message)
+
+        # REVISED LOGIC: Prioritize the async method if it's a coroutine.
+        if hasattr(tool, '_arun') and asyncio.iscoroutinefunction(tool._arun):
             try:
-                result = await tool.run(**params)
-            except TypeError:
-                result = await tool.run(params)
+                return await tool._arun(**params)
+            except (TypeError, ToolException) as e:
+                logger.warning(f"Async tool '{tool_name}' failed with **kwargs. Retrying with single arg. Error: {e}")
+                return await tool._arun(params)
+        elif hasattr(tool, '_run') and not asyncio.iscoroutinefunction(tool._run):
+            try:
+                # For synchronous tools, we can run them in a separate thread.
+                return await asyncio.to_thread(tool._run, **params)
+            except (TypeError, ToolException) as e:
+                logger.warning(f"Sync tool '{tool_name}' failed with **kwargs. Retrying with single arg. Error: {e}")
+                return await asyncio.to_thread(tool._run, params)
         else:
+            # Fallback to the original run method (if neither _run nor _arun exist)
             try:
-                result = tool.run(**params)
-            except TypeError:
-                result = tool.run(params)
-        return result
+                return await asyncio.to_thread(tool.run, **params)
+            except (TypeError, ToolException) as e:
+                return await asyncio.to_thread(tool.run, params)
+                return tool.run(params)
 
     async def _execute_skill(self, skill: Skill, skill_input: Dict[str, Any]) -> Any:
         logger.info(f"--- Executing Skill: {skill.name} ---")
@@ -695,30 +822,24 @@ Return a JSON object matching this schema: {Plan.schema_json(indent=2)}"""
         logger.info(
             f"  - Tool step '{step.name}' calling '{step.tool_name}' with original input: {step.tool_input}"
         )
-        tool_instance = self._get_tool(step.tool_name)
+        tool_instance = await self._get_tool(step.tool_name)
 
-        # Prepare context for formatting with dot notation support for direct access via eval
-        # This will contain top-level keys like 'trigger', 'analyze_inquiry'
         format_eval_locals = {}
         for key, value in self.context.items():
             format_eval_locals[key] = _to_namespace(value)
 
-        # Format tool_input using f-string evaluation to resolve nested variables
         formatted_tool_input = {}
         for key, value in step.tool_input.items():
             if isinstance(value, str):
                 try:
-                    # Construct an f-string expression that uses variables from format_eval_locals
-                    # Example: f"{trigger.body.customer_name}"
-                    # This is generally safe if format_eval_locals contains only trusted SimpleNamespace objects
                     formatted_tool_input[key] = eval(f"f'''{value}'''", {"__builtins__": {}}, format_eval_locals)
                 except Exception as e:
-                    logger.warning(f"Failed to format tool input '{key}' using f-string evaluation: {e}. Using raw string.")
+                    logger.warning(
+                        f"Failed to format tool input '{key}' using f-string evaluation: {e}. Using raw string.")
                     formatted_tool_input[key] = value
             else:
                 formatted_tool_input[key] = value
 
-        # THIS IS THE NEW LOG LINE TO VERIFY FORMATTING
         logger.info(f"  - Tool step '{step.name}' sending formatted input: {formatted_tool_input}")
 
         try:

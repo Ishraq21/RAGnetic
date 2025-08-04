@@ -1,5 +1,5 @@
 # app/workflows/tasks.py
-
+import asyncio
 import logging
 import os
 import redis
@@ -44,23 +44,22 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
 
 @celery_app.task(name="app.workflows.tasks.run_workflow_task")
-def run_workflow_task(workflow_name: str, initial_input: dict = None, user_id: Optional[int] = None): # ADDED user_id
+def run_workflow_task(workflow_name: str, initial_input: dict = None, user_id: Optional[int] = None):
     """
     Celery task to run a workflow, using a Redis lock to ensure single execution.
     """
     redis_client = redis.from_url(REDIS_URL)
     lock_key = f"workflow_lock:{workflow_name}"
-
-    # This atomic lock is the most reliable way to prevent race conditions.
     if not redis_client.set(lock_key, "running", nx=True, ex=60):
         task_logger.warning(f"Workflow run for '{workflow_name}' skipped due to active Redis lock.")
         return
 
-    task_logger.info(f"Worker starting workflow run for: '{workflow_name}' (User ID: {user_id or 'N/A'})") # Log user_id
     try:
         db_engine = get_sync_db_engine()
-        engine = WorkflowEngine(db_engine)
-        engine.run_workflow(workflow_name, initial_input, user_id=user_id) # PASS user_id to engine
+        effective_user_id = user_id if user_id is not None else 0
+        engine = WorkflowEngine(db_engine, user_id=effective_user_id)
+        asyncio.run(engine.run_workflow(workflow_name, initial_input,  user_id=effective_user_id))
+
         task_logger.info(f"Successfully completed workflow: '{workflow_name}'")
     except Exception as e:
         task_logger.error(f"Error running workflow '{workflow_name}': {e}", exc_info=True)

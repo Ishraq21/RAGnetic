@@ -124,6 +124,26 @@ class Plan(BaseModel):
         default_factory=dict, description="The input parameters for the chosen action."
     )
 
+class StepPlan(BaseModel):
+    """A single step within a larger plan."""
+    action: str = Field(
+        ..., description="The name of the skill, tool, or sub-agent to execute."
+    )
+    action_input: Dict[str, Any] = Field(
+        default_factory=dict, description="The input parameters for the chosen action."
+    )
+
+class HierarchicalPlan(BaseModel):
+    """
+    The orchestrator's multi-step plan for accomplishing the objective.
+    """
+    thought: str = Field(
+        ..., description="The orchestrator's reasoning for the overall plan."
+    )
+    # This field now supports a list of steps or a list of lists of steps (for parallel execution)
+    plan: List[Union[StepPlan, List[StepPlan]]] = Field(
+        ..., description="An ordered list of steps to execute. A list of steps within this list indicates parallel execution."
+    )
 
 # Pydantic's forward reference handling
 IfThenStep.model_rebuild()
