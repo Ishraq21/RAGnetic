@@ -229,7 +229,7 @@ vector_store:
 ```
 You can deploy your agent using:
 ```bash
-<code>ragnetic deploy hello_world_agent</code>
+ragnetic deploy hello_world_agent
 ```
 
 ## Usage & Commands 
