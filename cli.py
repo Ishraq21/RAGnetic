@@ -271,7 +271,7 @@ def _load_orchestrator_config(orchestrator_name: str) -> OrchestratorConfig:
 def _fetch_and_format_orchestration_tree(connection, parent_run_id: str, indent: str = "", is_last: bool = False):
     """
     Recursively fetches and formats child runs from both the workflow_runs and agent_runs tables
-    for a given parent run ID.
+    for a given parent run ID, creating a unified data structure for processing.
     """
     lines = []
 
@@ -279,54 +279,57 @@ def _fetch_and_format_orchestration_tree(connection, parent_run_id: str, indent:
     workflow_children_stmt = select(
         workflow_runs_table.c.run_id,
         workflow_runs_table.c.status,
-        workflows_table.c.name.label("workflow_name"),
+        workflows_table.c.name.label("run_name"),
         workflow_runs_table.c.start_time,
         workflow_runs_table.c.end_time,
     ).join(
         workflows_table, workflow_runs_table.c.workflow_id == workflows_table.c.id
     ).where(workflow_runs_table.c.parent_run_id == parent_run_id).order_by(workflow_runs_table.c.start_time)
 
-    workflow_children = connection.execute(workflow_children_stmt).fetchall()
+    workflow_children_rows = connection.execute(workflow_children_stmt).fetchall()
 
     # Fetch direct child runs from agent_runs table
     agent_children_stmt = select(
         agent_runs.c.run_id,
         agent_runs.c.status,
-        chat_sessions_table.c.agent_name.label("agent_name"),
+        chat_sessions_table.c.agent_name.label("run_name"),
         agent_runs.c.start_time,
         agent_runs.c.end_time,
     ).join(
         chat_sessions_table, agent_runs.c.session_id == chat_sessions_table.c.id
     ).where(agent_runs.c.parent_run_id == parent_run_id).order_by(agent_runs.c.start_time)
 
-    agent_children = connection.execute(agent_children_stmt).fetchall()
+    agent_children_rows = connection.execute(agent_children_stmt).fetchall()
 
-    # Combine and sort all children by start time
-    all_children = sorted(workflow_children + agent_children, key=lambda x: x.start_time)
+    # Create a unified list of children with a consistent 'type' and 'name'
+    all_children_unified = []
+    for row in workflow_children_rows:
+        all_children_unified.append({**row._mapping, 'run_type': 'Workflow'})
+    for row in agent_children_rows:
+        all_children_unified.append({**row._mapping, 'run_type': 'Agent'})
 
-    for i, child in enumerate(all_children):
-        is_last_child = (i == len(all_children) - 1)
+    # Sort all children by start time
+    all_children_unified.sort(key=lambda x: x['start_time'])
+
+    for i, child in enumerate(all_children_unified):
+        is_last_child = (i == len(all_children_unified) - 1)
         prefix = "└── " if is_last_child else "├── "
         child_indent = "    " if is_last_child else "│   "
 
-        status_color = typer.colors.GREEN if child.status == 'completed' else (
-            typer.colors.YELLOW if child.status == 'running' else typer.colors.RED)
+        status_color = typer.colors.GREEN if child['status'] == 'completed' else (
+            typer.colors.YELLOW if child['status'] in ['running', 'paused'] else typer.colors.RED)
 
-        duration = (child.end_time - child.start_time).total_seconds() if child.end_time else "N/A"
+        duration = (child['end_time'] - child['start_time']).total_seconds() if child['end_time'] else "N/A"
+        duration_str = f"{duration:.2f}s" if isinstance(duration, (int, float)) else duration
 
-        # Determine the type (Workflow or Agent) and name
-        run_type = "Workflow" if "workflow_name" in child else "Agent"
-        run_name = child.workflow_name if run_type == "Workflow" else child.agent_name
-
-        line = f"{indent}{prefix}{run_type}: {run_name} | Run ID: {typer.style(child.run_id, fg=typer.colors.CYAN)} | Status: {typer.style(child.status, fg=status_color)} | Duration: {duration:.2f}s"
+        line = f"{indent}{prefix}{child['run_type']}: {child['run_name']} | Run ID: {typer.style(child['run_id'], fg=typer.colors.CYAN)} | Status: {typer.style(child['status'], fg=status_color)} | Duration: {duration_str}"
         lines.append(line)
 
         # Recursively fetch grandchildren
         lines.extend(
-            _fetch_and_format_orchestration_tree(connection, child.run_id, indent + child_indent, is_last_child))
+            _fetch_and_format_orchestration_tree(connection, child['run_id'], indent + child_indent, is_last_child))
 
     return lines
-
 
 def _get_sync_db_engine():
     """Helper to get a synchronous SQLAlchemy engine."""
@@ -1440,7 +1443,7 @@ def inspect_run(
 
     try:
         with engine.connect() as connection:
-            # 1. Fetch the main run details
+            # First, fetch the main run details from the agent_runs table
             run_stmt = (
                 select(agent_runs, chat_sessions_table.c.agent_name, users_table.c.user_id.label("user_identifier"))
                 .join(chat_sessions_table, agent_runs.c.session_id == chat_sessions_table.c.id)
@@ -1449,54 +1452,78 @@ def inspect_run(
             )
             run = connection.execute(run_stmt).first()
 
+            # If not found in agent_runs, try the workflow_runs table
             if not run:
-                typer.secho(f"Error: Run with ID '{run_id}' not found.", fg=typer.colors.RED)
-                raise typer.Exit(code=1)
+                run_stmt = (
+                    select(
+                        workflow_runs_table,
+                        workflows_table.c.name.label("workflow_name")
+                    )
+                    .join(workflows_table, workflow_runs_table.c.workflow_id == workflows_table.c.id)
+                    .where(workflow_runs_table.c.run_id == run_id)
+                )
+                run = connection.execute(run_stmt).first()
+                if not run:
+                    typer.secho(f"Error: Run with ID '{run_id}' not found in either agent or workflow tables.",
+                                fg=typer.colors.RED)
+                    raise typer.Exit(code=1)
 
-            # 2. Fetch the steps for that run
-            steps_stmt = (
-                select(agent_run_steps)
-                .where(agent_run_steps.c.agent_run_id == run.id)
-                .order_by(agent_run_steps.c.start_time.asc())
-            )
-            steps = connection.execute(steps_stmt).fetchall()
+            # 2. Fetch the steps for that run if it's an agent run
+            steps = []
+            if 'session_id' in run._mapping:  # Check if the run is an agent run
+                steps_stmt = (
+                    select(agent_run_steps)
+                    .where(agent_run_steps.c.agent_run_id == run.id)
+                    .order_by(agent_run_steps.c.start_time.asc())
+                )
+                steps = connection.execute(steps_stmt).fetchall()
 
         # --- Display the results ---
         typer.secho(f"\n--- Audit Trail for Run: {run.run_id} ---", bold=True)
 
         # Display Run Summary
         status_color = typer.colors.GREEN if run.status == 'completed' else (
-            typer.colors.YELLOW if run.status == 'running' else typer.colors.RED)
+            typer.colors.YELLOW if run.status in ['running', 'paused'] else typer.colors.RED)
         duration = (run.end_time - run.start_time).total_seconds() if run.end_time else "N/A"
+        duration_str = f"{duration:.2f}s" if isinstance(duration, (int, float)) else duration
 
         typer.echo(f"  {'Status:':<12} {typer.style(run.status, fg=status_color)}")
-        typer.echo(f"  {'Agent:':<12} {run.agent_name}")
-        typer.echo(f"  {'User ID:':<12} {run.user_identifier}")
+
+        # Display the name based on the type of run
+        if 'workflow_name' in run._mapping:
+            typer.echo(f"  {'Workflow:':<12} {run.workflow_name}")
+        else:
+            typer.echo(f"  {'Agent:':<12} {run.agent_name}")
+            typer.echo(f"  {'User ID:':<12} {run.user_identifier}")
+
         typer.echo(f"  {'Start Time:':<12} {run.start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
         typer.echo(f"  {'End Time:':<12} {run.end_time.strftime('%Y-%m-%d %H:%M:%S UTC') if run.end_time else 'N/A'}")
-        typer.echo(f"  {'Duration:':<12} {duration:.2f}s")
+        typer.echo(f"  {'Duration:':<12} {duration_str}")
         typer.echo(f"  {'Run ID:':<12} {typer.style(run.run_id, fg=typer.colors.CYAN)}")
 
-        if run.parent_run_id:
+        if 'parent_run_id' in run._mapping and run.parent_run_id:
             typer.echo(f"  {'Parent ID:':<12} {typer.style(run.parent_run_id, fg=typer.colors.BRIGHT_MAGENTA)}")
 
         # Display Steps
-        typer.secho("\n--- Steps ---", bold=True)
-        if not steps:
-            typer.secho("  No steps found for this run.", fg=typer.colors.YELLOW)
-        else:
-            for i, step in enumerate(steps, 1):
-                step_duration = (step.end_time - step.start_time).total_seconds() if step.end_time else "N/A"
-                step_status_color = typer.colors.GREEN if step.status == 'completed' else typer.colors.RED
-                typer.secho(
-                    f"  {i}. Node: {typer.style(step.node_name, bold=True)} ({step_duration:.2f}s) - {typer.style(step.status, fg=step_status_color)}")
-                if details:
-                    if step.inputs:
-                        typer.echo(typer.style("    Inputs:", fg=typer.colors.BLUE))
-                        typer.echo(f"      {json.dumps(step.inputs, indent=6)}")
-                    if step.outputs:
-                        typer.echo(typer.style("    Outputs:", fg=typer.colors.MAGENTA))
-                        typer.echo(f"      {json.dumps(step.outputs, indent=6)}")
+        if 'session_id' in run._mapping:  # Only display steps for agent runs
+            typer.secho("\n--- Steps ---", bold=True)
+            if not steps:
+                typer.secho("  No steps found for this run.", fg=typer.colors.YELLOW)
+            else:
+                for i, step in enumerate(steps, 1):
+                    step_duration = (step.end_time - step.start_time).total_seconds() if step.end_time else "N/A"
+                    step_duration_str = f"{step_duration:.2f}s" if isinstance(step_duration,
+                                                                              (int, float)) else step_duration
+                    step_status_color = typer.colors.GREEN if step.status == 'completed' else typer.colors.RED
+                    typer.secho(
+                        f"  {i}. Node: {typer.style(step.node_name, bold=True)} ({step_duration_str}) - {typer.style(step.status, fg=step_status_color)}")
+                    if details:
+                        if step.inputs:
+                            typer.echo(typer.style("    Inputs:", fg=typer.colors.BLUE))
+                            typer.echo(f"      {json.dumps(step.inputs, indent=6)}")
+                        if step.outputs:
+                            typer.echo(typer.style("    Outputs:", fg=typer.colors.MAGENTA))
+                            typer.echo(f"      {json.dumps(step.outputs, indent=6)}")
 
     except Exception as e:
         typer.secho(f"An error occurred while inspecting the run: {e}", fg=typer.colors.RED, err=True)
@@ -3267,7 +3294,6 @@ def deploy_orchestrator(
     typer.secho(f"\n--- Orchestrator '{orchestrator_name}' and all sub-agents deployed successfully! ---", bold=True, fg=typer.colors.GREEN)
 
 
-
 @app.command(name="inspect-orchestration", help="Inspects a full orchestration, showing all sub-runs in a tree view.")
 def inspect_orchestration(
         run_id: str = typer.Argument(..., help="The unique ID of the top-level orchestration run to inspect.")
@@ -3285,50 +3311,57 @@ def inspect_orchestration(
 
     try:
         with engine.connect() as connection:
+            top_run_dict = None
+            run_type = None
+
             # First, try to fetch the top-level run from the workflow_runs table
             top_run_stmt = select(
                 workflow_runs_table.c.run_id,
                 workflow_runs_table.c.status,
-                workflows_table.c.name.label("workflow_name"),
+                workflows_table.c.name.label("run_name"),
                 workflow_runs_table.c.start_time,
                 workflow_runs_table.c.end_time,
             ).join(
                 workflows_table, workflow_runs_table.c.workflow_id == workflows_table.c.id
             ).where(workflow_runs_table.c.run_id == run_id)
 
-            top_run = connection.execute(top_run_stmt).first()
+            top_run_row = connection.execute(top_run_stmt).first()
 
             # If not found in workflow_runs, try the agent_runs table
-            if not top_run:
+            if top_run_row:
+                top_run_dict = {**top_run_row._mapping}
+                run_type = "Workflow"
+            else:
                 top_run_stmt = select(
                     agent_runs.c.run_id,
                     agent_runs.c.status,
-                    chat_sessions_table.c.agent_name.label("agent_name"),
+                    chat_sessions_table.c.agent_name.label("run_name"),
                     agent_runs.c.start_time,
                     agent_runs.c.end_time,
                 ).join(
                     chat_sessions_table, agent_runs.c.session_id == chat_sessions_table.c.id
                 ).where(agent_runs.c.run_id == run_id)
 
-                top_run = connection.execute(top_run_stmt).first()
-                if not top_run:
-                    typer.secho(f"Error: Top-level run with ID '{run_id}' not found in either workflow or agent tables.", fg=typer.colors.RED)
-                    raise typer.Exit(code=1)
+                top_run_row = connection.execute(top_run_stmt).first()
+                if top_run_row:
+                    top_run_dict = {**top_run_row._mapping}
+                    run_type = "Agent"
 
-            typer.secho(f"\n--- Orchestration Tree for Run: {top_run.run_id} ---", bold=True)
-            status_color = typer.colors.GREEN if top_run.status == 'completed' else (
-                typer.colors.YELLOW if top_run.status == 'running' or top_run.status == 'paused' else typer.colors.RED)
-            duration = (top_run.end_time - top_run.start_time).total_seconds() if top_run.end_time else "N/A"
+            if not top_run_dict:
+                typer.secho(f"Error: Top-level run with ID '{run_id}' not found in either workflow or agent tables.", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
 
-            # Determine the type (Workflow or Agent) and name
-            run_type = "Workflow" if "workflow_name" in top_run else "Agent"
-            run_name = top_run.workflow_name if run_type == "Workflow" else top_run.agent_name
+            typer.secho(f"\n--- Orchestration Tree for Run: {top_run_dict['run_id']} ---", bold=True)
+            status_color = typer.colors.GREEN if top_run_dict['status'] == 'completed' else (
+                typer.colors.YELLOW if top_run_dict['status'] in ['running', 'paused'] else typer.colors.RED)
+            duration = (top_run_dict['end_time'] - top_run_dict['start_time']).total_seconds() if top_run_dict['end_time'] else "N/A"
+            duration_str = f"{duration:.2f}s" if isinstance(duration, (int, float)) else duration
 
-            typer.echo(f"Root Run ID: {typer.style(top_run.run_id, fg=typer.colors.CYAN)}")
+            typer.echo(f"Root Run ID: {typer.style(top_run_dict['run_id'], fg=typer.colors.CYAN)}")
             typer.echo(f"  Type: {run_type}")
-            typer.echo(f"  Name: {run_name}")
-            typer.echo(f"  Status: {typer.style(top_run.status, fg=status_color)}")
-            typer.echo(f"  Duration: {duration:.2f}s")
+            typer.echo(f"  Name: {top_run_dict['run_name']}")
+            typer.echo(f"  Status: {typer.style(top_run_dict['status'], fg=status_color)}")
+            typer.echo(f"  Duration: {duration_str}")
 
             # Use the new recursive helper function to build the tree from the top-level run ID
             child_tree_lines = _fetch_and_format_orchestration_tree(connection, run_id, indent="")
