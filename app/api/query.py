@@ -20,9 +20,8 @@ from app.tools.arxiv_tool import get_arxiv_tool
 from app.tools.search_engine_tool import SearchTool
 from langchain_core.messages import HumanMessage, AIMessage
 from app.core.serialization import _serialize_for_db
-from app.db.dao import save_conversation_metrics_sync
 from app.schemas.security import User
-from app.core.citation_parser import extract_citations_from_text
+from app.db.dao import save_conversation_metrics
 
 logger = logging.getLogger("ragnetic")
 
@@ -167,6 +166,7 @@ async def query_agent(
                 "db_session": db,
                 "user_id": user_db_id,
                 "thread_id": safe_thread_id,
+                "session_id": session_id,
             }
         }
 
@@ -201,22 +201,6 @@ async def query_agent(
             )
         )
         await db.commit()
-
-    if final_state.get("total_tokens") is not None:
-        metrics_data = {
-            "session_id": session_id,
-            "request_id": request_id,
-            "prompt_tokens": final_state.get("prompt_tokens", 0),
-            "completion_tokens": final_state.get("completion_tokens", 0),
-            "total_tokens": final_state.get("total_tokens", 0),
-            "retrieval_time_s": final_state.get("retrieval_time_s"),
-            "generation_time_s": final_state.get("generation_time_s"),
-            "estimated_cost_usd": final_state.get("estimated_cost_usd"),
-            "llm_model": agent_config.llm_model,
-            "embedding_cost_usd": final_state.get("embedding_cost_usd"),
-            "timestamp": datetime.utcnow()
-        }
-        await save_conversation_metrics_sync(db, metrics_data)
 
     serialized = _serialize_for_db(final_state)
     await db.execute(

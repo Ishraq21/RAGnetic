@@ -173,6 +173,8 @@ agent_runs = Table(
     Column('id', Integer, primary_key=True),
     Column('run_id', String(255), unique=True, nullable=False),
     Column('session_id', Integer, ForeignKey('chat_sessions.id'), nullable=False, index=True),
+    Column('parent_run_id', String(255), ForeignKey('agent_runs.run_id'), nullable=True, index=True),
+
     Column('start_time', DateTime, nullable=False),
     Column('end_time', DateTime, nullable=True),
     Column('status', agent_status_enum, nullable=False, default='running'),
@@ -186,6 +188,7 @@ agent_run_steps = Table(
     Column('id', Integer, primary_key=True),
     Column('agent_run_id', Integer, ForeignKey('agent_runs.id'), nullable=False),
     Column('node_name', String(255), nullable=False),
+    Column('parent_run_id', String(255), ForeignKey('agent_runs.run_id'), nullable=True, index=True),
     Column('start_time', DateTime, nullable=False),
     Column('end_time', DateTime, nullable=True),
     Column('inputs', JSON, nullable=True),
@@ -211,6 +214,8 @@ workflow_runs_table = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("run_id", String(255), unique=True, nullable=False),
     Column("workflow_id", Integer, ForeignKey("workflows.id"), nullable=False, index=True),
+    Column("parent_run_id", String(255), ForeignKey("agent_runs.run_id"), nullable=True, index=True),
+
     Column("status", workflow_status_enum, nullable=False, default="running"), # Use the new enum here
     Column("user_id", Integer, ForeignKey("users.id"), nullable=True, index=True),
     Column("start_time", DateTime, default=utc_timestamp, nullable=False),
