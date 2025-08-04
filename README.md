@@ -372,7 +372,7 @@ RAGnetic uses a declarative YAML-based approach for configuring agents, workflow
 
 ### 1. Agent Configuration
 
-This example defines an agent that uses an embedding model, a specific vector store, and multiple data sources.
+This example defines an agent that uses an embedding model, a specific vector store, and a CSV data sources. (You can assign multiple data sources as well.)
 ```yaml
 # agents/support_summarizer_agent.yaml
 name: support_summarizer_agent
@@ -390,7 +390,7 @@ llm_model:       "gpt-4o-mini"
 evaluation_llm_model: "ollama/llama3"
 
 # No external data ingestion—this agent only works on incoming webhook payloads
-sources: []
+sources: ./data/customers.csv
 
 # No tools required—pure LLM reasoning on the provided JSON
 tools: []
