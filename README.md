@@ -1,4 +1,6 @@
-# RAGnetic: An Open-Source Framework for Building & Shipping Powerful On-Premise AI Agents
+
+<img width="20388" height="5692" alt="RAGnetic Logo" src="https://github.com/user-attachments/assets/92e1f139-9acb-43f3-9072-02d7f5336663" />
+
 
 RAGnetic is an open-source framework for building and deploying production-ready AI agents and complex, multi-step workflows. It provides a plug-and-play solution for creating agents that leverage your organization’s internal knowledge base through Retrieval Augmented Generation (RAG), LangGraph pipelines, and seamlessly integrate custom fine-tuned models via LoRA (PEFT) or full-model training.
 
@@ -11,7 +13,7 @@ RAGnetic’s core philosophy is to enable organizations to embed, analyze and in
 ## Table of Contents
 
 
-- [Why RAGnetic?](#why-ragnetic)
+- [Why Use RAGnetic?](#why-use-ragnetic)
 - [Features](#features)
 - [Multi-Agent Workflows & Orchestration](#multi-agent-workflows--orchestration)
 - [Custom Model Fine-Tuning](#custom-model-fine-tuning)
@@ -29,7 +31,7 @@ RAGnetic’s core philosophy is to enable organizations to embed, analyze and in
 
 ---
 
-## Why RAGnetic?
+## Why Use RAGnetic?
 
 RAGnetic moves beyond simple RAG libraries by providing a full-stack platform that addresses the entire lifecycle of an AI agent, from data ingestion to evaluation and enterprise-grade security.
 
@@ -187,7 +189,9 @@ Apply the initial database schema. This is mandatory for using most features.
     ragnetic start-server
    ```
 You can use the <code>--reload</code> flag for development. Remove it for production.
-   
+
+<img width="3432" height="1343" alt="RAGnetic New Chat Screen" src="https://github.com/user-attachments/assets/7077454d-44a0-4eac-a8f0-5d7cb09a8cbe" />
+
 ---
 
 ## Hello World
