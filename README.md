@@ -1,242 +1,573 @@
-# RAGnetic
+# RAGnetic: An Open-Source Framework for Building & Shipping Powerful On-Premise AI Agents
 
-RAGnetic is an open-source, plug-and-play framework for deploying on-premise ChatGPT-style agents powered by your internal enterprise knowledge. It enables organizations to create sophisticated AI assistants that securely leverage their private data, ensuring that sensitive information never leaves their control. The core philosophy is to bridge the gap between powerful Large Language Models (LLMs) and proprietary data, allowing you to build agents that are not only intelligent but also deeply context-aware, auditable, and secure.
+RAGnetic is an open-source framework for building and deploying production-ready AI agents and complex, multi-step workflows. It provides a plug-and-play solution for creating agents that leverage your organization’s internal knowledge base through Retrieval Augmented Generation (RAG), LangGraph pipelines, and seamlessly integrate custom fine-tuned models via LoRA (PEFT) or full-model training.
+
+RAGnetic’s core philosophy is to enable organizations to embed, analyze and interact with their own code, infrastructure, data, and their docs. It’s a local-first, vendor-agnostic platform that lets you deploy private AI agents trained on everything inside your company, without lock-in. With built-in support for LoRA adapters and Hugging Face fine-tuning pipelines, you can quickly specialize models on proprietary data to meet your unique compliance, accuracy, and performance needs.
+
+> 🚧 **Work in Progress:** This documentation is under active development. More tutorials, guides, and official documentation website are coming soon!
+> 
+---
+
+## Table of Contents
+
+
+- [Why RAGnetic?](#why-ragnetic)
+- [Features](#features)
+- [Multi-Agent Workflows & Orchestration](#multi-agent-workflows--orchestration)
+- [Custom Model Fine-Tuning](#custom-model-fine-tuning)
+- [RAGnetic API](#ragnetic-api)
+- [Enterprise & Government Readiness](#enterprise--government-readiness)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+- [Usage & Commands](#usage--commands)
+- [Hello World](#hello-world)
+- [YAML Configuration Examples](#yaml-configuration-examples)
+- [Citation Tracking & Explainable Reasoning](#citation-tracking--explainable-reasoning)
+- [Troubleshooting](#troubleshooting)
+- [Development & Contributing](#development--contributing)
+- [License](#license)
+
+---
+
+## Why RAGnetic?
+
+RAGnetic moves beyond simple RAG libraries by providing a full-stack platform that addresses the entire lifecycle of an AI agent, from data ingestion to evaluation and enterprise-grade security.
+
+
+* **Agentic Orchestration**: At its core, RAGnetic uses a multi-agent, multi-step system built on the powerful LangGraph. This allows you to define complex, stateful workflows where multiple agents can collaborate to reason, plan, and execute tasks across various tools and data sources.
+
+
+* **Custom Model Fine-Tuning**: RAGnetic empowers you to fine-tune open-source Hugging Face models on your private data, making them specialized for your specific domain and use cases. This is crucial for improving accuracy and controlling an agent's behavior.
+
+
+* **Production-Ready by Design:**  The framework is built with features crucial for enterprise deployment, including robust data ingestion, user and role management, performance benchmarking, and detailed analytics.
+
+
+* **Built-in Observability & Analytics:** Don't just deploy, understand. The platform provides detailed logging, metrics for LLM usage and costs, and a powerful CLI for auditing agent and workflow runs in real-time.
+
+---
+
 
 ## Features
 
-* **Multi-Source Ingestion:** Go beyond simple text files. RAGnetic can create a unified knowledge base from a wide array of sources simultaneously. It includes dedicated loaders for local files (`.pdf`, `.docx`, `.csv`), public websites, entire code repositories (respecting `.gitignore`), and can even connect to live SQL databases to ingest their schema. This creates a single, queryable source of truth for your agent, allowing it to reason over disparate data types.
+An agent's intelligence is defined not just by its core LLM, but by the ecosystem of data, tools, and processes that surround it. RAGnetic is built on **five core pillars**:
+
+### 1. Ingest: The Agent’s Knowledge Pipeline
+- **Multi-Source Ingestion**: Load data from PDFs, DOCX, CSV, Parquet, web pages, code repos, and live SQL databases into a unified knowledge base.
+- **Data Policies**: Enforce security/compliance during ingestion with built-in PII redaction and keyword filtering.
+- **Hybrid Retrieval**: Combine semantic vector search with keyword-based retrieval (BM25) for precise, comprehensive results.
+
+### 2. Adapt: The Agent’s Specialized Intelligence
+- **Custom & Hosted Models**: Use hosted LLMs (OpenAI, Anthropic, Google Gemini) or local open-source models via Ollama or Hugging Face.
+- **Fine-Tuning**: Full fine-tuning pipeline for Hugging Face models using LoRA (PEFT) or full-model training, to control behavior, tone, and accuracy.
+
+### 3. Orchestrate: The Agent’s Strategic Workflow
+- **Stateful Conversations**: Durable, conversation-level memory for iterative dialogue without repeating context.
+- **Multi-Agent Workflows**: Primary orchestrator agent can call on specialized sub-agents to complete complex tasks.
+- **Declarative YAML**: Define conditional logic, loops, and human-in-the-loop steps in a readable YAML format.
+- **Dynamic Triggers**: Kick off workflows via API webhooks, schedules, or manual triggers.
+
+### 4. Interact: The Agent’s Toolkit
+- **Core Toolkit**: Pre-built tools for real-world tasks: SQL queries, HTTP requests, sandboxed Python scripts, email notifications.
+- **Specialized Parsers**: Structured analysis on SQL, YAML, Terraform, and more.
+
+### 5. Evaluate: The Agent’s Feedback Loop
+- **Automated Benchmarking**: Generate test sets and run benchmarks to measure accuracy, faithfulness, and relevance.
+- **Detailed Analytics**: Track LLM usage, costs, and step-by-step metrics across agent and workflow runs.
 
 
-* **Stateful Conversations:** Agents possess durable, conversation-level memory, allowing for natural, iterative dialogue. A user can ask a broad question, then follow up with "can you elaborate on the second point?" or "summarize that in three bullets" without needing to repeat the initial context. This stateful nature is crucial for complex research and analysis tasks.
+## Multi-Agent Workflows & Orchestration
 
+RAGnetic’s core power lies in its ability to orchestrate complex tasks that go beyond a single chat prompt. The platform’s multi-agent workflow engine allows you to chain together multiple steps, where each step can be a call to a specialized tool or a call to another agent.
 
-* **Tool-Using Hybrid Agents:** This is the core of RAGnetic's intelligence. You can equip agents with a versatile set of tools, such as a document `retriever` for semantic search and a `sql_toolkit` for live database querying. The underlying language model is prompted to be a reasoning agent.
+- **Define Complex Logic**: Use declarative YAML files to define workflows with conditional logic, loops, and even human-in-the-loop steps.
 
+- **Orchestrate Multiple Agents**: Define an orchestrator agent that calls on a roster of specialized sub-agents to complete different parts of a complex task.
 
-* **Easy Deployment:** RAGnetic is designed for maximum accessibility. It supports two distinct workflows: a native Python CLI for developers and a one-command Docker deployment that provides a reliable, isolated environment for end-users.
+- **How to Use It**: Use the command <code>ragnetic deploy-orchestrator</code> to deploy a primary orchestrator and all its constituent sub-agents, creating a complete, interconnected system.
 
+## Custom Model Fine-Tuning
 
-* **Simple YAML Configuration:** No code changes are required to create, modify, or manage agents. All agent behavior—from its core persona and system prompt to its data sources, models, and tools—is defined in clean, human-readable YAML files. This empowers both technical and non-technical users to build and maintain their own custom AI assistants.
+RAGnetic provides a full-featured fine-tuning pipeline, allowing you to train open-source Hugging Face models on your proprietary data to create highly specialized agents.
 
+**Parameter-Efficient Fine-Tuning (PEFT):** The system uses LoRA (Low-Rank Adaptation) to fine-tune models, drastically reducing the number of trainable parameters. This makes it possible to fine-tune large models on consumer-grade GPUs or even Apple Silicon (MPS).
 
-* **Guided API Key Setup:** RAGnetic features a dedicated and secure command-line interface for setting up your API keys. This guided process ensures your keys are stored correctly in a local `.env` file for the application to use.
+**Supported Data Formats:**  
+
+- **jsonl-instruction:** For training models on Q&A or instruction-following tasks.  
+- **conversational-jsonl:** For training models on multi-turn chat dialogues.
+
+**How to Use It:**
+
+1. Prepare your data with the <code>ragnetic dataset prepare</code> command.  
+2. Define your training parameters in a YAML file.  
+3. Submit the job with ragnetic <code>training apply -f `your-training-config.yaml`.</code>  
+4. Use the <code>fine_tuned_model_id</code> in your agent’s configuration to deploy it. 
+
+## RAGnetic API
+
+RAGnetic’s entire functionality is exposed through a robust RESTful API, allowing you to programmatically interact with the framework from any application. This is how RAGnetic integrates into larger enterprise ecosystems, enabling you to build custom frontends, connect to external services, and automate workflows.
+
+- **API-Driven Workflows:** Trigger any RAGnetic workflow from an external service via a simple HTTP POST request to a dedicated webhook URL.  
+- **Programmatic Management:** Use API endpoints to manage agents, users, roles, and fine-tuning jobs.  
+- **Real-time Interaction:** A WebSocket-based chat interface allows for streaming, real-time interactions with your agents.  
+- **Data & Analytics Access:** Pull detailed performance metrics, cost data, and audit logs directly from the API for integration with dashboards and reporting tools.  
 
 ---
 
-## Getting Started: The 3-Step Setup
+## Enterprise & Government Readiness
 
-Whether you use Docker or native Python, the initial setup is the same and only needs to be done once.
+RAGnetic is built with security, compliance, and scalability in mind, making it ready for enterprise and government contracts.
+
+- **Identity & Access Management (IAM):** Built-in user and role management with Role-Based Access Control (RBAC) and assignable permissions for granular security.  
+- **Operational Logging & Auditing:** Tamper-resistant audit trails of all queries, agent executions, and document access. Logs can be configured to write to console, files, or a database for comprehensive monitoring.  
+- **Deployment Flexibility:** Fully self-hosted or air-gapped deployments with first-class support for Docker and Kubernetes, ensuring data residency and compliance in regulated environments.  
+- **Advanced Features:** Inline document citation, explainable reasoning, and an AI Governance Engine to monitor policy compliance and ensure traceability.  
+
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.9 or higher
+- <code>git</code>
+- alembic (for database migrations)
+- Operating System: RAGnetic supports Linux, macOS, and Windows. Specific
+  hardware limitations (e.g., <code>bitsandbytes</code> requires NVIDIA CUDA) are noted in the fine-tuning
+  documentation.
+
+
 
 1.  **Clone the Repository:**
     ```bash
-    git clone <your-repo-url>
+    git clone https://github.com/your-repo/ragnetic.git
     cd ragnetic
     ```
 
-2.  **Initialize the Project:**
-    This command creates the necessary project directories (`agents_data`, `data`, etc.). Note that you may need to install the project dependencies first (see the Native Python workflow) or build the Docker image to make the `ragnetic` command available.
+2.  **Install Dependencies:**
     ```bash
-    # For Native Python (after installing dependencies)
+    python3 -m venv .venv
+    source .venv/bin/activate    # macOS/Linux
+    .venv\Scripts\activate       # Windows
+    pip install . -e
+    
+    ```
+    To enable GPU acceleration for fine-tuning or embeddings, install the optional gpu or mps
+    dependencies that match your hardware.
+
+    For NVIDIA GPUs: <code>pip install ".[gpu]"</code>
+
+    For Apple Silicon (M-series) GPUs: <code>pip install ".[mps]"</code>
+
+3.  **Initialize the Project:**
+    This command creates the necessary project structure and a default configuration file.
+    ```bash
     ragnetic init
-
-    # For Docker (after building the image)
-    docker-compose run --rm ragnetic-app ragnetic init
     ```
-
-3.  **Set Your API Keys:**
-    This interactive command will guide you through securely saving your API keys (e.g., for OpenAI, Anthropic, or Google) to a local `.env` file.
-    ```bash
-    # For Native Python
-    ragnetic set-api
-
-    # For Docker
-    docker-compose run --rm ragnetic-app ragnetic set-api
+    
+4. **Configure the Database**:
+   Use the interactive configure command to set up your system databases for logging and
+   memory storage.
+   ```bash
+    ragnetic configure
     ```
-    You will be presented with a menu to choose the provider and prompted to enter your key.
+5. **Run Database Migrations:**
+Apply the initial database schema. This is mandatory for using most features.
+   ```bash
+    ragnetic migrate
+   ```
+6. **Set your API Keys:**
+   The framework needs API keys to use external services. Use the interactive <code>set-api-key</code> command to set a master administrative key, which is used for initial setup and emergency access.
+   ```bash
+    ragnetic set-api-key
+   ```
+7. **Start the Server**:
+   Start the RAGnetic server, Celery worker, and scheduler in a single command.
+   ```bash
+    ragnetic start-server
+   ```
+You can use the <code>--reload</code> flag for development. Remove it for production.
+   
+---
 
-After these three steps, you are ready to follow either the Docker or Native Python workflow.
+## Hello World
+
+Start with a basic "Hello World Agent" 
+```yaml
+# agents/hello_world_agent.yaml
+name: hello_world_agent
+display_name: Hello World Agent
+description: >
+  A simple agent that always returns a “Hello, World!” message.
+persona_prompt: >
+  You are a friendly assistant. Your only task is to return the text "Hello, World!" 
+  in a JSON object with the key `message`.
+
+# (no external data needed)
+sources: []
+
+# no tools required
+tools: []
+
+# disable chunking
+chunking:
+  mode: none
+  chunk_size: 0
+  chunk_overlap: 0
+
+# no vector store
+vector_store:
+  type: faiss
+  bm25_k: 0
+  semantic_k: 0
+  retrieval_strategy: none
+
+```
+You can deploy your agent using:
+```bash
+<code>ragnetic deploy hello_world_agent</code>
+```
+
+## Usage & Commands 
+
+### Agent & Workflow Management
+
+<table style="width:100%; table-layout:fixed;">
+  <colgroup>
+    <col style="width:60%;">
+    <col style="width:25%;">
+    <col style="width:15%;">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>Command</th>
+      <th>Description</th>
+      <th>Example</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic list-agents</code></td>
+      <td>Lists all configured agents.</td>
+      <td style="white-space:nowrap;"><code>ragnetic list-agents</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic deploy</code></td>
+      <td>Deploys an agent by processing its data sources.</td>
+      <td style="white-space:nowrap;"><code>ragnetic deploy my_research_agent</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic deploy-orchestrator</code></td>
+      <td>Deploys an orchestrator and its sub-agents.</td>
+      <td style="white-space:nowrap;"><code>ragnetic deploy-orchestrator my_team_orchestrator</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic inspect-agent</code></td>
+      <td>Displays an agent’s config and checks connections.</td>
+      <td style="white-space:nowrap;"><code>ragnetic inspect-agent my_research_agent --check-connections</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic list-workflows</code></td>
+      <td>Lists recent workflow runs.</td>
+      <td style="white-space:nowrap;"><code>ragnetic list-workflows</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic trigger-workflow</code></td>
+      <td>Triggers a workflow via the API.</td>
+      <td style="white-space:nowrap;"><code>ragnetic trigger-workflow my_report_gen --input '{"topic":"Q3 results"}'</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic inspect-orchestration</code></td>
+      <td>Inspects a full run, showing a tree of nested sub-runs.</td>
+      <td style="white-space:nowrap;"><code>ragnetic inspect-orchestration &lt;run_id&gt;</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic delete-agent</code></td>
+      <td>Permanently deletes an agent and all its data.</td>
+      <td style="white-space:nowrap;"><code>ragnetic delete-agent my_old_agent</code></td>
+    </tr>
+  </tbody>
+</table>
+
+### Training & Evaluation
+
+<table style="width:100%; table-layout:fixed;">
+  <colgroup>
+    <col style="width:60%;">
+    <col style="width:25%;">
+    <col style="width:15%;">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>Command</th>
+      <th>Description</th>
+      <th>Example</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic generate-test</code></td>
+      <td>Generates a test set from an agent’s data sources.</td>
+      <td style="white-space:nowrap;"><code>ragnetic generate-test my_agent -o test_set.json</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic benchmark</code></td>
+      <td>Runs a retrieval quality benchmark on an agent.</td>
+      <td style="white-space:nowrap;"><code>ragnetic benchmark my_agent -t test_set.json</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic training apply</code></td>
+      <td>Submits a fine-tuning job via a YAML config file.</td>
+      <td style="white-space:nowrap;"><code>ragnetic training apply -f configs/my_ft_job.yaml</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic training status</code></td>
+      <td>Checks the status of a fine-tuning job.</td>
+      <td style="white-space:nowrap;"><code>ragnetic training status &lt;adapter_id&gt;</code></td>
+    </tr>
+  </tbody>
+</table>
+
+### Analytics & Auditing
+
+<table style="width:100%; table-layout:fixed;">
+  <colgroup>
+    <col style="width:60%;">
+    <col style="width:25%;">
+    <col style="width:15%;">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>Command</th>
+      <th>Description</th>
+      <th>Example</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic analytics usage</code></td>
+      <td>Displays aggregated LLM usage and cost metrics.</td>
+      <td style="white-space:nowrap;"><code>ragnetic analytics usage --agent my_agent</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic analytics benchmarks</code></td>
+      <td>Displays summaries of past benchmark runs.</td>
+      <td style="white-space:nowrap;"><code>ragnetic analytics benchmarks --agent my_agent</code></td>
+    </tr>
+    <tr>
+      <td style="white-space:nowrap;"><code>ragnetic inspect-run</code></td>
+      <td>Inspects a specific agent run and its steps.</td>
+      <td style="white-space:nowrap;"><code>ragnetic inspect-run &lt;run_id&gt;</code></td>
+    </tr>
+  </tbody>
+</table>
+
+## YAML Configuration Examples
+
+RAGnetic uses a declarative YAML-based approach for configuring agents, workflows, and training jobs.
+
+### 1. Agent Configuration
+
+This example defines an agent that uses an embedding model, a specific vector store, and multiple data sources.
+```yaml
+# agents/support_summarizer_agent.yaml
+name: support_summarizer_agent
+display_name: Support Summarizer Agent
+description: >
+  An agent specialized in summarizing raw support-ticket data into concise,
+  human-readable summaries.
+persona_prompt: >
+  You are a helpful support summarizer. Given raw JSON input from a support
+  ticket, generate a clear, single-sentence summary of the issue.
+
+# Embedding + LLM + optional evaluation model
+embedding_model: "text-embedding-3-small"
+llm_model:       "gpt-4o-mini"
+evaluation_llm_model: "ollama/llama3"
+
+# No external data ingestion—this agent only works on incoming webhook payloads
+sources: []
+
+# No tools required—pure LLM reasoning on the provided JSON
+tools: []
+
+# Disable chunking since payloads are small
+chunking:
+  mode: none
+  chunk_size: 0
+  chunk_overlap: 0
+
+# No vector store needed
+vector_store:
+  type: faiss
+  bm25_k: 0
+  semantic_k: 0
+  retrieval_strategy: none
+
+# (Optional) you can still enforce data policies on the incoming JSON
+data_policies:
+  - type: pii_redaction
+    pii_config:
+      types:
+        - email
+        - phone
+      redaction_placeholder: "[REDACTED]"
+
+
+```
+
+
+### 2. Fine-Tuning Job Configuration
+This example shows how to configure a fine-tuning job for a model.
+```yaml
+# training_configs/policy_fine_tune.yaml
+job_name: policy_fine_tune
+base_model_name: microsoft/phi-2
+dataset_file: data_prepared/policy_qa_dataset.jsonl
+output_dir: fine_tuned_models/phi-2-policy
+
+hyperparameters:
+  epochs: 3
+  batch_size: 4
+  learning_rate: 2e-4
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  device: "mps" # Use Apple Silicon GPU
+
+```
+
+### 3. Workflow Configuration
+Workflows chain together agents and tools to accomplish multi-step, complex tasks.
+```yaml
+# workflows_data/support_ticket_analyzer.yaml
+name: support_ticket_analyzer
+description: An automated workflow to analyze and route support tickets.
+trigger:
+  type: api_webhook
+  path: /webhooks/v1/new-support-ticket
+
+steps:
+  - name: retrieve_ticket_info
+    type: tool_call
+    tool_name: http_request_tool
+    tool_input:
+      method: "GET"
+      url: "https://api.internal-crm.com/ticket/{{trigger.body.ticket_id}}"
+
+  - name: summarize_ticket
+    type: agent_call
+    agent_name: support_summarizer_agent
+    task: |
+      **WHAT is the Goal?**
+      Summarize the support ticket information.
+
+      **IMPLICIT FROM WHERE?**
+      The raw JSON from the "retrieve_ticket_info" step.
+
+      **HOW should the Output Look?**
+      Return a single sentence summary.
+
+  - name: route_to_team
+    type: agent_call
+    agent_name: ticket_router_agent
+    task: |
+      **WHAT is the Goal?**
+      Categorize this ticket summary and determine which team should handle it.
+
+      **IMPLICIT FROM WHERE?**
+      The summary from the "summarize_ticket" step.
+
+      **HOW should the Output Look?**
+      Return a JSON object with a single key, `team`, which contains the team name
+      (e.g., "sales", "engineering").
+
+  - name: send_notification
+    type: tool_call
+    tool_name: email_tool
+    tool_input:
+      to_email: "support_manager@company.com"
+      subject: "New Ticket for {{route_to_team.team}} Team"
+      body: |
+        A new support ticket has been assigned to your team.
+        Summary: "{{summarize_ticket.summary}}"
+        Ticket ID: {{trigger.body.ticket_id}}
+```
+
+### 4. Data Preparation Configuration
+
+```yaml
+# data_prep_configs/jsonl_qa_prep.yaml
+prep_name: jsonl_qa_prep
+format_type: jsonl-instruction
+input_file: data_raw/raw_qa_data.jsonl
+output_file: data_prepared/prepared_qa_data.jsonl
+```
+
+## Citation Tracking & Explainable Reasoning
+
+RAGnetic’s agents are designed to produce traceable and auditable outputs, a key requirement for regulated industries.
+
+- **Inline Document Citation**  
+  The agent generates inline citations (`[1]`, `[2]`) in its response, which link back to the specific chunk of a source document used.
+
+- **Viewing Citations**  
+  In the web UI, these citations are rendered as clickable links. Via the API and CLI, you can inspect a run’s output to see the full citation data, including `doc_name`, `page_number`, and `chunk_content`.
+
+- **How it Works**  
+  During retrieval, metadata (`source`, `page`) is attached to each chunk. When the LLM generates a response, the system parses the output for citation markers and uses the stored metadata to reconstruct the full citation trail.
 
 ---
 
-## Workflow 1: Docker (Recommended for End-Users)
+## Troubleshooting
 
-This is the simplest and most reliable method for running RAGnetic. It provides a completely isolated environment using Docker containers, guaranteeing that the application and its dependencies will work correctly regardless of your local machine's configuration.
+### Common Issues & Solutions
 
-### Installation & Setup
+- **Server Fails to Start**  
+  Check the logs for port conflicts or missing dependencies. The <code>--reload</code> flag can provide more verbose error messages.
 
-**Prerequisites:** Docker and Docker Compose must be installed on your system.
+- **ConnectionRefusedError**  
+  Ensure the RAGnetic server is running with <code>ragnetic start-server</code> and that no firewall is blocking access to the configured host and port.
 
-1.  **Clone the Repository:**
-    ```bash
-    git clone <your-repo-url>
-    cd ragnetic
-    ```
+- **FileNotFoundError**  
+  Verify that all file paths in your agent or workflow YAML files are correct and that the necessary files exist.
 
-2.  **Build, Initialize, and Configure:**
-    Run these one-off commands to build the Docker image and set up your project.
-    ```bash
-    # First, build the image so the CLI is available
-    docker-compose build
+- **Database Migration Errors**  
+  If you encounter errors during <code>ragnetic migrate</code>, it could be due to a malformed connection string or an incompatible database schema. Try running <code>ragnetic check-system-db</code> to diagnose the          connection.
 
-    # Run the init command
-    docker-compose run --rm ragnetic-app ragnetic init
-
-    # Run the interactive set-api command
-    docker-compose run --rm ragnetic-app ragnetic set-api
-    ```
-
-3.  **Run the Application:**
-    This command starts the server. Because you created the `.env` file in the previous step, Docker Compose will automatically load it into the container.
-    ```bash
-    docker-compose up
-    ```
-    The application will now be available at `http://localhost:8000`.
-
-### Usage & Agent Management (Docker)
-
-All management commands are run from your **local terminal** using the `docker-compose run --rm` syntax. This executes a command inside a *new, temporary container*.
-
-* **Creating an Agent:**
-    1.  Place your source files (PDFs, database files, etc.) into the `./data/` directory.
-    2.  Create a new `.yaml` file inside the `agents_data/` directory.
-
-    **Example `finance_agent.yaml`:**
-    ```yaml
-    name: finance-agent
-    description: An agent for answering questions about financial reports and sales data.
-    persona_prompt: You are a helpful financial analyst who provides clear and concise answers based on the provided documents and database.
-    sources:
-      # This agent learns from all files in a local directory...
-      - type: local
-        path: ./data/reports/
-      # ...and also knows the schema of a database.
-      - type: db
-        db_connection: "sqlite:///./data/finance_database.db"
-    tools:
-      - retriever
-      - sql_toolkit
-    llm_model: "gpt-4-turbo"
-    ```
-
-* **Deploying an Agent:**
-    ```bash
-    docker-compose run --rm ragnetic-app ragnetic deploy-agent --config ./agents_data/finance_agent.yaml
-    ```
-
-* **Starting/Stopping the Server:**
-    ```bash
-    # Start the server in the background (detached mode)
-    docker-compose up -d
-
-    # Stop the server and remove the container
-    docker-compose down
-    ```
-
-* **Listing & Inspecting Agents:**
-    ```bash
-    docker-compose run --rm ragnetic-app ragnetic list-agents
-    docker-compose run --rm ragnetic-app ragnetic inspect-agent finance-agent
-    ```
-
-* **Validating an Agent:**
-    ```bash
-    docker-compose run --rm ragnetic-app ragnetic validate-agent finance-agent
-    ```
-
-* **Deleting Agent Data:**
-    ```bash
-    docker-compose run --rm ragnetic-app ragnetic delete-agent finance-agent
-    ```
+- **Ollama or Hugging Face Model Issues**  
+  Ensure that local models are correctly installed and running, and that the <code>base_model_name</code> in your YAML is a valid identifier from the Hugging Face Hub.
 
 ---
 
-## Workflow 2: Native Python (For Developers)
-
-This method is for developers who wish to contribute to the RAGnetic codebase or integrate it as a library.
-
-### Installation & Setup
-
-**Prerequisites:** Python 3.9+ and a tool for creating virtual environments (e.g., `venv`).
-
-1.  **Clone and Setup Environment:**
-    ```bash
-    git clone <your-repo-url>
-    cd ragnetic
-    python -m venv env
-    source env/bin/activate  # On Windows: env\Scripts\activate
-    ```
-
-2.  **Install the Project:**
-    This command installs all dependencies from `pyproject.toml` and makes the `ragnetic` CLI tool available in your terminal.
-    ```bash
-    pip install -e .
-    ```
-
-3.  **Initialize and Configure:**
-    Complete the one-time setup steps:
-    ```bash
-    # Create project folders
-    ragnetic init
-
-    # Set your API keys
-    ragnetic set-api
-    ```
-
-### Usage & Agent Management (Native Python)
-
-All commands are run directly from your terminal (with your virtual environment activated).
-
-* **Creating an Agent:**
-    1.  Place your source files into the `./data/` directory.
-    2.  Create a new `.yaml` file inside the `agents_data/` directory.
-
-* **Deploying an Agent:**
-    ```bash
-    ragnetic deploy-agent --config agents_data/finance_agent.yaml
-    ```
-
-* **Starting the Web Server:**
-    ```bash
-    # With auto-reload for easy development
-    ragnetic start-server --reload
-    ```
-
-* **Listing & Inspecting Agents:**
-    ```bash
-    ragnetic list-agents
-    ragnetic inspect-agent finance-agent
-    ```
-
-* **Validating an Agent:**
-    ```bash
-    ragnetic validate-agent finance-agent
-    ```
-
-* **Deleting Agent Data:**
-    ```bash
-    ragnetic delete-agent finance-agent
-    ```
-
----
-
-## Community and Support
-
-We welcome you to the RAGnetic community! Here’s how you can get involved and find help.
-
-### Community
-
-* **Join our Discord Server:** For general chat, sharing what you've built, and getting to know other users, join our [Community Discord](https://discord.gg/your-invite-link).
-* **Follow us on X (formerly Twitter):** Stay up-to-date with the latest announcements, features, and tips by following [@RAGneticAI](https://twitter.com/RAGneticAI).
-
-### Support
-
-* **GitHub Discussions:** For questions, feature requests, and showing off your projects, please use our [GitHub Discussions](https://github.com/your-repo/ragnetic/discussions) page. This is the best place for non-urgent support.
-* **GitHub Issues:** If you've found a bug or are experiencing a reproducible error, please open an issue on our [GitHub Issues](https://github.com/your-repo/ragnetic/issues) tracker. Be sure to include as much detail as possible, including your OS, RAGnetic version, and steps to reproduce the problem.
+## Development & Contributing
 
 ### Contributing
 
-RAGnetic is an open-source project, and we welcome contributions of all kinds! Whether you're a developer, a writer, or a designer, there are many ways to get involved.
+We welcome contributions! Our **CONTRIBUTING.md** is currently being drafted—check back soon for guidelines on submitting bug reports, feature requests, and pull requests.
 
-* **Contribution Guide:** Before you start, please read our [CONTRIBUTING.md](https://github.com/your-repo/ragnetic/blob/main/CONTRIBUTING.md) file for a detailed guide on our development process, coding standards, and how to submit pull requests.
-* **Code of Conduct:** We are committed to fostering a welcoming and inclusive community. All participants are expected to adhere to our [Code of Conduct](https://github.com/your-repo/ragnetic/blob/main/CODE_OF_CONDUCT.md).
+### Running Tests
 
+To run the full test suite:
+
+<code>ragnetic test</code>
+
+## Community & Support
+
+### Community
+
+- **Discord Server:** Invite link coming soon!
+- **X (formerly Twitter):** Follow `@RAGneticAI` for updates—account launching soon.
+
+### Support
+
+- **GitHub Discussions:** Coming soon!
+- **GitHub Issues:** If you encounter a bug or reproducible error, please open an issue on our `https://github.com/your-repo/ragnetic/issues` tracker and include your OS, RAGnetic version, and               reproduction steps.
+
+### Code of Conduct
+
+Our community `CODE_OF_CONDUCT.md` is being finalized—check back soon for the full details.
+
+## License
+
+This project is licensed under the Apache 2.0 License - see the LICENSE file for details.
