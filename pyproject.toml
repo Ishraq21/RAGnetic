@@ -1,18 +1,19 @@
 [build-system]
-requires    = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name             = "ragnetic"
-version          = "0.1.0"
-description      = "An open-source, plug-and-play framework for deploying on-premise AI agents powered by internal knowledge."
-readme           = "README.md"
-requires-python  = ">=3.9"
-license          = "MIT"
-authors          = [
+name = "ragnetic"
+version = "0.1.0"
+description = "An open-source, plug-and-play framework for deploying on-premise AI agents powered by internal knowledge."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+authors = [
   { name = "Mirza Ishraq", email = "contact@ragnetic.ai" },
 ]
-dependencies     = [
+
+dependencies = [
   "alembic",
   "asyncpg",
   "apscheduler",
@@ -20,7 +21,7 @@ dependencies     = [
   "beautifulsoup4",
   "certifi",
   "fastapi",
-  'datasets',
+  "datasets",
   "google-api-python-client",
   "google-auth-httplib2",
   "google-auth-oauthlib",
@@ -35,6 +36,10 @@ dependencies     = [
   "langchain-ollama",
   "langchain_chroma",
   "langchain_googledrive",
+  "langchain-mongodb",
+  "langchain-pinecone",
+  "langchain-qdrant",
+  "langchain-anthropic",
   "llama-index",
   "llama-index-embeddings-langchain",
   "langgraph",
@@ -60,17 +65,12 @@ dependencies     = [
   "pinecone",
   "pymongo",
   "redis",
-  "langchain-mongodb",
-  "langchain-pinecone",
-  "langchain-qdrant",
-  "langchain-anthropic",
   "pytest",
-  "pydantic[email]",
   "pytest-mock",
-  "sqlalchemy",
+  "pydantic[email]",
   "tiktoken",
-  'pyarrow',
-  'langgraph-checkpoint-postgres',
+  "pyarrow",
+  "langgraph-checkpoint-postgres",
   "RestrictedPython",
   "python-hcl2",
   "sql-metadata",
@@ -85,34 +85,25 @@ dependencies     = [
   "tensorboard",
   "huggingface-hub>=0.34.0",
   "filetype>=1.2.0",
-  "numpy==1.26.4,
-
+  "numpy==1.26.4"
 ]
 
 [project.optional-dependencies]
-# For CPU-only environments (e.g., standard laptops, non-GPU servers)
 cpu = [
-  "torch==2.7.1", # Specify CPU-only PyTorch version, check PyTorch website for latest.
-  "faiss-cpu",
-  #"bitsandbytes-cpu" # bitsandbytes for CPU might not be strictly necessary for training, but can be added if its CPU optimizers are desired.
+  "torch==2.7.1",
+  "faiss-cpu"
 ]
 
-# For NVIDIA CUDA GPU environments
 gpu = [
-  "torch==2.7.1+cu121", # REPLACE with exact version from pytorch.org/get-started/locally/ for YOUR CUDA version (e.g., +cu118)
-  "bitsandbytes==0.43.1", # Check compatibility with your torch/CUDA version
+  "torch==2.7.1+cu121",
+  "bitsandbytes==0.43.1",
   "faiss-gpu"
 ]
 
-# For Apple Silicon (M1/M2/M3) GPU environments (MPS)
 mps = [
-  "torch==2.7.1", # Standard PyTorch install for macOS includes MPS support
-  # faiss-gpu can be used on MPS via PyTorch's Metal backend if compiled, or use faiss-cpu.
-  # If you want FAISS to leverage MPS, you might need to install 'faiss-nightly' or build from source
-  # For now, if faiss-gpu or faiss-cpu is used, it will fall back to CPU if not compiled for MPS.
-  "faiss-cpu", # For simplicity, use CPU FAISS on MPS, as FAISS GPU on MPS is complex.
+  "torch==2.7.1",
+  "faiss-cpu"
 ]
-
 
 [project.scripts]
 ragnetic = "cli:app"
