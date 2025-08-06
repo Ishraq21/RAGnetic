@@ -224,7 +224,7 @@ vector_store:
   type: faiss
   bm25_k: 0
   semantic_k: 0
-  retrieval_strategy: none
+  retrieval_strategy: hybrid
 
 ```
 You can deploy your agent using:
