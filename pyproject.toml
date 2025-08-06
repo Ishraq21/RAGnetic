@@ -42,6 +42,7 @@ dependencies     = [
   "nbformat",
   "pandas",
   "PyMuPDF",
+  "python-multipart",
   "psycopg2-binary",
   "python-docx",
   "python-dotenv",
