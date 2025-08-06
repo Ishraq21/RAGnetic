@@ -133,10 +133,9 @@ RAGnetic is built with security, compliance, and scalability in mind, making it 
 
 - Python 3.9 or higher
 - <code>git</code>
-- alembic (for database migrations)
+- <code>redis</code>
 - Operating System: RAGnetic supports Linux, macOS, and Windows. Specific
-  hardware limitations (e.g., <code>bitsandbytes</code> requires NVIDIA CUDA) are noted in the fine-tuning
-  documentation.
+  hardware limitations (e.g., <code>bitsandbytes</code> requires NVIDIA CUDA)
 
 
 
