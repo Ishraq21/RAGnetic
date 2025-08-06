@@ -19,7 +19,6 @@ dependencies     = [
   "arxiv",
   "beautifulsoup4",
   "certifi",
-  #"faiss-cpu", # REMOVE THIS
   "fastapi",
   'datasets',
   "google-api-python-client",
@@ -37,7 +36,7 @@ dependencies     = [
   "llama-index",
   "llama-index-embeddings-langchain",
   "langgraph",
-  "mysqlclient",
+  "pymysql",
   "nbformat",
   "pandas",
   "PyMuPDF",
