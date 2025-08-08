@@ -236,137 +236,81 @@ ragnetic deploy hello_world_agent
 
 ## Usage & Commands 
 
+### Project & System Management
+
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `ragnetic init` | Initializes a new project, creating a project structure and setting up a default database. | `ragnetic init` |
+| `ragnetic configure` | Interactive wizard to configure system settings, databases, and secrets. | `ragnetic configure` |
+| `ragnetic start-server` | Starts the RAGnetic server, worker, and scheduler. | `ragnetic start-server --reload` |
+| `ragnetic set-server-key` | Generates and sets a secret key for the server API. | `ragnetic set-server-key` |
+| `ragnetic set-api-key` | Interactive wizard to set API keys for external services. | `ragnetic set-api-key` |
+| `ragnetic reset-db` | **DANGEROUS:** Drops all tables from the database to create a clean slate. | `ragnetic reset-db --force` |
+| `ragnetic show-config` | Displays the current system configurations. | `ragnetic show-config` |
+| `ragnetic check-system-db` | Verifies connections and migration status of configured databases. | `ragnetic check-system-db` |
+| `ragnetic auth gdrive` | Authenticates with Google Drive for data ingestion. | `ragnetic auth gdrive` |
+| `ragnetic test` | Runs the entire test suite using `pytest`. | `ragnetic test` |
+| `ragnetic makemigrations` | Autogenerates a new database migration script based on model changes. | `ragnetic makemigrations -m "Added new field"` |
+| `ragnetic migrate` | Applies database migrations to update the schema. | `ragnetic migrate head` |
+| `ragnetic sync` | Manually stamps the database with a migration revision without running any SQL. | `ragnetic sync head` |
+
+### User & Role Management
+
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `ragnetic user create` | Creates a new user account with a password. | `ragnetic user create my_user --superuser` |
+| `ragnetic user update` | Updates an existing user account by ID. | `ragnetic user update 1 --first-name "John"` |
+| `ragnetic user delete` | Deletes a user account by ID. | `ragnetic user delete 1` |
+| `ragnetic user list` | Lists all user accounts in the database. | `ragnetic user list` |
+| `ragnetic user generate-key` | Generates a new API key for a user. | `ragnetic user generate-key 1` |
+| `ragnetic user revoke-key` | Revokes a user's API key. | `ragnetic user revoke-key <key_string>` |
+| `ragnetic login` | Logs in a user and saves their API key for the CLI. | `ragnetic login my_user` |
+| `ragnetic logout` | Clears the active CLI login session. | `ragnetic logout` |
+| `ragnetic whoami` | Displays the currently active user and their permissions. | `ragnetic whoami` |
+| `ragnetic role create` | Creates a new role with an optional description. | `ragnetic role create admin` |
+| `ragnetic role list` | Lists all roles and their permissions. | `ragnetic role list` |
+| `ragnetic role delete` | Deletes a role by ID. | `ragnetic role delete 1` |
+| `ragnetic role assign-permission` | Assigns a permission string to a role. | `ragnetic role assign-permission 1 agent:create` |
+| `ragnetic role remove-permission` | Removes a permission from a role. | `ragnetic role remove-permission 1 agent:create` |
+
 ### Agent & Workflow Management
 
-<table style="width:100%; table-layout:fixed;">
-  <colgroup>
-    <col style="width:60%;">
-    <col style="width:25%;">
-    <col style="width:15%;">
-  </colgroup>
-  <thead>
-    <tr>
-      <th>Command</th>
-      <th>Description</th>
-      <th>Example</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic list-agents</code></td>
-      <td>Lists all configured agents.</td>
-      <td style="white-space:nowrap;"><code>ragnetic list-agents</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic deploy</code></td>
-      <td>Deploys an agent by processing its data sources.</td>
-      <td style="white-space:nowrap;"><code>ragnetic deploy my_research_agent</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic deploy-orchestrator</code></td>
-      <td>Deploys an orchestrator and its sub-agents.</td>
-      <td style="white-space:nowrap;"><code>ragnetic deploy-orchestrator my_team_orchestrator</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic inspect-agent</code></td>
-      <td>Displays an agent’s config and checks connections.</td>
-      <td style="white-space:nowrap;"><code>ragnetic inspect-agent my_research_agent --check-connections</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic list-workflows</code></td>
-      <td>Lists recent workflow runs.</td>
-      <td style="white-space:nowrap;"><code>ragnetic list-workflows</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic trigger-workflow</code></td>
-      <td>Triggers a workflow via the API.</td>
-      <td style="white-space:nowrap;"><code>ragnetic trigger-workflow my_report_gen --input '{"topic":"Q3 results"}'</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic inspect-orchestration</code></td>
-      <td>Inspects a full run, showing a tree of nested sub-runs.</td>
-      <td style="white-space:nowrap;"><code>ragnetic inspect-orchestration &lt;run_id&gt;</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic delete-agent</code></td>
-      <td>Permanently deletes an agent and all its data.</td>
-      <td style="white-space:nowrap;"><code>ragnetic delete-agent my_old_agent</code></td>
-    </tr>
-  </tbody>
-</table>
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `ragnetic list-agents` | Lists all configured agents. | `ragnetic list-agents` |
+| `ragnetic deploy` | Deploys an agent by processing its data sources and building its vector store. | `ragnetic deploy my_research_agent` |
+| `ragnetic deploy-orchestrator` | Deploys an orchestrator and all its sub-agents from a roster. | `ragnetic deploy-orchestrator my_team_orchestrator` |
+| `ragnetic inspect-agent` | Displays an agent's configuration and can check connections or document metadata. | `ragnetic inspect-agent my_research_agent --check-connections` |
+| `ragnetic reset-agent` | Resets an agent by deleting its vector store and memory files. | `ragnetic reset-agent my_agent` |
+| `ragnetic delete-agent` | Permanently deletes an agent's configuration and all its data. | `ragnetic delete-agent my_old_agent` |
+| `ragnetic list-workflows` | Lists recent workflow runs. | `ragnetic list-workflows` |
+| `ragnetic trigger-workflow` | Triggers a workflow to run via the API. | `ragnetic trigger-workflow my_report_gen --input '{"topic":"Q3 results"}'` |
+| `ragnetic inspect-orchestration` | Inspects a full orchestration, showing all sub-runs in a tree view. | `ragnetic inspect-orchestration <run_id>` |
+| `ragnetic delete-workflow` | Permanently deletes a workflow definition and its YAML file. | `ragnetic delete-workflow my_old_workflow` |
 
 ### Training & Evaluation
 
-<table style="width:100%; table-layout:fixed;">
-  <colgroup>
-    <col style="width:60%;">
-    <col style="width:25%;">
-    <col style="width:15%;">
-  </colgroup>
-  <thead>
-    <tr>
-      <th>Command</th>
-      <th>Description</th>
-      <th>Example</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic generate-test</code></td>
-      <td>Generates a test set from an agent’s data sources.</td>
-      <td style="white-space:nowrap;"><code>ragnetic generate-test my_agent -o test_set.json</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic benchmark</code></td>
-      <td>Runs a retrieval quality benchmark on an agent.</td>
-      <td style="white-space:nowrap;"><code>ragnetic benchmark my_agent -t test_set.json</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic training apply</code></td>
-      <td>Submits a fine-tuning job via a YAML config file.</td>
-      <td style="white-space:nowrap;"><code>ragnetic training apply -f configs/my_ft_job.yaml</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic training status</code></td>
-      <td>Checks the status of a fine-tuning job.</td>
-      <td style="white-space:nowrap;"><code>ragnetic training status &lt;adapter_id&gt;</code></td>
-    </tr>
-  </tbody>
-</table>
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `ragnetic dataset prepare` | Prepares a raw dataset for fine-tuning using a YAML configuration. | `ragnetic dataset prepare -f data_prep_configs/my_prep.yaml` |
+| `ragnetic generate-test` | Generates a test set from an agent’s data sources. | `ragnetic generate-test my_agent -o test_set.json` |
+| `ragnetic benchmark` | Runs a retrieval quality benchmark on an agent. | `ragnetic benchmark my_agent -t test_set.json` |
+| `ragnetic training apply` | Submits a fine-tuning job via a YAML config file. | `ragnetic training apply -f configs/my_ft_job.yaml` |
+| `ragnetic training status` | Checks the status of a fine-tuning job. | `ragnetic training status <adapter_id>` |
+| `ragnetic training list-models` | Lists all available fine-tuned models (completed jobs). | `ragnetic training list-models` |
 
 ### Analytics & Auditing
 
-<table style="width:100%; table-layout:fixed;">
-  <colgroup>
-    <col style="width:60%;">
-    <col style="width:25%;">
-    <col style="width:15%;">
-  </colgroup>
-  <thead>
-    <tr>
-      <th>Command</th>
-      <th>Description</th>
-      <th>Example</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic analytics usage</code></td>
-      <td>Displays aggregated LLM usage and cost metrics.</td>
-      <td style="white-space:nowrap;"><code>ragnetic analytics usage --agent my_agent</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic analytics benchmarks</code></td>
-      <td>Displays summaries of past benchmark runs.</td>
-      <td style="white-space:nowrap;"><code>ragnetic analytics benchmarks --agent my_agent</code></td>
-    </tr>
-    <tr>
-      <td style="white-space:nowrap;"><code>ragnetic inspect-run</code></td>
-      <td>Inspects a specific agent run and its steps.</td>
-      <td style="white-space:nowrap;"><code>ragnetic inspect-run &lt;run_id&gt;</code></td>
-    </tr>
-  </tbody>
-</table>
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `ragnetic analytics usage` | Displays aggregated LLM usage and cost metrics. | `ragnetic analytics usage --agent my_agent` |
+| `ragnetic analytics benchmarks` | Displays summaries of past benchmark runs. | `ragnetic analytics benchmarks --agent my_agent` |
+| `ragnetic analytics agent-runs` | Displays aggregated agent run metrics. | `ragnetic analytics agent-runs --agent my_agent` |
+| `ragnetic analytics agent-steps` | Displays aggregated agent step metrics. | `ragnetic analytics agent-steps --agent my_agent` |
+| `ragnetic analytics workflow-runs` | Displays aggregated workflow run metrics. | `ragnetic analytics workflow-runs --workflow my_workflow` |
+| `ragnetic inspect-run` | Inspects a specific agent run and its steps. | `ragnetic inspect-run <run_id>` |
+| `ragnetic inspect-workflow` | Inspects a specific workflow run and its I/O. | `ragnetic inspect-workflow <run_id>` |
+| `ragnetic inspect-orchestration` | Inspects a full orchestration, showing all sub-runs in a tree view. | `ragnetic inspect-orchestration <run_id>` |
 
 ## YAML Configuration Examples
 
