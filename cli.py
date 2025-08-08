@@ -820,10 +820,11 @@ def check_system_db():
     if has_failure:
         raise typer.Exit(code=1)
 
-
 @app.command(help="Initialize a new RAGnetic project.")
 def init():
     typer.secho("Initializing new RAGnetic project...", bold=True)
+
+    # 1. Create essential directories
     paths_to_create = {
         "DATA_DIR", "AGENTS_DIR", "VECTORSTORE_DIR", "MEMORY_DIR",
         "LOGS_DIR", "TEMP_CLONES_DIR", "RAGNETIC_DIR", "BENCHMARK_DIR", "WORKFLOWS_DIR", "TRAINING_CONFIGS_DIR", "DATA_RAW_DIR", "FINE_TUNED_MODELS_BASE_DIR", "DATA_PREPARED_DIR",
@@ -834,24 +835,56 @@ def init():
             os.makedirs(path, mode=0o750, exist_ok=True)
             typer.echo(f"  - Created directory: {path}")
 
+    # 2. Handle default config and database setup
     if not os.path.exists(_CONFIG_FILE):
+        typer.echo(f"  - Creating default config file: {_CONFIG_FILE}")
+
+        # Define the path for the bundled DB file (source) and the working DB file (destination)
+        bundled_db_path = _PROJECT_ROOT / "ragnetic.db"
+        working_db_path = _MEMORY_DIR / "ragnetic.db"
+
+        # Check if the bundled file exists before trying to copy
+        if bundled_db_path.exists():
+            # Ensure the destination directory exists
+            _MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+
+            try:
+                shutil.copy(bundled_db_path, working_db_path)
+                typer.echo(f"  - Copied pre-migrated database to: {working_db_path}")
+            except Exception as e:
+                typer.secho(f"Error copying bundled database: {e}", fg=typer.colors.RED)
+                typer.secho("The project has been initialized, but the default SQLite database was not set up.", fg=typer.colors.YELLOW)
+        else:
+            typer.secho(f"Warning: Bundled database file not found at {bundled_db_path}. Skipping database copy.", fg=typer.colors.YELLOW)
+
+        # Create the  default config file with the specified content
         config = configparser.ConfigParser()
         config['SERVER'] = {
             'host': '127.0.0.1',
             'port': '8000',
-            'cors_allowed_origins': '*',
+            'json_logs': 'false',
             'websocket_mode': 'memory'
         }
-        default_db_path = _MEMORY_DIR / "ragnetic.db"
-        config['DATABASE_CONNECTIONS'] = {'names': 'default_sqlite'}
-        config['DATABASE_default_sqlite'] = {
-            'dialect': 'sqlite+aiosqlite',
-            'database_path': str(default_db_path.relative_to(_PROJECT_ROOT))
+        config['DATABASE_CONNECTIONS'] = {
+            'names': 'ragnetic_db'
         }
-        config['MEMORY_STORAGE'] = {'type': 'sqlite', 'connection_name': 'default_sqlite'}
+        config['MEMORY_STORAGE'] = {
+            'type': 'db',
+            'connection_name': 'ragnetic_db'
+        }
+        config['LOG_STORAGE'] = {
+            'type': 'file'
+        }
+        config['DATABASE_ragnetic_db'] = {
+            'dialect': 'sqlite',
+            'database_path': str(working_db_path.relative_to(_PROJECT_ROOT))
+        }
+
         with open(_CONFIG_FILE, 'w') as configfile:
             config.write(configfile)
         typer.echo(f"  - Created config file: {_CONFIG_FILE}")
+    else:
+        typer.echo(f"  - Configuration file already exists at {_CONFIG_FILE}. Skipping default setup.")
 
     typer.secho("\nProject initialized successfully!", fg=typer.colors.GREEN)
     typer.secho("\n--- SECURITY NOTICE: CORS ---", fg=typer.colors.YELLOW, bold=True)
@@ -862,7 +895,6 @@ def init():
     typer.echo("  1. Set your API keys: " + typer.style("ragnetic set-api-key", bold=True))
     typer.echo("  2. Configure a different database (optional): " + typer.style("ragnetic configure", bold=True))
     typer.echo("  3. Secure your server: " + typer.style("ragnetic set-server-key", bold=True))
-
 
 @app.command(name="set-server-key", help="Generate and set a secret key for the server API.")
 def set_server_key():
