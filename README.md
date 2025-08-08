@@ -177,7 +177,7 @@ RAGnetic is built with security, compliance, and scalability in mind, making it 
    ```
 You can use the <code>--reload</code> flag for development. Remove it for production.
 
-**Custom Database Configuration**
+**Note**:
 If you prefer to use a different database, such as PostgreSQL, you can use the <code>ragnetic configure</code> command to set it up. This will overwrite the default SQLite database file. After configuration, run the <code>ragnetic migrate</code> command to apply the database schema to your new database.
 
 <img width="3432" height="1343" alt="RAGnetic New Chat Screen" src="https://github.com/user-attachments/assets/7077454d-44a0-4eac-a8f0-5d7cb09a8cbe" />
