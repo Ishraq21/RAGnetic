@@ -161,33 +161,24 @@ RAGnetic is built with security, compliance, and scalability in mind, making it 
     For Apple Silicon (M-series) GPUs: <code>pip install ".[mps]"</code>
 
 3.  **Initialize the Project:**
-    This command creates the necessary project structure and a default configuration file.
+    This command creates the necessary project structure and sets up a default database. RAGnetic ships with a pre-migrated SQLite database, so no further database setup is required for the default experience.
     ```bash
     ragnetic init
     ```
-    
-4. **Configure the Database**:
-   Use the interactive configure command to set up your system databases for logging and
-   memory storage.
-   ```bash
-    ragnetic configure
-    ```
-5. **Run Database Migrations:**
-Apply the initial database schema. This is mandatory for using most features.
-   ```bash
-    ragnetic migrate
-   ```
-6. **Set your API Keys:**
+4. **Set your API Keys:**
    The framework needs API keys to use external services. Use the interactive <code>set-api-key</code> command to set a master administrative key, which is used for initial setup and emergency access.
    ```bash
     ragnetic set-api-key
    ```
-7. **Start the Server**:
+5. **Start the Server**:
    Start the RAGnetic server, Celery worker, and scheduler in a single command.
    ```bash
     ragnetic start-server
    ```
 You can use the <code>--reload</code> flag for development. Remove it for production.
+
+**Custom Database Configuration**
+If you prefer to use a different database, such as PostgreSQL, you can use the <code>ragnetic configure</code> command to set it up. This will overwrite the default SQLite database file. After configuration, run the <code>ragnetic migrate</code> command to apply the database schema to your new database.
 
 <img width="3432" height="1343" alt="RAGnetic New Chat Screen" src="https://github.com/user-attachments/assets/7077454d-44a0-4eac-a8f0-5d7cb09a8cbe" />
 
