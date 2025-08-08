@@ -170,12 +170,24 @@ RAGnetic is built with security, compliance, and scalability in mind, making it 
    ```bash
     ragnetic set-api-key
    ```
-5. **Start the Server**:
+5. **Create an Admin User:**
+   Create an Admin User:
+   Before you can log in, you need to create a user account. Use the master key you just set to create a user with superuser privileges (the equivalent of an admin user). You'll be prompted to set a password.
+   ```bash
+   ragnetic user create my_admin_user --superuser
+   ```
+   The <code>ragnetic set-server-key</code> command (we saw on the previous step) creates a master API key which is a global key with full access. It should be reserved for administrative and emergency situations.
+
+6. **Start the Server**:
    Start the RAGnetic server, Celery worker, and scheduler in a single command.
    ```bash
     ragnetic start-server
    ```
 You can use the <code>--reload</code> flag for development. Remove it for production.
+
+7. **Access the Web UI:**
+   With the server running, navigate to http://127.0.0.1:8000 in your browser. You will be redirected to the login page.
+   Enter the username and password for the <code>my_admin_user</code> you created earlier to log in. You now have access to the full administrative web interface.
 
 **Note**:
 If you prefer to use a different database, such as PostgreSQL, you can use the <code>ragnetic configure</code> command to set it up. This will overwrite the default SQLite database file. After configuration, run the <code>ragnetic migrate</code> command to apply the database schema to your new database.
