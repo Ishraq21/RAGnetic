@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
 from app.db import get_db
-from app.core.security import get_http_api_key, get_current_user_from_api_key
+from app.core.security import get_http_api_key, get_current_user_from_api_key, PermissionChecker # Import PermissionChecker
 # The new DAO function
 from app.db.dao import get_document_chunk, get_document_chunks
 from app.schemas.security import User
@@ -37,11 +37,12 @@ class CitationSnippet(BaseModel):
 @router.get("/citation-snippet",  response_model=CitationSnippet)
 async def get_citation_snippet(
         chunk_id: int = Query(..., description="The ID of the document chunk."),
-        current_user: User = Depends(get_current_user_from_api_key),
+        current_user: User = Depends(PermissionChecker(["citation:read"])),
         db: AsyncSession = Depends(get_db)
 ) -> CitationSnippet:
     """
     Retrieves a single text snippet for a given citation from the database.
+    Requires: 'citation:read' permission.
     """
     logger.info(f"User {current_user.id} requesting citation snippet for chunk_id: {chunk_id}")
 
@@ -62,11 +63,12 @@ async def get_citation_snippet(
 @router.get("/citation-snippets", response_model=List[CitationSnippet])
 async def get_citation_snippets(
         chunk_ids: List[int] = Query(..., description="The IDs of the document chunks."),
-        current_user: User = Depends(get_current_user_from_api_key),
+        current_user: User = Depends(PermissionChecker(["citation:read"])),
         db: AsyncSession = Depends(get_db)
 ) -> List[CitationSnippet]:
     """
     Retrieves text snippets and metadata for a list of citation chunk IDs from the database.
+    Requires: 'citation:read' permission.
     """
     logger.info(f"User {current_user.id} requesting citation snippets for chunk_ids: {chunk_ids}")
 
@@ -81,7 +83,7 @@ async def get_citation_snippets(
     response_list = [
         CitationSnippet(
             id=c['id'],
-            content=c['content'],
+            snippet=c['content'],
             document_name=c['document_name'],
             page_number=c.get('page_number')
         )
