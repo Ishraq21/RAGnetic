@@ -22,6 +22,10 @@ router = APIRouter(prefix="/api/v1/security", tags=["Security API"])
 
 # --- Authentication Endpoints ---
 
+# app/api/security.py
+
+# ... (rest of the file) ...
+
 @router.post("/login", response_model=Token)
 async def login_for_access_token(
         request: LoginRequest,
@@ -43,7 +47,7 @@ async def login_for_access_token(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is inactive.")
 
     try:
-        active_key_stmt = select(user_api_keys_table.c.api_key).where(  # Used imported user_api_keys_table
+        active_key_stmt = select(user_api_keys_table.c.api_key).where(
             user_api_keys_table.c.user_id == user_data["id"],
             user_api_keys_table.c.revoked == False
         ).order_by(user_api_keys_table.c.created_at.desc()).limit(1)
@@ -54,7 +58,10 @@ async def login_for_access_token(
             api_key_str = existing_key
             logger.info(f"User '{request.username}' logged in, reusing existing API key.")
         else:
-            api_key_str = await db_dao.create_user_api_key(db, user_data["id"])
+
+            # When creating a new key, a default scope must be provided.
+            # Here we default to 'viewer' which is a safe, minimal permission scope.
+            api_key_str = await db_dao.create_user_api_key(db, user_data["id"], scope="viewer")
             logger.info(f"User '{request.username}' logged in, new API key generated.")
 
         return Token(access_token=api_key_str, token_type="bearer")
@@ -62,7 +69,6 @@ async def login_for_access_token(
         logger.error(f"Failed to generate/retrieve API key for user {request.username}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="Failed to generate access token.")
-
 
 @router.get("/me", response_model=User)
 async def read_current_user(
@@ -285,14 +291,17 @@ async def delete_role(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="An unexpected error occurred while deleting the role.")
 
+class APIKeyCreate(BaseModel):
+    scope: str = "viewer"
 
 # --- User API Key Endpoints ---
 
 @router.post("/users/{user_id}/api-keys", response_model=Token, status_code=status.HTTP_201_CREATED)
 async def create_user_api_key(
         user_id: int,
+        key_create: APIKeyCreate = Body(...),
         db: AsyncSession = Depends(get_db),
-        current_user: User = Depends(PermissionChecker(["security:manage_api_keys"]))  # Requires specific permission
+        current_user: User = Depends(PermissionChecker(["security:manage_api_keys"]))
 ):
     """
     Generates a new API key for a specific user.
@@ -304,10 +313,11 @@ async def create_user_api_key(
         if not user_exists:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
-        new_api_key = await db_dao.create_user_api_key(db, user_id)
+        # Pass the scope from the request body to the DAO function
+        new_api_key = await db_dao.create_user_api_key(db, user_id, scope=key_create.scope)
         logger.info(f"User '{current_user.username}' generated API key for user ID: {user_id}.")
         return Token(access_token=new_api_key, token_type="bearer")
-    except ValueError as e:  # Catch specific errors from DAO like unique key constraint
+    except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create API key for user {user_id}: {e}", exc_info=True)

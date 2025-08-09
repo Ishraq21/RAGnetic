@@ -21,6 +21,7 @@ utc_timestamp = datetime.utcnow
 sender_enum = Enum("human", "ai", name="sender_enum")
 workflow_status_enum = Enum("running", "completed", "failed", "paused", name="workflow_status_enum")
 agent_status_enum = Enum("running", "completed", "failed", name="agent_status_enum")
+api_key_scope_enum = Enum("admin", "editor", "viewer", name="api_key_scope_enum")
 
 
 # --- Table Definitions ---
@@ -69,7 +70,6 @@ users_table = Table(
     Column("hashed_password", String(255), nullable=False), # Store hashed passwords
     Column("is_active", Boolean, nullable=False, default=True), # User account status
     Column("is_superuser", Boolean, nullable=False, default=False), # For master admin accounts
-    # Use a Python-level default instead of a server-level default
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
     Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
 )
@@ -165,6 +165,9 @@ user_api_keys_table = Table(
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
     Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
     Column("revoked", Boolean, nullable=False, default=False),
+    Column("scope", api_key_scope_enum, nullable=False, default="viewer"),
+    Column("last_used_at", DateTime, nullable=True),
+    Column("request_count", BigInteger, nullable=False, default=0),
 )
 
 # Table to store a record of each overall agent/graph execution

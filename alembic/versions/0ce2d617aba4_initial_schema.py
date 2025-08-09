@@ -1,8 +1,8 @@
-"""Initial schema
+"""Initial Schema
 
-Revision ID: 3c6c3d9cb622
+Revision ID: 0ce2d617aba4
 Revises: 
-Create Date: 2025-08-07 23:45:32.438161
+Create Date: 2025-08-09 10:51:05.759581
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '3c6c3d9cb622'
+revision: str = '0ce2d617aba4'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -216,6 +216,9 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.Column('revoked', sa.Boolean(), nullable=False),
+    sa.Column('scope', sa.Enum('admin', 'editor', 'viewer', name='api_key_scope_enum'), nullable=False),
+    sa.Column('last_used_at', sa.DateTime(), nullable=True),
+    sa.Column('request_count', sa.BigInteger(), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_user_api_keys_user_id_users'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_user_api_keys')),
     sa.UniqueConstraint('api_key', name=op.f('uq_user_api_keys_api_key'))

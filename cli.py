@@ -1890,24 +1890,24 @@ def delete_workflow(
 
 # --- User Management Commands ---
 
+
 @user_app.command("create", help="Create a new user account.")
 def create_user(
-        username: str = typer.Argument(..., help="Username for the new user."),
-        password: str = typer.Option(..., prompt=True, hide_input=True, confirmation_prompt=True,
-                                     help="Password for the new user."),
-        email: Optional[str] = typer.Option(None, help="Email for the new user."),
-
-        first_name: Optional[str] = typer.Option(None, "--first-name", "-f", help="First name of the user."),
-        last_name: Optional[str] = typer.Option(None, "--last-name", "-l", help="Last name of the user."),
-
-        is_superuser: bool = typer.Option(False, "--superuser", "-s", help="Grant superuser privileges to this user."),
-        roles: Optional[List[str]] = typer.Option(None, "--role", "-r",
-                                                  help="Role(s) to assign to the user (e.g., --role admin --role developer)."),
+    username: str = typer.Argument(..., help="Username for the new user."),
+    password: str = typer.Option(..., prompt=True, hide_input=True, confirmation_prompt=True,
+                                 help="Password for the new user."),
+    email: Optional[str] = typer.Option(None, help="Email for the new user."),
+    first_name: Optional[str] = typer.Option(None, "--first-name", "-f", help="First name of the user."),
+    last_name: Optional[str] = typer.Option(None, "--last-name", "-l", help="Last name of the user."),
+    is_superuser: bool = typer.Option(False, "--superuser", "-s", help="Grant superuser privileges to this user."),
+    roles: Optional[List[str]] = typer.Option(None, "--role", "-r",
+                                              help="Role(s) to assign to the user (e.g., --role admin --role developer)."),
+    scope: str = typer.Option("viewer", "--scope", help="Default API key scope (admin, editor, viewer).")
 ):
-    """Creates a new user account via the API."""
+    """Creates a new user account via the API, generates a scoped API key, and displays it."""
     server_url = _get_server_url()
-    api_key = _get_api_key_for_cli()
-    headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+    api_key_for_cli = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key_for_cli, "Content-Type": "application/json"}
     url = f"{server_url}/security/users"
 
     user_data = {
@@ -1917,26 +1917,33 @@ def create_user(
         "first_name": first_name,
         "last_name": last_name,
         "is_superuser": is_superuser,
-        "is_active": True,  # Always active on creation via CLI
+        "is_active": True,
         "roles": roles if roles else []
     }
 
     response = None
-
     try:
         typer.secho(f"Attempting to create user '{username}'...", fg=typer.colors.CYAN)
         response = requests.post(url, headers=headers, json=user_data, timeout=10)
         response.raise_for_status()
 
         created_user = response.json()
-        typer.secho(f"User '{created_user['username']}' (ID: {created_user['id']}) created successfully.",
-                    fg=typer.colors.GREEN)
-        typer.echo(f"  Full Name: {created_user.get('first_name', '')} {created_user.get('last_name', '')}".strip()) # Display full name
-
+        typer.secho(f"\nUser '{created_user['username']}' (ID: {created_user['id']}) created successfully.", fg=typer.colors.GREEN)
+        typer.echo(f"  Full Name: {created_user.get('first_name', '')} {created_user.get('last_name', '')}".strip())
         if created_user.get('roles'):
             typer.echo(f"  Assigned roles: {', '.join([r['name'] for r in created_user['roles']])}")
         if created_user.get('is_superuser'):
             typer.echo("  (This user is a Superuser)")
+
+        # Automatically generate an API key with the specified scope
+        api_key_url = f"{server_url}/security/users/{created_user['id']}/api-keys"
+        api_key_response = requests.post(api_key_url, headers=headers, json={"scope": scope}, timeout=10)
+        api_key_response.raise_for_status()
+        new_key_data = api_key_response.json()
+
+        typer.secho(f"\nAPI key with scope '{scope}' generated for user '{username}':", fg=typer.colors.BRIGHT_WHITE, bold=True)
+        typer.echo(typer.style(new_key_data['access_token'], bold=True))
+        typer.secho("Store this key securely! It will not be shown again.", fg=typer.colors.YELLOW)
 
     except requests.exceptions.RequestException as e:
         typer.secho(f"Error creating user: {e}", fg=typer.colors.RED)
@@ -1944,6 +1951,69 @@ def create_user(
             typer.echo(f"API Response: {response.text}")
         raise typer.Exit(code=1)
 
+
+@user_app.command("assign-role", help="Assign an existing role to a user.")
+def assign_role_cli(
+        user_id: int = typer.Argument(..., help="The ID of the user to assign the role to."),
+        role_name: str = typer.Argument(..., help="The name of the role to assign (e.g., 'editor')."),
+        organization_name: str = typer.Option("default", help="The organization name for this assignment.")
+):
+    """Assigns a role to a user via the API."""
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+    url = f"{server_url}/security/users/{user_id}/roles"
+
+    data = {
+        "role_name": role_name,
+        "organization_name": organization_name
+    }
+
+    response = None
+    try:
+        typer.secho(f"Attempting to assign role '{role_name}' to user ID {user_id}...", fg=typer.colors.CYAN)
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+
+        typer.secho(f"Role '{role_name}' successfully assigned to user ID {user_id}.", fg=typer.colors.GREEN)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error assigning role: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+
+
+@user_app.command("remove-role", help="Remove a role from a user.")
+def remove_role_cli(
+        user_id: int = typer.Argument(..., help="The ID of the user to remove the role from."),
+        role_name: str = typer.Argument(..., help="The name of the role to remove."),
+        organization_name: str = typer.Option("default", help="The organization name for this assignment.")
+):
+    """Removes a role from a user via the API."""
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+    url = f"{server_url}/security/users/{user_id}/roles"
+
+    data = {
+        "role_name": role_name,
+        "organization_name": organization_name
+    }
+    response = None
+
+    try:
+        typer.secho(f"Attempting to remove role '{role_name}' from user ID {user_id}...", fg=typer.colors.CYAN)
+        response = requests.delete(url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+
+        typer.secho(f"Role '{role_name}' successfully removed from user ID {user_id}.", fg=typer.colors.GREEN)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"Error removing role: {e}", fg=typer.colors.RED)
+        if response is not None and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
 
 @user_app.command("list", help="List all user accounts.")
 def list_users():

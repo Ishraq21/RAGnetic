@@ -18,6 +18,7 @@ from app.schemas.agent import DocumentMetadata
 from app.db.models import chat_messages_table
 from uuid import uuid4
 from sqlalchemy import func
+from app.schemas.security import RoleCreate
 
 logger = logging.getLogger("ragnetic")
 
@@ -424,15 +425,18 @@ async def get_permissions_for_role(db: AsyncSession, role_id: int) -> List[str]:
 
 # --- User API Key Management ---
 
-async def create_user_api_key(db: AsyncSession, user_id: int) -> str:
-    """Generates and stores a new API key for a user."""
+async def create_user_api_key(db: AsyncSession, user_id: int, scope: str) -> str:
+    """Generates and stores a new API key for a user with a specific scope."""
     api_key = secrets.token_hex(32)
     stmt = insert(user_api_keys_table).values(
         user_id=user_id,
         api_key=api_key,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
-        revoked=False
+        revoked=False,
+        scope=scope,
+        last_used_at=None,
+        request_count=0
     )
     try:
         await db.execute(stmt)
@@ -461,16 +465,36 @@ async def revoke_user_api_key(db: AsyncSession, api_key_str: str) -> bool:
 
 
 async def get_user_by_api_key(db: AsyncSession, api_key_str: str) -> Optional[Dict[str, Any]]:
-    """Retrieves a user associated with a non-revoked API key, including roles and permissions."""
-    stmt = select(users_table).join(user_api_keys_table).where(
+    """Retrieves a user associated with a non-revoked API key, including roles and permissions, and the key's scope."""
+    stmt = select(
+        users_table,
+        user_api_keys_table.c.scope,
+    ).join(user_api_keys_table).where(
         user_api_keys_table.c.api_key == api_key_str,
         user_api_keys_table.c.revoked == False
     )
     result = await db.execute(stmt)
     user_row = result.mappings().first()
     if user_row:
-        return await _format_user_data_for_pydantic(user_row, db)
+        user_data = dict(user_row)
+        return await _format_user_data_for_pydantic(user_data, db)
     return None
+
+# --- NEW: update_api_key_usage function ---
+async def update_api_key_usage(db: AsyncSession, api_key_str: str) -> None:
+    """Updates the last_used_at timestamp and increments the request_count for a given API key."""
+    stmt = update(user_api_keys_table).where(
+        user_api_keys_table.c.api_key == api_key_str
+    ).values(
+        last_used_at=datetime.utcnow(),
+        request_count=user_api_keys_table.c.request_count + 1,
+    )
+    try:
+        await db.execute(stmt)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to update API key usage for key ending in ...{api_key_str[-4:]}: {e}", exc_info=True)
 
 
 def save_conversation_metrics_sync(connection, metrics_data: dict):
@@ -735,3 +759,46 @@ async def save_conversation_metrics(
 ) -> None:
     await db.execute(conversation_metrics_table.insert().values(**metrics_data))
     await db.commit()
+
+
+async def create_default_roles_and_permissions(db: AsyncSession) -> None:
+    """
+    Creates predefined roles (admin, editor, viewer) and assigns default permissions.
+    This function is idempotent and can be run safely multiple times.
+    """
+    roles_and_permissions = {
+        "admin": [
+            "read:workflows", "create:workflows", "update:workflows", "delete:workflows",
+            "read:agents", "create:agents", "update:agents", "delete:agents",
+            "read:users", "create:users", "update:users", "delete:users",
+            "read:roles", "create:roles", "update:roles", "delete:roles",
+            "read:api_keys", "create:api_keys", "revoke:api_keys"
+        ],
+        "editor": [
+            "read:workflows", "create:workflows", "update:workflows",
+            "read:agents", "create:agents", "update:agents"
+        ],
+        "viewer": [
+            "read:workflows", "read:agents"
+        ]
+    }
+
+    for role_name, permissions in roles_and_permissions.items():
+        try:
+            # Check if the role already exists to prevent IntegrityError
+            role = await get_role_by_name(db, role_name)
+            if not role:
+                role_in = RoleCreate(name=role_name, description=f"{role_name.capitalize()} role with default permissions.")
+                role = await create_role(db, role_in)
+                logger.info(f"Created new role: {role_name}")
+
+            # Assign permissions, skipping ones that already exist
+            existing_permissions = await get_permissions_for_role(db, role["id"])
+            for perm in permissions:
+                if perm not in existing_permissions:
+                    await assign_permission_to_role(db, role["id"], perm)
+                    logger.info(f"Assigned permission '{perm}' to role '{role_name}'.")
+
+        except Exception as e:
+            logger.error(f"Failed to create or update role '{role_name}': {e}")
+            await db.rollback() # Ensure rollback on failure

@@ -43,9 +43,10 @@ from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from app.core.config import get_path_settings, get_log_storage_config, \
     get_memory_storage_config, get_db_connection_config, get_db_connection, get_cors_settings, _get_config_parser
 from app.db import initialize_db_connections, get_db
+import app.db as db_mod
 from app.core.validation import sanitize_for_path
 from app.core.security import get_http_api_key, get_websocket_api_key, get_current_user_from_api_key, \
-    get_current_user_from_websocket
+    get_current_user_from_websocket, PermissionChecker
 from app.agents.config_manager import get_agent_configs, load_agent_config
 from app.core.serialization import _serialize_for_db
 from app.workflows.sync import sync_workflows_from_files, is_db_configured_sync
@@ -239,17 +240,26 @@ async def startup_event():
                     logger.info("Database schema is up-to-date.")
             engine.dispose()
 
+            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
+                "connection_name")
+            if not conn_name:
+                raise RuntimeError("Database connection name not found for async initialization.")
+            initialize_db_connections(conn_name)
+
+            # --- CORRECTED CODE BLOCK ---
+            # Use AsyncSessionLocal directly, as get_db() is for dependencies
+            from app.db.dao import create_default_roles_and_permissions
+            if db_mod.AsyncSessionLocal is None:
+                raise RuntimeError("AsyncSessionLocal is not initialized. Did initialize_db_connections() run?")
+
+            async with db_mod.AsyncSessionLocal() as db_session:
+                await create_default_roles_and_permissions(db_session)
+
             sync_workflows_from_files()
             setup_dynamic_webhooks(app)
             for route in app.router.routes:
                 if "Webhooks" in getattr(route, "tags", []):
                     logger.info(f"Registered webhook: {route.path} → {route.methods}")
-
-            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
-                    "connection_name")
-            if not conn_name:
-                raise RuntimeError("Database connection name not found for async initialization.")
-            initialize_db_connections(conn_name)
         except Exception as e:
             logger.critical(f"CRITICAL: Failed during database startup. Error: {e}", exc_info=True)
             raise
@@ -334,7 +344,7 @@ class CreateSessionRequest(BaseModel):
 @app.post("/api/v1/sessions/create", status_code=status.HTTP_201_CREATED, tags=["Memory"])
 async def create_new_session(
     request: CreateSessionRequest,
-    api_key: str = Depends(get_http_api_key),
+    current_user: User = Depends(PermissionChecker(["session:create"])),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -355,7 +365,7 @@ async def create_new_session(
 async def upload_temp_document(
         file: UploadFile = File(...),
         thread_id: str = Form(...),
-        current_user: User = Depends(get_current_user_from_api_key),
+        current_user: User = Depends(PermissionChecker(["document:upload"])),
         db: AsyncSession = Depends(get_db) #
 ):
     """
@@ -856,8 +866,10 @@ async def health_check():
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Database connection failed: {e}")
 
 
+# Corrected endpoint for get_history
 @app.get("/history/{thread_id}", tags=["Memory"])
-async def get_history(thread_id: str, agent_name: str, user_id: int, api_key: str = Depends(get_http_api_key),
+async def get_history(thread_id: str, agent_name: str, user_id: int,
+                      current_user: User = Depends(PermissionChecker(["history:read"])),
                       db: AsyncSession = Depends(get_db)):
     if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Chat history not supported without a database.")
@@ -885,8 +897,10 @@ async def get_history(thread_id: str, agent_name: str, user_id: int, api_key: st
                             detail="An unexpected error occurred while loading chat history. Please check server logs for details.")
 
 
+# Corrected endpoint for list_sessions
 @app.get("/sessions", tags=["Memory"])
-async def list_sessions(agent_name: str, user_id: int, api_key: str = Depends(get_http_api_key),
+async def list_sessions(agent_name: str, user_id: int,
+                        current_user: User = Depends(PermissionChecker(["sessions:read"])),
                         db: AsyncSession = Depends(get_db)):
     if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Chat history not supported without a database.")
@@ -908,7 +922,8 @@ async def list_sessions(agent_name: str, user_id: int, api_key: str = Depends(ge
 
 @app.put("/sessions/{thread_id}/rename", tags=["Memory"], status_code=status.HTTP_200_OK)
 async def rename_session(thread_id: str, request: RenameRequest, agent_name: str, user_id: int,
-                         api_key: str = Depends(get_http_api_key), db: AsyncSession = Depends(get_db)):
+                         current_user: User = Depends(PermissionChecker(["sessions:update"])),
+                         db: AsyncSession = Depends(get_db)):
     if not is_db_configured_sync():
         raise HTTPException(status_code=501, detail="Functionality not supported without a database.")
     safe_thread_id = sanitize_for_path(thread_id)
@@ -939,7 +954,7 @@ async def delete_session(
         thread_id: str,
         agent_name: str,
         user_id: int,
-        api_key: str = Depends(get_http_api_key),
+        current_user: User = Depends(PermissionChecker(["sessions:delete"])),
         db: AsyncSession = Depends(get_db)
 ):
     if not is_db_configured_sync():

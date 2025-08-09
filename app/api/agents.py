@@ -51,12 +51,12 @@ router = APIRouter(prefix="/api/v1/agents", tags=["Agents API"])
 
 @router.get("", response_model=List[AgentConfig])
 async def get_all_agents(
-        # Anyone can read agents, so basic authentication (API key exists) is enough
-        api_key: str = Depends(get_http_api_key)
+        current_user: User = Depends(PermissionChecker(["read:agents"]))
+
 ):
     """
     Retrieves the full configuration for all available agents.
-    Requires: Valid API Key.
+    Requires: 'agent:read' permission.
     """
     try:
         agent_configs = get_agent_configs()
@@ -71,11 +71,11 @@ async def get_all_agents(
 async def get_agent_by_name(
         agent_name: str,
         # Anyone can read agents, so basic authentication (API key exists) is enough
-        api_key: str = Depends(get_http_api_key)
+        current_user: User = Depends(PermissionChecker(["read:agents"]))
 ):
     """
     Retrieves the full configuration for a single agent.
-    Requires: Valid API Key.
+    Requires: 'agent:read' permission.
     """
     try:
         agent_config = load_agent_config(agent_name)
