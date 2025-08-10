@@ -85,7 +85,8 @@ dependencies = [
   "tensorboard",
   "huggingface-hub>=0.34.0",
   "filetype>=1.2.0",
-  "numpy==1.26.4"
+  "numpy==1.26.4",
+  "python-json-logger",
 ]
 
 [project.optional-dependencies]
