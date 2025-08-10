@@ -2,6 +2,7 @@
 import asyncio
 import json
 import uuid
+import time
 
 import redis.asyncio as redis
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -17,6 +18,8 @@ from pathlib import Path
 from datetime import datetime
 from pydantic import BaseModel, Field
 from fastapi import Form
+from starlette.middleware.base import BaseHTTPMiddleware
+
 from app.db.dao import create_chat_message
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Depends, status, UploadFile, File
@@ -58,7 +61,10 @@ from app.schemas.security import User
 from app.agents.agent_graph import get_agent_workflow, AgentState
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.callbacks import UsageMetadataCallbackHandler
-from app.core.structured_logging import get_logging_config, DatabaseLogHandler, ragnetic_logs_table
+from app.core.structured_logging import get_logging_config, DatabaseLogHandler
+from app.db.models import ragnetic_logs_table
+
+
 
 # Tools
 from app.tools.sql_tool import create_sql_toolkit
@@ -90,8 +96,9 @@ from app.services.temporary_document_service import TemporaryDocumentService, Te
 from app.core.citation_parser import extract_citations_from_text
 
 # Get the main application logger after configuration is applied
-logger = logging.getLogger("ragnetic")
 load_dotenv()
+logging.config.dictConfig(get_logging_config())
+logger = logging.getLogger("ragnetic")
 
 # --- Global Settings & App Initialization ---
 _APP_PATHS = get_path_settings()
@@ -104,7 +111,38 @@ WEBSOCKET_MODE = config.get('SERVER', 'websocket_mode', fallback='memory')
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost")
 allowed_origins = get_cors_settings()
 
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+        correlation_id = request.headers.get("X-Correlation-ID", str(uuid4()))
+        request.state.correlation_id = correlation_id
+        response = await call_next(request)
+        response.headers["X-Correlation-ID"] = correlation_id
+
+        process_time = (time.time() - start_time) * 1000
+        client_host = request.client.host if request.client else "unknown"
+        log_message = f"{client_host} \"{request.method} {request.url.path}\" {response.status_code} - {process_time:.2f}ms"
+
+        # We use a structured logger here
+        logger.info(
+            log_message,
+            extra={
+                "extra_data": {
+                    "request_id": correlation_id,  # use as request_id
+                    "route": request.url.path,
+                    "user_id": getattr(request.state, "user_id", None),
+                    "service": "api_access",
+                    "latency_ms": int(process_time)  # store as number
+                }
+            },
+        )
+
+        return response
+
+
 app = FastAPI(title="RAGnetic API", version="0.1.0")
+app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"],
                    allow_headers=["*"])
 templates = Jinja2Templates(directory="templates")
@@ -178,7 +216,6 @@ async def startup_event():
     global _watcher_process, log_listener
 
     # --- Logging Setup ---
-    logging.config.dictConfig(get_logging_config())
 
     log_storage_cfg = get_log_storage_config()
     if log_storage_cfg.get("type") == "db":
@@ -246,8 +283,6 @@ async def startup_event():
                 raise RuntimeError("Database connection name not found for async initialization.")
             initialize_db_connections(conn_name)
 
-            # --- CORRECTED CODE BLOCK ---
-            # Use AsyncSessionLocal directly, as get_db() is for dependencies
             from app.db.dao import create_default_roles_and_permissions
             if db_mod.AsyncSessionLocal is None:
                 raise RuntimeError("AsyncSessionLocal is not initialized. Did initialize_db_connections() run?")
@@ -472,7 +507,14 @@ async def _get_or_create_session(db: AsyncSession, thread_id_from_frontend: Opti
         new_session = (await db.execute(insert_stmt)).one()
         await db.commit()
         logger.info(
-            f"Created new chat session: ID={new_session.id}, Thread={new_session.thread_id}, Agent={agent_name}, User_DB_ID={user_db_id}")
+            "session_created",
+            extra={"extra_data": {
+                "session_id": new_session.id,
+                "thread_id": new_session.thread_id,
+                "agent_id": agent_name,
+                "user_id": user_db_id
+            }},
+        )
         return new_session.id, new_session.topic_name, new_session.thread_id
     except IntegrityError as e:
         await db.rollback()
@@ -508,7 +550,8 @@ async def websocket_chat(ws: WebSocket,
         try:
             payload = ChatMessagePayloadWithFiles(**payload_raw)
         except Exception as e:
-            logger.error(f"WebSocket received invalid payload: {e}, Raw: {payload_raw}")
+            logger.error("ws_invalid_payload",
+                         extra={"extra_data": {"error": str(e)}})
             await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason=f"Invalid payload format: {e}")
             return
 
@@ -565,12 +608,15 @@ async def websocket_chat(ws: WebSocket,
             # 2. Handle file-only uploads or empty messages
             if not query:
                 if newly_uploaded_files:
-                    logger.info(f"[{canonical_thread_id}] Acknowledged {len(newly_uploaded_files)} files.")
+                    logger.info("files_acknowledged",
+                                extra={"extra_data": {"thread_id": canonical_thread_id,
+                                                      "files": len(newly_uploaded_files)}})
                     ack_message = {"done": True, "error": False, "request_id": str(uuid4()), "user_id": user_db_id,
                                    "thread_id": canonical_thread_id, "topic_name": session_topic, "citations": []}
                     await ws.send_text(json.dumps(ack_message))
                 else:
-                    logger.warning(f"[{canonical_thread_id}] Received empty query, skipping.")
+                    logger.warning("empty_query_skipped",
+                                   extra={"extra_data": {"thread_id": canonical_thread_id}})
 
                 message_data = await ws.receive_json()
                 payload = ChatMessagePayloadWithFiles(**message_data["payload"])
@@ -633,7 +679,8 @@ async def websocket_chat(ws: WebSocket,
             if listener_task in done:
                 message = listener_task.result()
                 if message.get("type") == "interrupt":
-                    logger.info(f"[{canonical_thread_id}] Interrupt received. Cancelling generation.")
+                    logger.info("generation_interrupt_received",
+                                extra={"extra_data": {"thread_id": canonical_thread_id}})
                     generation_task.cancel()
             else:
                 listener_task.cancel()
@@ -676,9 +723,9 @@ async def websocket_chat(ws: WebSocket,
             payload = ChatMessagePayloadWithFiles(**message_data["payload"])
 
     except WebSocketDisconnect:
-        logger.info(f"[{canonical_thread_id}] Client disconnected.")
+        logger.info("ws_client_disconnected", extra={"extra_data": {"thread_id": canonical_thread_id}})
     except Exception as e:
-        logger.error(f"[{canonical_thread_id}] Unhandled WebSocket Error: {e}", exc_info=True)
+        logger.error("ws_unhandled_error", exc_info=True, extra={"extra_data": {"thread_id": canonical_thread_id}})
         try:
             await ws.send_text(json.dumps({
                 "done": True,
@@ -688,7 +735,7 @@ async def websocket_chat(ws: WebSocket,
                 "thread_id": canonical_thread_id,
             }))
         except Exception as send_error:
-            logger.error(f"Failed to send error message to client: {send_error}")
+            logger.error("ws_send_error", extra={"extra_data": {"thread_id": canonical_thread_id, "error": str(send_error)}})
     finally:
         if pubsub_task and not pubsub_task.done():
             pubsub_task.cancel()
@@ -780,7 +827,13 @@ async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph
                             elif hasattr(doc, 'metadata'):
                                 retrieved_documents_meta_for_citation.append(doc.metadata)
                     logger.info(
-                        f"Captured {len(retrieved_documents_meta_for_citation)} retrieved document metadata for citation.")
+                        "retriever_metadata_captured",
+                        extra={"extra_data": {
+                            "thread_id": thread_id,
+                            "count": len(retrieved_documents_meta_for_citation)
+                        }},
+                    )
+
                 if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv"]:
                     try:
                         step_db_id = running_step_ids.pop(run_id, None)
@@ -808,11 +861,13 @@ async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph
         return final_state, accumulated_content
 
     except asyncio.CancelledError:
-        logger.info(f"[{thread_id}] Generation task cancelled.")
+        logger.info("generation_cancelled", extra={"extra_data": {"thread_id": thread_id}})
+
         return {"error": True, "errorMessage": "Generation cancelled."}, accumulated_content
     except Exception as e:
         error_message = f"An error occurred during generation: {e}"
-        logger.error(f"[{thread_id}] {error_message}", exc_info=True)
+        logger.error("generation_error", exc_info=True,
+                     extra={"extra_data": {"thread_id": thread_id, "error": str(e)}})
         await manager.broadcast(channel, json.dumps({"token": f"\n\n{error_message}"}))
         return {"error": True, "errorMessage": error_message}, ""
 
@@ -838,33 +893,81 @@ async def login_page(request: Request):
 
 @app.get("/health", tags=["System"])
 async def health_check():
-    if not is_db_configured_sync():
-        return JSONResponse({"status": "ok", "db_check": "skipped (no database configured)"})
-    db_config = get_db_connection_config()
-    if not db_config:
-        raise HTTPException(status_code=500, detail="Database connection details missing or invalid in configuration.")
+    health_status = {"status": "ok", "checks": {}}
+    has_critical_failure = False
+
+    # 1. Database Check
+    db_status = {"status": "ok"}
     try:
-        sync_dialect = db_config.get('dialect', '').replace('+aiosqlite', '')
-        if 'sqlite' in sync_dialect:
-            db_path = Path(db_config.get('database_path', ''))
-            if not db_path.is_absolute():
-                db_path = _PROJECT_ROOT / db_path
-            sync_conn_str = f"sqlite:///{db_path.resolve()}"
-        else:
+        if is_db_configured_sync():
+            # --- CORRECTED LOGIC TO FIND CONNECTION NAME ---
             conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
                 "connection_name")
             if not conn_name:
-                raise RuntimeError("Database connection name not found for health check.")
-            sync_conn_str = get_db_connection(conn_name).replace("+aiomysql", "").replace("+asyncpg", "")
-        engine = create_sync_engine(sync_conn_str)
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        engine.dispose()
-        return JSONResponse({"status": "ok", "db_check": "connected"})
+                raise RuntimeError("DB connection name not found in memory or log config.")
+            # --- END OF CORRECTED LOGIC ---
+
+            sync_conn_str = get_db_connection(conn_name).replace("+aiosqlite", "").replace("+asyncpg", "")
+            engine = create_sync_engine(sync_conn_str)
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            engine.dispose()
+            db_status["status"] = "connected"
+        else:
+            db_status["status"] = "skipped (no database configured)"
     except Exception as e:
         logger.error(f"Health check failed to connect to database: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Database connection failed: {e}")
+        db_status["status"] = "failed"
+        db_status["error"] = str(e)
+        has_critical_failure = True
+    health_status["checks"]["database"] = db_status
 
+    # 2. Redis/Queue Check
+    redis_status = {"status": "ok"}
+    if WEBSOCKET_MODE == 'redis':
+        try:
+            r = redis.from_url(REDIS_URL, decode_responses=True)
+            await r.ping()
+            redis_status["status"] = "connected"
+        except Exception as e:
+            logger.error(f"Health check failed to connect to Redis: {e}", exc_info=True)
+            redis_status["status"] = "failed"
+            redis_status["error"] = str(e)
+            has_critical_failure = True
+    else:
+        redis_status["status"] = "skipped (in-memory mode)"
+    health_status["checks"]["redis"] = redis_status
+
+    # 3. Vector Store Check
+    vs_status = {"status": "ok"}
+    vs_dir = _APP_PATHS["VECTORSTORE_DIR"]
+    if not os.path.exists(vs_dir):
+        vs_status["status"] = "failed"
+        vs_status["error"] = "vector store directory not found"
+        has_critical_failure = True
+    health_status["checks"]["vector_store_dir"] = vs_status
+
+    # 4. Provider Credentials Check
+    provider_status = {"status": "ok", "providers": {}}
+    providers_to_check = {
+        "openai": "OPENAI_API_KEY",
+        "google": "GOOGLE_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "pinecone": "PINECONE_API_KEY",
+        "qdrant": "QDRANT_API_KEY"
+    }
+    for provider, env_key in providers_to_check.items():
+        if os.environ.get(env_key):
+            provider_status["providers"][provider] = "ok"
+        else:
+            provider_status["providers"][provider] = "missing"
+    health_status["checks"]["api_keys"] = provider_status
+
+    if has_critical_failure:
+        health_status["status"] = "critical_failure"
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=health_status)
+
+    return JSONResponse(health_status)
 
 # Corrected endpoint for get_history
 @app.get("/history/{thread_id}", tags=["Memory"])

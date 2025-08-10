@@ -784,3 +784,65 @@ async def get_citation_report(
         logger.error(f"API: Failed to fetch citation report for session {session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="Could not retrieve citation report.")
+
+
+class LatencyMetrics(BaseModel):
+    """P95/P99 latency metrics for a given query filter."""
+    total_runs: int
+    p50_latency_s: float
+    p95_latency_s: float
+    p99_latency_s: float
+    avg_latency_s: float
+
+@router.get("/latency", response_model=LatencyMetrics)
+async def get_latency_metrics(
+    agent_name: Optional[str] = Query(None, description="Filter metrics by a specific agent name."),
+    current_user: User = Depends(PermissionChecker(["analytics:read_latency"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Calculates and returns p50, p95, and p99 latency for agent runs.
+    Requires: 'analytics:read_latency' permission.
+    """
+    logger.info(f"API: User '{current_user.username}' fetching latency metrics for {agent_name=}.")
+
+    try:
+        # Build the base query for latency
+        stmt = select(
+            conversation_metrics_table.c.generation_time_s
+        ).select_from(
+            conversation_metrics_table.join(chat_sessions_table)
+        ).where(
+            conversation_metrics_table.c.generation_time_s.isnot(None)
+        )
+
+        if agent_name:
+            stmt = stmt.where(chat_sessions_table.c.agent_name == agent_name)
+
+        # Execute the query and get all latency values
+        result = await db.execute(stmt)
+        latencies = [row.generation_time_s for row in result.fetchall()]
+
+        if not latencies:
+            return LatencyMetrics(total_runs=0, p50_latency_s=0.0, p95_latency_s=0.0, p99_latency_s=0.0, avg_latency_s=0.0)
+
+        # Use pandas for percentile calculation which is more robust than a manual sort
+        df = pd.Series(latencies)
+        p50 = df.quantile(0.50)
+        p95 = df.quantile(0.95)
+        p99 = df.quantile(0.99)
+        avg = df.mean()
+        total_runs = len(latencies)
+
+        return LatencyMetrics(
+            total_runs=total_runs,
+            p50_latency_s=p50,
+            p95_latency_s=p95,
+            p99_latency_s=p99,
+            avg_latency_s=avg
+        )
+
+    except Exception as e:
+        logger.error(f"API: Failed to fetch latency metrics: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Could not retrieve latency metrics.")

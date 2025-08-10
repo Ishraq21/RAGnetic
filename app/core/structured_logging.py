@@ -1,13 +1,15 @@
 import json
 import logging
 import logging.config
+import os
 import sqlite3
 import time
 from datetime import datetime
-from typing import Any, Dict
+from typing import Optional, Dict, Any, List
 
 from sqlalchemy import create_engine, event, insert, Table
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_db_connection, get_log_storage_config, get_path_settings
@@ -28,7 +30,6 @@ class JSONFormatter(logging.Formatter):
             "function": record.funcName,
             "line": record.lineno,
         }
-        # merge any extra_data
         extra = getattr(record, "extra_data", None)
         if isinstance(extra, dict):
             obj.update(extra)
@@ -39,146 +40,103 @@ class JSONFormatter(logging.Formatter):
 
 
 class DatabaseLogHandler(logging.Handler):
-    """Writes structured logs into a database table with robust SQLite concurrency."""
+    """A logging handler that stores logs in the database."""
 
-    def __init__(self, connection_name: str, table: Table):
-        super().__init__()
+    def __init__(self, connection_name: str, table: Any, **kwargs):
+        super().__init__(**kwargs)
+        self.connection_name = connection_name
         self.table = table
         self.engine = None
+        self._db_session: Optional[Session] = None
 
-        if not connection_name:
-            logging.getLogger(__name__).warning(
-                "DatabaseLogHandler initialized without connection name; disabling."
-            )
-            return
-
-        # Build a pure‐sync connection string
-        raw = get_db_connection(connection_name)
-        sync_dsn = raw.replace("+aiosqlite", "").replace("+asyncpg", "")
-
-        # For SQLite, we want check_same_thread=False and a higher timeout
-        connect_args: Dict[str, Any] = {}
-        poolclass = None # Use default pool for Postgres/MySQL
-        if sync_dsn.startswith("sqlite"):
-            connect_args = {
-                "timeout": 20,
-                "check_same_thread": False
-            }
-            # NullPool = no recycling of connections (avoids stale locked handles)
-            poolclass = NullPool
-
-        self.engine = create_engine(
-            sync_dsn,
-            connect_args=connect_args,
-            poolclass=poolclass,
-        )
-
-        # Ensure WAL is enabled on every new SQLite connection
-        @event.listens_for(self.engine, "connect")
-        def _enable_wal(dbapi_conn, conn_record):
-            if isinstance(dbapi_conn, sqlite3.Connection):
-                cursor = dbapi_conn.cursor()
-                try:
-                    cursor.execute("PRAGMA journal_mode=WAL;")
-                finally:
-                    cursor.close()
-
-        logging.getLogger(__name__).info("DatabaseLogHandler engine initialized (WAL + NullPool).")
-
-    def emit(self, record: logging.LogRecord):
-        if not self.engine:
-            return
-
-        entry: Dict[str, Any] = {
-            "timestamp": datetime.utcfromtimestamp(record.created),
-            "level": record.levelname,
-            "message": record.getMessage(),
-            "module": record.module,
-            "function": record.funcName,
-            "line": record.lineno,
-        }
-        if record.exc_info:
-            entry["exc_info"] = self.formatException(record.exc_info)
-        extra = getattr(record, "extra_data", None)
-        if isinstance(extra, dict):
-            entry["details"] = extra
-
-        # drop None values
-        entry = {k: v for k, v in entry.items() if v is not None}
-
+    def emit(self, record):
         try:
-            # each log goes in its own transaction
-            with self.engine.begin() as conn:
-                conn.execute(insert(self.table).values(entry))
+            from app.db import get_sync_db_session
+            db_session = get_sync_db_session(self.connection_name)
 
-        except OperationalError as e:
-            # retry once after a short sleep if locked
-            if "locked" in str(e).lower():
-                time.sleep(0.05)
-                try:
-                    with self.engine.begin() as conn:
-                        conn.execute(insert(self.table).values(entry))
-                except Exception as e2:
-                    print(f"DatabaseLogHandler retry failed: {e2}")
-            else:
-                print(f"DatabaseLogHandler operational error: {e}")
+            log_entry = {
+                "timestamp": datetime.fromtimestamp(record.created),
+                "level": record.levelname,
+                "message": record.getMessage(),
+                "module": record.module,
+                "function": record.funcName,
+                "line": record.lineno,
+                "exc_info": self.format_exception(record.exc_info) if record.exc_info else None,
+                "details": getattr(record, 'details', None),
+                "correlation_id": getattr(record, 'correlation_id', None),
+                "request_id": getattr(record, 'request_id', None),
+                "user_id": getattr(record, 'user_id', None),
+            }
+            stmt = insert(self.table).values(**log_entry)
+            db_session.execute(stmt)
+            db_session.commit()
+            db_session.close()
+        except Exception:
+            import sys
+            import traceback
+            traceback.print_exc(file=sys.stderr)
 
-        except Exception as e:
-            print(f"DatabaseLogHandler unexpected error: {e}")
+    def format_exception(self, exc_info):
+        import traceback
+        if exc_info:
+            return ''.join(traceback.format_exception(*exc_info))
+        return None
 
 
-def get_logging_config() -> Dict[str, Any]:
+def get_logging_config(json_logs: bool = False, log_level: str = "INFO"):
     """
-    Returns a dictConfig-compatible config that sets up console and optional
-    FILE logging. Database logging is now handled manually in main.py.
+    Returns a logging configuration dictionary.
+    Includes a custom handler for database logging.
     """
-    paths = get_path_settings()
-    paths["LOGS_DIR"].mkdir(parents=True, exist_ok=True)
-
-    cfg: Dict[str, Any] = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "default": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"},
-            "json": {"()": JSONFormatter},
-        },
-        "handlers": {
-            "console": {
-                "class": "logging.StreamHandler",
-                "formatter": "default"
+    log_config = {
+        'version': 1,
+        'disable_existing_loggers': False,
+        'formatters': {
+            'standard': {
+                'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
             },
-            "metrics_file": {
-                "class": "logging.handlers.TimedRotatingFileHandler",
-                "formatter": "json",
-                "filename": str(paths["LOGS_DIR"] / "ragnetic_metrics.json"),
-                "when": "midnight",
-                "backupCount": 7,
-                "encoding": "utf-8",
+            'json': {
+                '()': 'pythonjsonlogger.jsonlogger.JsonFormatter',
+                'format': '%(asctime)s %(levelname)s %(name)s %(funcName)s %(lineno)d %(message)s'
             },
+            'structured': {
+                'format': '%(asctime)s %(levelname)s %(name)s [%(correlation_id)s] %(message)s'
+            }
         },
-        "loggers": {
-            "ragnetic": {"handlers": ["console"], "level": "INFO", "propagate": False},
-            "app.workflows": {"handlers": ["console"], "level": "INFO", "propagate": False},
-            "ragnetic.metrics": {"handlers": ["metrics_file"], "level": "INFO", "propagate": False},
-            "uvicorn": {"level": "INFO"},
-            "sqlalchemy.engine": {"level": "WARNING"},
-            "langchain": {"level": "WARNING"},
+        'handlers': {
+            'console': {
+                'class': 'logging.StreamHandler',
+                'formatter': 'standard',
+                'level': log_level,
+            },
+            'db_handler': {
+                'class': 'app.core.structured_logging.DatabaseLogHandler',
+                'formatter': 'structured',
+                'level': 'INFO',
+                'connection_name': os.environ.get("LOG_DB_CONNECTION_NAME") or "ragnetic_db",
+                'table': ragnetic_logs_table
+            }
         },
-        "root": {"handlers": ["console"], "level": "INFO"},
+        'loggers': {
+            'ragnetic': {
+                'handlers': ['console'],
+                'level': log_level,
+                'propagate': False
+            },
+            # --- NEW: Quiet third-party loggers ---
+            'uvicorn': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+            'uvicorn.access': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
+            'sqlalchemy': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
+            'celery': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+            'httpx': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
+            'faiss': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
+        },
+        'root': {
+            'handlers': ['console'],
+            'level': log_level
+        }
     }
 
-    storage = get_log_storage_config()
-    if storage.get("type") == "file":
-        cfg["handlers"]["app_file"] = {
-            "class": "logging.handlers.TimedRotatingFileHandler",
-            "formatter": "default",
-            "filename": str(paths["LOGS_DIR"] / "ragnetic_app.log"),
-            "when": "midnight",
-            "backupCount": 7,
-            "encoding": "utf-8",
-        }
-        cfg["loggers"]["ragnetic"]["handlers"].append("app_file")
-        cfg["loggers"]["app.workflows"]["handlers"].append("app_file")
-
-
-    return cfg
+    if json_logs:
+        log_config['handlers']['console']['formatter'] = 'json'
+    return log_config

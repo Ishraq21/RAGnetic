@@ -746,9 +746,13 @@ def show_config():
     typer.echo("")
 
 
-@app.command(name="check-system-db", help="Verifies and inspects connections to configured system databases.")
-def check_system_db():
-    typer.secho("--- Checking System Database Connections ---", bold=True)
+@app.command(name="check-health", help="Verifies and inspects connections to all configured system components.")
+def check_health():
+    typer.secho("--- Checking System Component Health ---", bold=True)
+    has_failure = False
+
+    # 1. Database Check (re-using your existing logic)
+    typer.secho("\nInspecting Database Connections...", fg=typer.colors.CYAN, bold=True)
     log_config = get_log_storage_config()
     memory_config = get_memory_storage_config()
     connections_to_check = {}
@@ -761,60 +765,67 @@ def check_system_db():
         connections_to_check[conn_name] = connections_to_check.get(conn_name, []) + ["Memory"]
 
     if not connections_to_check:
-        typer.secho("No system database connections are configured.", fg=typer.colors.YELLOW)
-        raise typer.Exit()
-
-    has_failure = False
-    alembic_cfg = alembic.config.Config(str(_PROJECT_ROOT / "alembic.ini"))
-    script = alembic.script.ScriptDirectory.from_config(alembic_cfg)
-
-    for conn_name, purposes in connections_to_check.items():
-        typer.secho(f"\nInspecting '{conn_name}' (used for: {', '.join(purposes)})", fg=typer.colors.CYAN, bold=True)
-        try:
-            conn_str = get_db_connection(conn_name)
-            engine_args = {'echo': False}
-            if 'sqlite' in conn_str:
-                conn_str = conn_str.replace("+aiosqlite", "")
-            else:
-                engine_args['connect_args'] = {'connect_timeout': 5}
-            engine = create_engine(conn_str, **engine_args)
-
-            with engine.connect() as connection:
-                connection.execute(text("SELECT 1"))
-                typer.secho("  - Connectivity: [PASS]", fg=typer.colors.GREEN)
-
-                if connection.dialect.name != 'sqlite':
-                    db_version = connection.dialect.get_server_version_info(connection)
-                    typer.echo(f"  - DB Type: {connection.dialect.name}")
-                    typer.echo(f"  - DB Version: {'.'.join(map(str, db_version))}")
-                    parsed_url = urlparse(conn_str)
-                    if parsed_url.hostname:
-                        typer.echo(f"  - Host: {parsed_url.hostname}")
-                        typer.echo(f"  - Port: {parsed_url.port}")
-                        typer.echo(f"  - Database: {parsed_url.path.lstrip('/')}")
+        typer.secho("  No system database connections are configured.", fg=typer.colors.YELLOW)
+    else:
+        alembic_cfg = alembic.config.Config(str(_PROJECT_ROOT / "alembic.ini"))
+        script = alembic.script.ScriptDirectory.from_config(alembic_cfg)
+        for conn_name, purposes in connections_to_check.items():
+            typer.secho(f"\n  - Connection '{conn_name}' (used for: {', '.join(purposes)})", fg=typer.colors.CYAN,
+                        bold=True)
+            try:
+                conn_str = get_db_connection(conn_name)
+                engine_args = {'echo': False}
+                if 'sqlite' in conn_str:
+                    conn_str = conn_str.replace("+aiosqlite", "")
                 else:
-                    typer.echo(f"  - DB Type: {connection.dialect.name}")
-                    typer.echo(f"  - Path: {urlparse(conn_str).path}")
+                    engine_args['connect_args'] = {'connect_timeout': 5}
+                engine = create_engine(conn_str, **engine_args)
 
-                migration_context = MigrationContext.configure(connection)
-                current_rev = migration_context.get_current_revision()
-                head_rev = script.get_current_head()
-                typer.echo(f"  - Current DB Revision: {current_rev}")
-                typer.echo(f"  - Latest Code Revision: {head_rev}")
+                with engine.connect() as connection:
+                    connection.execute(text("SELECT 1"))
+                    typer.secho("    - Connectivity: [PASS]", fg=typer.colors.GREEN)
 
-                if current_rev == head_rev:
-                    typer.secho("  - Migration Status: [UP-TO-DATE]", fg=typer.colors.GREEN)
-                elif not current_rev:
-                    typer.secho("  - Migration Status: [NEEDS MIGRATION] - Database is empty.", fg=typer.colors.YELLOW)
-                else:
-                    typer.secho("  - Migration Status: [NEEDS MIGRATION] - Run 'ragnetic migrate'.",
-                                fg=typer.colors.YELLOW)
-            engine.dispose()
+                    migration_context = MigrationContext.configure(connection)
+                    current_rev = migration_context.get_current_revision()
+                    head_rev = script.get_current_head()
+                    typer.echo(f"    - Current DB Revision: {current_rev}")
+                    typer.echo(f"    - Latest Code Revision: {head_rev}")
 
-        except Exception as e:
-            typer.secho(f"  - Connectivity: [FAIL]", fg=typer.colors.RED)
-            typer.secho(f"    Error: {e}", fg=typer.colors.RED)
-            has_failure = True
+                    if current_rev == head_rev:
+                        typer.secho("    - Migration Status: [UP-TO-DATE]", fg=typer.colors.GREEN)
+                    else:
+                        typer.secho("    - Migration Status: [NEEDS MIGRATION] - Run 'ragnetic migrate'.",
+                                    fg=typer.colors.YELLOW)
+                engine.dispose()
+            except Exception as e:
+                typer.secho("    - Connectivity: [FAIL]", fg=typer.colors.RED)
+                typer.secho(f"      Error: {e}", fg=typer.colors.RED)
+                has_failure = True
+
+    # 2. Redis/Queue Check (new logic)
+    typer.secho("\nInspecting Redis/Queue Connection...", fg=typer.colors.CYAN, bold=True)
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    try:
+        r = redis.from_url(redis_url)
+        r.ping()
+        typer.secho("  - Redis Connectivity: [PASS]", fg=typer.colors.GREEN)
+        typer.echo(f"  - Redis URL: {redis_url}")
+    except Exception as e:
+        typer.secho("  - Redis Connectivity: [FAIL]", fg=typer.colors.RED)
+        typer.secho(f"    Error: {e}", fg=typer.colors.RED)
+        has_failure = True
+
+    # 3. Vector Store Directory Check (new logic)
+    typer.secho("\nInspecting Vector Store Directory...", fg=typer.colors.CYAN, bold=True)
+    vs_dir = _APP_PATHS["VECTORSTORE_DIR"]
+    if os.path.exists(vs_dir):
+        typer.secho("  - Vector Store Directory: [PASS]", fg=typer.colors.GREEN)
+        typer.echo(f"  - Path: {vs_dir}")
+    else:
+        typer.secho("  - Vector Store Directory: [FAIL]", fg=typer.colors.RED)
+        typer.secho("    Error: Directory not found. Run 'ragnetic init' if this is a new project.",
+                    fg=typer.colors.RED)
+        has_failure = True
 
     typer.secho("\n--- Check Complete ---", bold=True)
     if has_failure:
@@ -1060,7 +1071,7 @@ def start_server(
             "Note: Celery Beat does not support auto-reloading. Restart the server to apply schedule changes from YAML files.",
             fg=typer.colors.CYAN)
 
-        uvicorn_cmd = ["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port), "--reload"]
+        uvicorn_cmd = ["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port), "--reload","--no-access-log"]
 
         uvicorn_process = subprocess.Popen(uvicorn_cmd)
         # Pass celery_env to worker_process
@@ -1105,7 +1116,7 @@ def start_server(
 
             typer.secho(f"Starting Uvicorn server on http://{final_host}:{final_port}...", fg=typer.colors.BLUE,
                         bold=True)
-            subprocess.run(["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port)], check=True)
+            subprocess.run(["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port), "--no-access-log"], check=True)
 
         except KeyboardInterrupt:
             typer.echo("\nShutting down processes...")
@@ -2628,7 +2639,65 @@ def analytics_usage_command(
         logger.error(f"An error occurred while fetching LLM usage metrics: {e}", exc_info=True)
         typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
+@analytics_app.command(name="latency", help="Displays percentile latency metrics (p50, p95, p99) for agent runs.")
+def analytics_latency_command(
+        agent_name: Optional[str] = typer.Option(None, "--agent", "-a",
+                                                 help="Filter latency metrics by a specific agent name."),
+):
+    """
+    Retrieves and displays p50, p95, and p99 latency metrics for agent runs.
+    """
+    logger.info("Retrieving latency metrics...")
 
+    if not _is_db_configured():
+        typer.secho("Database is not configured. Please configure one using 'ragnetic configure'.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    engine = _get_sync_db_engine()
+
+    try:
+        with engine.connect() as connection:
+            # Build the base query for latency
+            stmt = select(
+                conversation_metrics_table.c.generation_time_s
+            ).select_from(
+                conversation_metrics_table.join(chat_sessions_table)
+            ).where(
+                conversation_metrics_table.c.generation_time_s.isnot(None)
+            )
+
+            if agent_name:
+                stmt = stmt.where(chat_sessions_table.c.agent_name == agent_name)
+
+            results = connection.execute(stmt).fetchall()
+            latencies = [row.generation_time_s for row in results]
+
+        if not latencies:
+            message = "No latency data found."
+            if agent_name:
+                message = f"No latency data found for agent: '{agent_name}'."
+            typer.secho(message, fg=typer.colors.YELLOW)
+            return
+
+        # Use pandas for percentile calculation, as it's efficient
+        df = pd.Series(latencies)
+        p50 = df.quantile(0.50)
+        p95 = df.quantile(0.95)
+        p99 = df.quantile(0.99)
+        avg = df.mean()
+
+        typer.secho("\n--- Agent Run Latency Metrics ---", bold=True, fg=typer.colors.CYAN)
+        typer.echo(f"  Total runs analyzed: {len(latencies)}")
+        typer.echo(f"  Average Latency: {avg:.4f}s")
+        typer.secho(f"  P50 Latency (Median): {p50:.4f}s", fg=typer.colors.GREEN)
+        typer.secho(f"  P95 Latency: {p95:.4f}s", fg=typer.colors.YELLOW)
+        typer.secho(f"  P99 Latency: {p99:.4f}s", fg=typer.colors.RED)
+
+    except Exception as e:
+        logger.error(f"An error occurred while fetching latency metrics: {e}", exc_info=True)
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
 
 @analytics_app.command(name="benchmarks", help="Displays summaries of past benchmark runs.")
 def analytics_benchmarks_command(
