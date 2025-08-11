@@ -36,6 +36,7 @@ from app.core.cost_calculator import calculate_cost, count_tokens
 from app.db.dao import save_conversation_metrics_sync
 from app.db import get_sync_db_engine
 from app.tools.search_engine_tool import SearchTool
+from app.tools.api_toolkit import APIToolkit
 
 from app.training.model_manager import FineTunedModelManager
 from app.core.citation_parser import extract_citations_from_text
@@ -406,6 +407,11 @@ async def call_model(state: AgentState, config: RunnableConfig):
         logger.debug(f"[call_model] Raw LLM response: {response}")
         logger.debug(f"[call_model] Raw LLM response metadata: {response.response_metadata}")
         logger.debug(f"[call_model] Raw LLM usage_metadata: {getattr(response, 'usage_metadata', {})}")
+
+        if response and isinstance(response, AIMessage) and response.tool_calls:
+            logger.debug(f"[{request_id}] Tool call detected → skipping persistence (intermediate turn).")
+            state.update({"messages": [response]})
+            return state
 
         prompt_tokens = 0
         completion_tokens = 0
