@@ -22,6 +22,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from app.core.serialization import _serialize_for_db
 from app.schemas.security import User
 from app.db.dao import save_conversation_metrics
+from app.tools.api_toolkit import APIToolkit
 
 logger = logging.getLogger("ragnetic")
 
@@ -148,6 +149,8 @@ async def query_agent(
                     llm_model_name=agent_config.llm_model,
                 )
             )
+    if "api_toolkit" in agent_config.tools:
+        tools.append(APIToolkit())
 
     agent = get_agent_workflow(tools).compile()
     initial_state: AgentState = {
@@ -167,6 +170,7 @@ async def query_agent(
                 "user_id": user_db_id,
                 "thread_id": safe_thread_id,
                 "session_id": session_id,
+                "tools": tools,
             }
         }
 

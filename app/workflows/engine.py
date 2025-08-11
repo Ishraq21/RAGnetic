@@ -27,6 +27,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 import asyncio
 import re
+
+from app.tools.api_toolkit import APIToolkit
 from app.tools.email_tool import EmailTool
 from types import SimpleNamespace
 import ast
@@ -422,6 +424,9 @@ class WorkflowEngine:
                 tool = SearchTool(agent_config=self.agent_config)
             elif tool_name == "arxiv":
                 tool = get_arxiv_tool()
+            elif tool_name == "api_toolkit":
+                tool = APIToolkit()
+
 
         elif tool_name == "python_script_tool":
             tool = PythonScriptTool()

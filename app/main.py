@@ -52,6 +52,7 @@ from app.core.security import get_http_api_key, get_websocket_api_key, get_curre
     get_current_user_from_websocket, PermissionChecker
 from app.agents.config_manager import get_agent_configs, load_agent_config
 from app.core.serialization import _serialize_for_db
+from app.tools.api_toolkit import APIToolkit
 from app.workflows.sync import sync_workflows_from_files, is_db_configured_sync
 from app.api.security import router as security_api_router
 
@@ -592,6 +593,9 @@ async def websocket_chat(ws: WebSocket,
             retriever_tool = await get_retriever_tool(agent_config, user_db_id, canonical_thread_id)
             all_tools.append(retriever_tool)
 
+        if "api_toolkit" in agent_config.tools:
+            all_tools.append(APIToolkit())
+
         langgraph_agent = get_agent_workflow(all_tools).compile()
 
 
@@ -665,7 +669,8 @@ async def websocket_chat(ws: WebSocket,
                     "user_id": user_db_id,
                     "agent_name": agent_name,
                     "db_session": db,
-                    "callbacks": [UsageMetadataCallbackHandler()]
+                    "callbacks": [UsageMetadataCallbackHandler()],
+                    "tools": all_tools
                 }
             }
 
@@ -800,7 +805,7 @@ async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph
                     accumulated_content += token
                     await manager.broadcast(channel, json.dumps({"token": token}))
             elif kind in ("on_chain_start", "on_tool_start"):
-                if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv"]:
+                if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv", "api_toolkit"]:
                     try:
                         serialized_input = _serialize_for_db(event["data"].get("input"))
                         step_start_time = datetime.utcnow()
@@ -834,7 +839,7 @@ async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph
                         }},
                     )
 
-                if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv"]:
+                if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv", "api_toolkit"]:
                     try:
                         step_db_id = running_step_ids.pop(run_id, None)
                         if step_db_id:
