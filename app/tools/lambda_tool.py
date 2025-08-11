@@ -41,8 +41,8 @@ class PythonScriptToolInput(BaseModel):
     script: str = Field(..., description="The Python code to be executed in the sandbox.")
 
 
-class PythonScriptTool:
-    name = "python_script_tool"
+class LambdaTool:
+    name = "lambda_tool"
     description = (
         "Executes a snippet of Python code in a secure sandbox. "
         "Only a small whitelist of modules is available (re, json, math). "
