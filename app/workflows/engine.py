@@ -73,7 +73,7 @@ from app.tools.parsers.sql_parser_tool import SQLParserTool
 from app.tools.parsers.yaml_parser_tool import YAMLParserTool
 from app.tools.retriever_tool import get_retriever_tool
 from app.tools.arxiv_tool import get_arxiv_tool
-from app.tools.python_script_tool import PythonScriptTool
+from app.tools.lambda_tool import LambdaTool
 from app.tools.search_engine_tool import SearchTool
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.parsers.terraform_parser_tool import TerraformParserTool
@@ -428,8 +428,8 @@ class WorkflowEngine:
                 tool = APIToolkit()
 
 
-        elif tool_name == "python_script_tool":
-            tool = PythonScriptTool()
+        elif tool_name == "lambda_tool":
+            tool = LambdaTool()
         elif tool_name == "terraform_parser_tool":
             tool = TerraformParserTool()
         elif tool_name == "sql_parser_tool":
