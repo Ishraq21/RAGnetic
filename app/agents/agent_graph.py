@@ -35,6 +35,7 @@ from app.core.config import get_api_key, get_llm_model, get_path_settings
 from app.core.cost_calculator import calculate_cost, count_tokens
 from app.db.dao import save_conversation_metrics_sync
 from app.db import get_sync_db_engine
+from app.tools.search_engine_tool import SearchTool
 
 from app.training.model_manager import FineTunedModelManager
 from app.core.citation_parser import extract_citations_from_text
@@ -121,6 +122,31 @@ async def call_model(state: AgentState, config: RunnableConfig):
 
         model_name = agent_config.llm_model
         logger.info(f"Processing query for agent '{agent_name_from_config}' using model '{model_name}'.")
+
+        if "search_engine" in agent_config.tools:
+            logger.info(f"Agent '{agent_name_from_config}' has the 'search_engine' tool. Invoking it directly.")
+            try:
+                # 1. Instantiate the SearchTool with the agent's configuration.
+                search_tool = SearchTool(agent_config=agent_config)
+
+                # 2. Await the tool's execution. The SearchTool will perform the web search,
+                #    invoke its own LLM for summarization, and return a final, formatted string.
+                search_response_content = await search_tool._arun(query=query)
+
+                # 3. Create a final AIMessage with the complete response.
+                final_ai_message = AIMessage(content=search_response_content)
+
+                # 4. Update the state and return immediately. This bypasses the main RAG
+                #    prompting and LLM call, as the tool has already generated the answer.
+                state.update({"messages": [final_ai_message]})
+                logger.info("Search tool execution complete. Returning response directly.")
+                return state
+
+            except Exception as e:
+                logger.error(f"Error during explicit 'search_engine' tool call: {e}", exc_info=True)
+                error_message = AIMessage(content=f"I tried to use the search tool but encountered an error: {e}")
+                state.update({"messages": [error_message]})
+                return state
 
         retrieved_docs_str = ""
         retrieved_chunk_ids = []
