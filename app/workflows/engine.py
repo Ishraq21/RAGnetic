@@ -71,10 +71,8 @@ from app.tools.parsers.sql_parser_tool import SQLParserTool
 from app.tools.parsers.yaml_parser_tool import YAMLParserTool
 from app.tools.retriever_tool import get_retriever_tool
 from app.tools.arxiv_tool import get_arxiv_tool
-from app.tools.http_request_tool import HTTPRequestTool
 from app.tools.python_script_tool import PythonScriptTool
 from app.tools.search_engine_tool import SearchTool
-from app.tools.slack_webhook_tool import SlackWebhookTool
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.parsers.terraform_parser_tool import TerraformParserTool
 
@@ -425,10 +423,6 @@ class WorkflowEngine:
             elif tool_name == "arxiv":
                 tool = get_arxiv_tool()
 
-        if tool_name == "http_request_tool":
-            tool = HTTPRequestTool()
-        elif tool_name == "slack_webhook_tool":
-            tool = SlackWebhookTool()
         elif tool_name == "python_script_tool":
             tool = PythonScriptTool()
         elif tool_name == "terraform_parser_tool":
