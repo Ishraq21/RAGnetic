@@ -426,6 +426,8 @@ class WorkflowEngine:
                 tool = get_arxiv_tool()
             elif tool_name == "api_toolkit":
                 tool = APIToolkit()
+            elif tool_name == "lambda_tool":
+                tool = LambdaTool()
 
 
         elif tool_name == "lambda_tool":

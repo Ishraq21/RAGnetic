@@ -23,6 +23,8 @@ from app.core.serialization import _serialize_for_db
 from app.schemas.security import User
 from app.db.dao import save_conversation_metrics
 from app.tools.api_toolkit import APIToolkit
+from app.tools.lambda_tool import LambdaTool
+
 
 logger = logging.getLogger("ragnetic")
 
@@ -151,6 +153,9 @@ async def query_agent(
             )
     if "api_toolkit" in agent_config.tools:
         tools.append(APIToolkit())
+
+    if "lambda_tool" in agent_config.tools:
+        tools.append(LambdaTool())
 
     agent = get_agent_workflow(tools).compile()
     initial_state: AgentState = {
