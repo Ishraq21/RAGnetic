@@ -55,6 +55,8 @@ from app.core.serialization import _serialize_for_db
 from app.tools.api_toolkit import APIToolkit
 from app.workflows.sync import sync_workflows_from_files, is_db_configured_sync
 from app.api.security import router as security_api_router
+from app.tools.lambda_tool import LambdaTool
+
 
 from app.schemas.security import User
 
@@ -596,6 +598,9 @@ async def websocket_chat(ws: WebSocket,
         if "api_toolkit" in agent_config.tools:
             all_tools.append(APIToolkit())
 
+        if "lambda_tool" in agent_config.tools:
+            all_tools.append(LambdaTool())
+
         langgraph_agent = get_agent_workflow(all_tools).compile()
 
 
@@ -805,7 +810,7 @@ async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph
                     accumulated_content += token
                     await manager.broadcast(channel, json.dumps({"token": token}))
             elif kind in ("on_chain_start", "on_tool_start"):
-                if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv", "api_toolkit"]:
+                if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv", "api_toolkit","lambda_tool"]:
                     try:
                         serialized_input = _serialize_for_db(event["data"].get("input"))
                         step_start_time = datetime.utcnow()
@@ -839,7 +844,7 @@ async def handle_query_streaming(initial_state: AgentState, cfg: dict, langgraph
                         }},
                     )
 
-                if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv", "api_toolkit"]:
+                if name in ["agent", "retriever", "sql_toolkit", "search_engine", "arxiv", "api_toolkit","lambda_tool"]:
                     try:
                         step_db_id = running_step_ids.pop(run_id, None)
                         if step_db_id:
