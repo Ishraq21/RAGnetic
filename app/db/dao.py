@@ -802,3 +802,19 @@ async def create_default_roles_and_permissions(db: AsyncSession) -> None:
         except Exception as e:
             logger.error(f"Failed to create or update role '{role_name}': {e}")
             await db.rollback() # Ensure rollback on failure
+
+async def list_temp_documents_for_user_thread(
+    db: AsyncSession,
+    user_id: int,
+    thread_id: str
+) -> List[Dict[str, Any]]:
+    """
+    Returns all non-cleaned temporary documents for the given user/thread.
+    """
+    stmt = select(temporary_documents_table).where(
+        temporary_documents_table.c.user_id == user_id,
+        temporary_documents_table.c.thread_id == thread_id,
+        temporary_documents_table.c.cleaned_up == False
+    )
+    rows = (await db.execute(stmt)).mappings().all()
+    return [dict(r) for r in rows]
