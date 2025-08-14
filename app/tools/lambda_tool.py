@@ -23,6 +23,7 @@ import hashlib
 import base64
 import time
 from typing import Dict, Any
+import textwrap
 
 from langchain_core.runnables import RunnableConfig
 from pydantic.v1 import BaseModel, Field, conint
@@ -31,6 +32,8 @@ from RestrictedPython.Guards import safe_builtins
 from RestrictedPython.PrintCollector import PrintCollector
 from RestrictedPython.Eval import default_guarded_getitem, default_guarded_getiter
 from RestrictedPython.Guards import full_write_guard
+from RestrictedPython import utility_builtins
+
 
 import warnings
 
@@ -42,6 +45,48 @@ warnings.filterwarnings(
     category=SyntaxWarning,
     module="RestrictedPython.compile"
 )
+
+try:
+    # RP >= 6.0 or alt naming
+    from RestrictedPython.Eval import default_guarded_unpack_sequence as _guarded_unpack
+except Exception:
+    try:
+        from RestrictedPython.Eval import default_guarded_iter_unpack_sequence as _guarded_unpack
+    except Exception:
+        _guarded_unpack = None
+
+if _guarded_unpack is None:
+    def _iter_unpack_fallback(it, *args, **kwargs):
+        """
+        Compatible with RP call shapes:
+          - (it, count)
+          - (it, guards, count)
+          - (it, guards)  # no fixed count (UNPACK_EX paths) → return an iterator
+        """
+        # find the last int among args as the count (if any)
+        count = next((a for a in reversed(args) if isinstance(a, int)), None)
+
+        # No explicit count → hand back an iterator (used by UNPACK_EX/starred cases)
+        if count is None:
+            return iter(it)
+
+        it = iter(it)
+        items = []
+        for _ in range(count):
+            try:
+                items.append(next(it))
+            except StopIteration:
+                raise ValueError(f"not enough values to unpack (expected {count})")
+        # ensure there are no extras for fixed-size unpack
+        try:
+            next(it)
+            raise ValueError(f"too many values to unpack (expected {count})")
+        except StopIteration:
+            pass
+        return tuple(items)
+else:
+    _iter_unpack_fallback = _guarded_unpack
+
 
 try:
     from langchain_core.tools import BaseTool as _LCBaseTool, BaseTool
@@ -122,6 +167,42 @@ if _plt is not None:
 
 _FUNCTIONS: Dict[str, Any] = {}
 
+UNICODE_SPACES = "\u00A0\u1680\u180E\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u3000"
+
+def _normalize_script(s: str) -> str:
+    if not s:
+        return ""
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    s = _extract_fenced_code(s)
+
+    if "\\n" in s and "\n" not in s:
+        s = s.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "    ")
+
+
+    s = s.lstrip("\ufeff")  # strip BOM if present
+    # normalize all odd spaces to ASCII space
+    s = s.translate({ord(c): " " for c in UNICODE_SPACES})
+    s = s.replace("\t", "    ")
+    s = textwrap.dedent(s)
+    if "\n" not in s and "\\n" in s:
+        try:
+            # robustly unescape (handles \n, \t, and \uXXXX safely)
+            s = s.encode("utf-8").decode("unicode_escape")
+        except Exception:
+            s = s.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "    ")
+
+    # If the whole thing is wrapped in a single pair of quotes (JSON-ish), unwrap once.
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        inner = s[1:-1]
+        if "\n" not in inner and "\\n" in inner:
+            try:
+                inner = inner.encode("utf-8").decode("unicode_escape")
+            except Exception:
+                inner = inner.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "    ")
+            s = inner
+
+    return s.strip("\n")
+
 
 def register_lambda_function(name: str, fn: Any) -> None:
     """Register a pre-audited function callable from mode='function'."""
@@ -175,21 +256,19 @@ def _safe_open_factory(base_dir: str, upload_roots: List[str]):
         if any(c in mode for c in ("a", "+")):
             raise PermissionError("append/update modes are not allowed")
 
-        full = os.path.abspath(os.path.join(base_dir, path))
-        base_abs = os.path.abspath(base_dir) + os.sep
+        full = os.path.realpath(os.path.join(base_dir, path))
+        base_abs = os.path.realpath(base_dir) + os.sep
         if not full.startswith(base_abs):
             raise PermissionError("path escapes sandbox")
         if mode not in ("r", "rb", "w", "wb"):
             raise PermissionError("unsupported mode")
 
-        # lazy auto-stage on first read
         if mode in ("r", "rb") and not os.path.exists(full):
             _copy_from_uploads_if_present(full, path)
 
         return open(full, mode, *args, **kwargs)
 
     return _safe_open
-
 
 
 
@@ -217,6 +296,7 @@ def _cache_key(cfg: "_JobConfig"):
         ],
         "capture_plots": cfg.capture_plots,
         "max_stdout_chars": cfg.max_stdout_chars,
+        "strip_imports": cfg.strip_imports,
     }
     h = hashlib.sha256(_stable_dumps(basis).encode("utf-8")).hexdigest()
     return os.path.join(_CACHE_DIR, f"{h}.json")
@@ -282,6 +362,9 @@ class PythonScriptToolInput(BaseModel):
         None, description="Optional TTL seconds; if None, cache never expires."
     )
 
+    strip_imports: bool = Field(True,
+                                description="If True, strip 'import' statements before execution (preloaded modules only).")
+
     @staticmethod
     def _validate_mode(v: str) -> str:
         if v not in {"code", "function"}:
@@ -306,9 +389,10 @@ class _JobConfig:
     preview_bytes: int
     enable_cache: bool
     cache_ttl_s: Optional[int]
+    strip_imports: bool = True   # ← no comma, give default
 
 
-# -------------------- Helpers --------------------
+
 def _strip_imports(code: str) -> str:
     """Remove 'import x' and 'from x import y' lines to force sandbox importer."""
     code = _re.sub(
@@ -356,6 +440,98 @@ def _stage_files(files, scratch_dir):
 
     return staged
 
+def _short_code_excerpt(code: str, lineno: Optional[int], context: int = 2) -> Optional[str]:
+    if not code or not lineno or lineno <= 0:
+        return None
+    lines = code.splitlines()
+    i = lineno - 1
+    start = max(0, i - context)
+    end = min(len(lines), i + context + 1)
+    excerpt = []
+    for idx in range(start, end):
+        prefix = "→ " if idx == i else "  "
+        excerpt.append(f"{prefix}{idx+1:4d}: {lines[idx]}")
+    return "\n".join(excerpt)
+
+def _friendly_error_payload(err: Exception, code: str, scratch_dir: str, allowed_modules: List[str]) -> Dict[str, Any]:
+    etype = type(err).__name__
+    msg = str(err)
+    hints: List[str] = []
+    diagnostics: Dict[str, Any] = {"error_class": etype}
+    blame_line = None
+
+    # Try to find the sandbox line number
+    if isinstance(err, SyntaxError):
+        blame_line = getattr(err, "lineno", None)
+        diagnostics["syntax_offset"] = getattr(err, "offset", None)
+    else:
+        try:
+            tb = traceback.TracebackException.from_exception(err)
+            for frame in reversed(tb.stack):
+                if frame.filename == "<sandbox>":
+                    blame_line = frame.lineno
+                    break
+        except Exception:
+            pass
+
+    if blame_line:
+        diagnostics["line"] = blame_line
+        excerpt = _short_code_excerpt(code, blame_line)
+        if excerpt:
+            diagnostics["code_excerpt"] = excerpt
+
+    low = msg.lower()
+
+    if isinstance(err, FileNotFoundError):
+        hints += [
+            "The file isn’t in the sandbox working directory.",
+            "If you uploaded via chat, reference it by basename only (e.g., 'invoice_sample.txt').",
+            "Or pass it to the tool call via the 'files' array; the sandbox will stage it for you."
+        ]
+        try:
+            diagnostics["workdir_listing"] = sorted(os.listdir(scratch_dir))
+        except Exception:
+            pass
+
+    if isinstance(err, PermissionError):
+        hints += [
+            "Only modes {'r','rb','w','wb'} are allowed.",
+            "Paths must remain within the sandbox working directory.",
+        ]
+
+    if isinstance(err, (ImportError, ModuleNotFoundError)):
+        # Extract module name if present
+        import re
+        m = re.search(r"No module named ['\"]([^'\"]+)['\"]", msg) or re.search(r"cannot import name ['\"]([^'\"]+)['\"]", msg)
+        mod = m.group(1) if m else None
+        if mod:
+            diagnostics["module"] = mod
+        hints += [
+            "Third-party imports are restricted in the sandbox.",
+            "Rewrite using built-in/allowed libraries, or ask the owner to allow-list/install this module.",
+        ]
+        diagnostics["allowed_modules"] = sorted(allowed_modules)
+
+    if isinstance(err, NameError):
+        hints += [
+            "A symbol is used but not defined. Did you forget an import or variable assignment?",
+        ]
+
+    if isinstance(err, SyntaxError):
+        hints += ["Fix the syntax at the highlighted line."]
+
+    if not hints:
+        hints.append("Review the error message and traceback; adjust code or inputs accordingly.")
+
+    tb_text = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+    return {
+        "error_type": etype,
+        "error_message": msg,
+        "hints": hints,
+        "diagnostics": diagnostics,
+        "traceback_text": tb_text,
+    }
+
 
 
 def _mk_artifact(path, mime, preview_bytes=None):
@@ -375,6 +551,8 @@ def _mk_artifact(path, mime, preview_bytes=None):
         except Exception:
             pass
     return art
+
+
 
 
 def _capture_plots(scratch_dir: str) -> List[Dict[str, Any]]:
@@ -419,10 +597,15 @@ def _summarize(rv: Any, stdout: str, artifacts: List[Dict[str, Any]]) -> str:
 
 
 def _make_globals(cfg: _JobConfig, scratch_dir: str, upload_roots: Optional[List[str]] = None) -> Dict[str, Any]:
-
     """Build RestrictedPython globals with hardened importer + helpers."""
     rb = safe_builtins.copy()
     rb.update(_SAFE_EXTRA_BUILTINS)
+    rb.update(utility_builtins)
+
+    # make sure RestrictedPython's tuple-unpack helpers are always present
+    rb["_iter_unpack_sequence_"] = _iter_unpack_fallback
+    rb["_unpack_sequence_"]      = _iter_unpack_fallback
+
 
     def list_files():
         return sorted(os.listdir(scratch_dir))
@@ -483,6 +666,9 @@ def _make_globals(cfg: _JobConfig, scratch_dir: str, upload_roots: Optional[List
 
     }
 
+    g["_iter_unpack_sequence_"] = _iter_unpack_fallback
+    g["_unpack_sequence_"]      = _iter_unpack_fallback
+
     # handy short aliases if available
     if _np is not None:
         g["np"] = _np
@@ -491,9 +677,39 @@ def _make_globals(cfg: _JobConfig, scratch_dir: str, upload_roots: Optional[List
     if _plt is not None:
         g["plt"] = _plt
 
+    try:
+        if _pd is not None and not hasattr(_pd.DataFrame, "__guarded_setitem__"):
+            def _df_guarded_setitem(self, key, value):
+                # delegate to the real setter
+                self.__setitem__(key, value)
+
+            _pd.DataFrame.__guarded_setitem__ = _df_guarded_setitem
+
+        # (optional) support .loc / .iloc assignment too
+        try:
+            from pandas.core.indexing import _LocIndexer, _iLocIndexer
+            if not hasattr(_LocIndexer, "__guarded_setitem__"):
+                def _idx_guarded_setitem(self, key, value):
+                    self.__setitem__(key, value)
+
+                _LocIndexer.__guarded_setitem__ = _idx_guarded_setitem
+            if not hasattr(_iLocIndexer, "__guarded_setitem__"):
+                _iLocIndexer.__guarded_setitem__ = _idx_guarded_setitem
+        except Exception:
+            # If pandas internals move, just skip indexer support
+            pass
+    except Exception:
+        pass
+
+    g.update(utility_builtins)
+
+    if _guarded_unpack is not None:
+        rb["_iter_unpack_sequence_"] = _guarded_unpack
+        rb["_unpack_sequence_"] = _guarded_unpack
+        g["_iter_unpack_sequence_"] = _guarded_unpack
+        g["_unpack_sequence_"] = _guarded_unpack
 
     g["list_files"] = list_files
-
     return g
 
 def _discover_upload_roots() -> List[str]:
@@ -583,8 +799,45 @@ def _worker(cfg: _JobConfig, result_q: Queue):
 
         elif cfg.mode == "code":
             safe_globals["_print_"] = PrintCollector
-            cleaned = _strip_imports(cfg.code or "")
-            byte_code = compile_restricted(cleaned, filename="<sandbox>", mode="exec")
+            cleaned = _strip_imports(cfg.code or "") if cfg.strip_imports else (cfg.code or "")
+
+            try:
+                byte_code = compile_restricted(cleaned, filename="<sandbox>", mode="exec")
+            except SyntaxError as e:
+                msg_lower = str(e).lower()
+                if ("unexpected indent" in msg_lower
+                        or "expected an indented block" in msg_lower
+                        or "line continuation character" in msg_lower):
+                    # Rebuild from the original, normalize and re-wrap
+                    original = cfg.code or ""
+                    src = original
+
+                    if src.startswith("if True:\n"):
+                        lines = src.splitlines()
+                        body = lines[1:]
+                        body = [ln[4:] if ln.startswith("    ") else ln for ln in body]
+                        src = "\n".join(body)
+
+                    if "\n" not in src and "\\n" in src:
+                        try:
+                            src = src.encode("utf-8").decode("unicode_escape")
+                        except Exception:
+                            src = src.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "    ")
+
+                    src = "\n".join(ln.lstrip() for ln in src.splitlines())
+                    src = _strip_imports(src) if cfg.strip_imports else src
+                    body = "\n".join(("    " + ln) if ln.strip() else ln for ln in src.splitlines())
+                    repaired = "if True:\n" + body
+                    byte_code = compile_restricted(repaired, filename="<sandbox>", mode="exec")
+                else:
+                    raise
+
+            logger.info(
+                "unpack helpers present? rb:%s g:%s",
+                "_iter_unpack_sequence_" in safe_globals["__builtins__"],
+                "_iter_unpack_sequence_" in safe_globals,
+            )
+
             exec(byte_code, safe_globals, local_ns)
 
             # robust print capture across RestrictedPython variants
@@ -619,6 +872,17 @@ def _worker(cfg: _JobConfig, result_q: Queue):
                 return_value = local_ns["main"](*cfg.args, **cfg.kwargs)
                 if _torch is not None and _torch.cuda.is_available():
                     used_gpu = True
+
+            if return_value is None and _pd is not None:
+                for _name in ("df", "dataframe", "result", "results"):
+                    _obj = local_ns.get(_name)
+                    try:
+                        if isinstance(_obj, _pd.DataFrame):
+                            return_value = _obj
+                            break
+                    except Exception:
+                        pass
+
         else:
             raise ValueError("Unsupported mode (expected 'code' or 'function')")
 
@@ -645,11 +909,12 @@ def _worker(cfg: _JobConfig, result_q: Queue):
                     with open(j_path, "w", encoding="utf-8") as fh:
                         _json.dump(return_value, fh, ensure_ascii=False, indent=2)
                     artifacts.append(_mk_artifact(j_path, "application/json", cfg.preview_bytes))
-                elif isinstance(return_value, str) and len(return_value) <= 200_000:
+                elif isinstance(return_value, (int, float, bool)):
                     t_path = os.path.join(scratch_dir, "return.txt")
                     with open(t_path, "w", encoding="utf-8") as fh:
-                        fh.write(return_value)
+                        fh.write(str(return_value))
                     artifacts.append(_mk_artifact(t_path, "text/plain", cfg.preview_bytes))
+
             except Exception:
                 pass
 
@@ -694,42 +959,104 @@ def _worker(cfg: _JobConfig, result_q: Queue):
         # Return
         result_q.put(payload)
 
+
     except Exception:
+
+        err = sys.exc_info()[1]
         tb = traceback.format_exc()
         runtime_ms = int((time.time() - t_wall_start) * 1000)
+
         try:
+
             import resource
             ru = resource.getrusage(resource.RUSAGE_SELF)
             cpu_user = ru.ru_utime
             cpu_sys = ru.ru_stime
             max_rss_kb = getattr(ru, "ru_maxrss", 0)
+
         except Exception:
+
             cpu_user = cpu_sys = 0.0
+
             max_rss_kb = 0
 
         metrics = {
+
             "runtime_ms": runtime_ms,
             "cpu_user_s": cpu_user,
             "cpu_sys_s": cpu_sys,
             "peak_rss_kb": max_rss_kb,
             "used_gpu": False,
+
         }
 
+        # Build a friendly, structured error with hints/diagnostics
+
+        fe = _friendly_error_payload(
+
+            err=err,
+            code=cfg.code or "",
+            scratch_dir=scratch_dir,
+            allowed_modules=list(_ALLOWED_MODULES.keys()),
+
+        )
+
+        # Also attach an error.txt artifact for the UI
+
+        try:
+
+            err_path = os.path.join(scratch_dir, "error.txt")
+            with open(err_path, "w", encoding="utf-8") as fh:
+                fh.write(
+                    "ERROR: "
+                    + fe["error_type"]
+                    + ": "
+                    + fe["error_message"]
+                    + "\n\nHints:\n- "
+                    + "\n- ".join(fe["hints"])
+                )
+
+                if "diagnostics" in fe and fe["diagnostics"].get("code_excerpt"):
+                    fh.write("\n\nCode excerpt:\n" + fe["diagnostics"]["code_excerpt"] + "\n")
+
+                fh.write("\n\nTraceback:\n" + fe["traceback_text"])
+
+            artifacts.append(_mk_artifact(err_path, "text/plain", preview_bytes=cfg.preview_bytes))
+
+        except Exception:
+
+            pass
+
         result_q.put(
+
             {
                 "ok": False,
-                "summary": "Execution failed.",
+                "summary": f"{fe['error_type']}: {fe['error_message']}",
                 "stdout": "",
                 "return_value": None,
                 "artifacts": artifacts,
                 "runtime_ms": runtime_ms,
                 "metrics": metrics,
                 "used_gpu": False,
-                "error_type": "ExecutionError",
-                "error_message": "See traceback.",
-                "traceback": tb,
+                "error_type": fe["error_type"],
+                "error_message": fe["error_message"],
+                "traceback": fe["traceback_text"],
+                # Extra structure your UI/agent can surface:
+                "hints": fe["hints"],
+                "diagnostics": fe["diagnostics"],
+
             }
+
         )
+def _extract_fenced_code(s: str) -> str:
+    # If the user/LLM included ```python ... ``` fences, grab the inner code
+    if "```" not in s:
+        return s
+    m = _re.search(r"```[a-zA-Z0-9_+-]*\s*\n(.*?)```", s, flags=_re.DOTALL)
+    if m:
+        return m.group(1)
+    # No closing fence? Just drop the opening/closing markers if present
+    return s.replace("```python", "").replace("```", "")
 
 
 class LambdaTool(_LCBaseTool):
@@ -837,15 +1164,61 @@ class LambdaTool(_LCBaseTool):
             "preview_bytes",
             "enable_cache",
             "cache_ttl_s",
+            "strip_imports",
         }
         filtered = {k: v for k, v in kwargs.items() if k in allowed_keys}
 
         # auto-pick function mode if user passed function or callable
-        if (filtered.get("callable_fn") or filtered.get("function")) and not filtered.get("mode"):
-            filtered["mode"] = "function"
+        mode = filtered.get("mode")
+        if not mode:
+            mode = "function" if (filtered.get("function") or filtered.get("callable_fn")) else "code"
+        filtered["mode"] = mode
 
-        # If script is None, allow schema default "" (valid for function mode)
-        inp = PythonScriptToolInput(script=script if script is not None else "", **filtered)
+        # If someone set mode='function' but forgot 'function' name, fall back to code
+        if filtered["mode"] == "function" and not (filtered.get("function") or filtered.get("callable_fn")):
+            logger.info("LambdaTool: falling back to code mode (empty function in function mode).")
+            filtered["mode"] = "code"
+
+        # Normalize the script (strip ``` fences, dedent, clean whitespace)
+        raw_script = script if script is not None else ""
+        normalized_script = _normalize_script(raw_script)
+
+        needs_wrap = any(ln.startswith((" ", "\t")) for ln in normalized_script.splitlines() if ln.strip())
+        if needs_wrap:
+            body = "\n".join(("    " + ln) if ln.strip() else ln for ln in normalized_script.splitlines())
+            normalized_script = "if True:\n" + body
+
+        if "strip_imports" not in filtered:
+            filtered["strip_imports"] = True
+        if normalized_script and ("import " in normalized_script or "from " in normalized_script) and not filtered.get(
+                "strip_imports", True):
+            filtered["strip_imports"] = True
+
+        # --- sanitize function/mode before building the input ---
+        fn_name = (filtered.get("function") or "").strip() or None
+        has_script = bool(normalized_script)
+
+        # If the function name equals the tool name (common LLM slip), treat it as not set.
+        if filtered.get("mode") == "function" and fn_name in {self.name, "lambda_tool"}:
+            logger.info("LambdaTool: ignoring function=='%s' (tool name); switching to code mode.", fn_name)
+            filtered["mode"] = "code"
+            filtered["function"] = None
+
+        # If we're in function mode but the function isn't registered and no callable is given,
+        # fall back to code mode when we *do* have a script. Otherwise keep the error.
+        if filtered.get("mode") == "function" and not filtered.get("callable_fn"):
+            if fn_name and fn_name not in _FUNCTIONS:
+                if has_script:
+                    logger.info("LambdaTool: function '%s' not registered; script provided; switching to code mode.",
+                                fn_name)
+                    filtered["mode"] = "code"
+                    filtered["function"] = None
+                else:
+                    # optional: downgrade to a friendly error payload instead of raising later
+                    logger.warning("LambdaTool: function '%s' not registered and no script provided.", fn_name)
+
+        # Build the input using the normalized script
+        inp = PythonScriptToolInput(script=normalized_script, **filtered)
 
         cfg = _JobConfig(
             code=inp.script or "",
@@ -863,6 +1236,8 @@ class LambdaTool(_LCBaseTool):
             preview_bytes=inp.preview_bytes,
             enable_cache=inp.enable_cache,
             cache_ttl_s=inp.cache_ttl_s,
+            strip_imports=inp.strip_imports,
+
         )
 
         # Use fork on POSIX to avoid extra pickling pain; spawn on Windows
