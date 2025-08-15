@@ -87,6 +87,7 @@ dependencies = [
   "filetype>=1.2.0",
   "numpy==1.26.4",
   "python-json-logger",
+  "papermill",
 ]
 
 [project.optional-dependencies]

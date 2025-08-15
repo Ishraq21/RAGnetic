@@ -1,5 +1,5 @@
 # app/db/dao.py
-
+import json
 import logging
 from sqlalchemy import insert, select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +19,8 @@ from app.db.models import chat_messages_table
 from uuid import uuid4
 from sqlalchemy import func
 from app.schemas.security import RoleCreate
+from app.db.models import lambda_runs, lambda_artifacts
+
 
 logger = logging.getLogger("ragnetic")
 
@@ -816,5 +818,74 @@ async def list_temp_documents_for_user_thread(
         temporary_documents_table.c.thread_id == thread_id,
         temporary_documents_table.c.cleaned_up == False
     )
+    rows = (await db.execute(stmt)).mappings().all()
+    return [dict(r) for r in rows]
+
+
+async def create_lambda_run(db: AsyncSession, user_id: int, payload: str) -> Dict[str, Any]:
+    """Creates a new Lambda run record in the database."""
+    run_id = str(uuid4())
+    stmt = insert(lambda_runs).values(
+        run_id=run_id,
+        user_id=user_id,
+        initial_request=json.loads(payload),
+        start_time=datetime.utcnow(),
+        status="pending"
+    ).returning(*lambda_runs.c)
+    row = (await db.execute(stmt)).mappings().first()
+    await db.commit()
+    return dict(row)
+
+
+async def get_lambda_run(db: AsyncSession, run_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieves a single Lambda run record and its artifacts."""
+    stmt = select(lambda_runs).where(lambda_runs.c.run_id == run_id)
+    run_row = (await db.execute(stmt)).mappings().first()
+    if not run_row:
+        return None
+
+    run_dict = dict(run_row)
+
+    # Fetch associated artifacts
+    artifact_stmt = select(lambda_artifacts).where(lambda_artifacts.c.lambda_run_id == run_row.id)
+    artifact_rows = (await db.execute(artifact_stmt)).mappings().all()
+    run_dict['artifacts'] = [dict(r) for r in artifact_rows]
+
+    return run_dict
+
+
+async def update_lambda_run_status(db: AsyncSession, run_id: str, status: str,
+                                   final_state: Optional[Dict[str, Any]] = None,
+                                   error_message: Optional[str] = None) -> None:
+    """Updates the status and final state of a Lambda run."""
+    update_data = {"status": status, "end_time": datetime.utcnow()}
+    if final_state:
+        update_data["final_state"] = final_state
+    if error_message:
+        update_data["error_message"] = error_message
+
+    stmt = update(lambda_runs).where(lambda_runs.c.run_id == run_id).values(**update_data)
+    await db.execute(stmt)
+    await db.commit()
+
+async def create_lambda_artifact(db: AsyncSession, lambda_run_id: int, file_name: str, size_bytes: int,
+                                 mime_type: Optional[str] = None, signed_url: Optional[str] = None) -> Dict[str, Any]:
+    """Creates a new Lambda artifact record."""
+    stmt = insert(lambda_artifacts).values(
+        lambda_run_id=lambda_run_id,
+        file_name=file_name,
+        size_bytes=size_bytes,
+        mime_type=mime_type,
+        signed_url=signed_url,
+        created_at=datetime.utcnow()
+    ).returning(*lambda_artifacts.c)
+    row = (await db.execute(stmt)).mappings().first()
+    await db.commit()
+    return dict(row)
+
+
+async def list_lambda_artifacts(db: AsyncSession, lambda_run_id: int) -> List[Dict[str, Any]]:
+    """Retrieves all artifacts associated with a specific Lambda run ID."""
+    stmt = select(lambda_artifacts).where(lambda_artifacts.c.lambda_run_id == lambda_run_id)
     rows = (await db.execute(stmt)).mappings().all()
     return [dict(r) for r in rows]

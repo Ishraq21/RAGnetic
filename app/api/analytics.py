@@ -14,12 +14,15 @@ from sqlalchemy import select, func, join, and_
 
 from app.db import get_db
 from app.db.models import conversation_metrics_table, chat_sessions_table, users_table, citations_table, \
-    chat_messages_table, document_chunks_table
+    chat_messages_table, document_chunks_table, lambda_runs, lambda_artifacts
 from app.core.security import PermissionChecker
 from app.schemas.security import User
 from pydantic import BaseModel, Field
 
 from app.core.config import get_path_settings
+from app.services.file_service import FileService
+from fastapi.responses import FileResponse
+
 
 logger = logging.getLogger("ragnetic")
 router = APIRouter(prefix="/api/v1/analytics", tags=["Analytics API"])
@@ -846,3 +849,102 @@ async def get_latency_metrics(
         logger.error(f"API: Failed to fetch latency metrics: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="Could not retrieve latency metrics.")
+
+
+class LambdaRunSummaryEntry(BaseModel):
+    run_id: str
+    status: str
+    user_id: int
+    start_time: datetime
+    end_time: Optional[datetime]
+    duration_s: Optional[float]
+    error_message: Optional[str]
+    mode: str
+    total_artifacts: int
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/lambda-runs", response_model=List[LambdaRunSummaryEntry])
+async def get_lambda_runs_summary(
+        status: Optional[str] = Query(None, description="Filter by run status (pending, running, completed, failed)."),
+        limit: int = Query(20, ge=1, le=100),
+        current_user: User = Depends(PermissionChecker(["analytics:read_lambda_runs"])),
+        db: AsyncSession = Depends(get_db),
+):
+    """
+    Retrieves a paginated and filterable summary of LambdaTool runs.
+    Requires: 'analytics:read_lambda_runs' permission.
+    """
+    try:
+        stmt = select(
+            lambda_runs.c.run_id,
+            lambda_runs.c.status,
+            lambda_runs.c.user_id,
+            lambda_runs.c.start_time,
+            lambda_runs.c.end_time,
+            lambda_runs.c.error_message,
+            lambda_runs.c.initial_request.op('->>')('mode').label('mode'),
+            func.count(lambda_artifacts.c.id).label('total_artifacts')
+        ).outerjoin(
+            lambda_artifacts, lambda_runs.c.id == lambda_artifacts.c.lambda_run_id
+        ).group_by(
+            lambda_runs.c.id
+        ).order_by(
+            lambda_runs.c.start_time.desc()
+        ).limit(limit)
+
+        filters = []
+        if status:
+            filters.append(lambda_runs.c.status == status)
+
+        if filters:
+            stmt = stmt.where(*filters)
+
+        result = await db.execute(stmt)
+        rows = result.fetchall()
+
+        summary_list = []
+        for row in rows:
+            duration_s = (row.end_time - row.start_time).total_seconds() if row.end_time and row.start_time else None
+            summary_list.append(LambdaRunSummaryEntry(
+                run_id=row.run_id,
+                status=row.status,
+                user_id=row.user_id,
+                start_time=row.start_time,
+                end_time=row.end_time,
+                duration_s=duration_s,
+                error_message=row.error_message,
+                mode=row.mode,
+                total_artifacts=row.total_artifacts
+            ))
+
+        return summary_list
+
+    except Exception as e:
+        logger.error(f"API: Failed to fetch LambdaTool run summary: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Could not retrieve LambdaTool run summary.")
+
+
+@router.get("/lambda-runs/{run_id}/artifacts/{file_name}")
+async def get_lambda_run_artifact(
+    run_id: str = Path(..., description="The ID of the LambdaTool run."),
+    file_name: str = Path(..., description="The name of the artifact file."),
+    current_user: User = Depends(PermissionChecker(["analytics:read_lambda_artifacts"])),
+):
+    """
+    Serves a specific artifact file from a completed LambdaTool run.
+    Requires: 'analytics:read_lambda_artifacts' permission.
+    """
+    try:
+        file_service = FileService()
+        file_path = file_service.get_file_for_download(run_id, file_name)
+
+        return FileResponse(file_path, filename=file_name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        logger.error(f"API: Failed to serve artifact for run {run_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not retrieve artifact.")

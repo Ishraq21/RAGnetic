@@ -355,6 +355,33 @@ citations_table = Table(
     Column("end_char", Integer, nullable=False),
 )
 
+lambda_runs = Table(
+    "lambda_runs",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("run_id", String(255), unique=True, nullable=False),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("status", String(50), nullable=False, default="pending"),  # pending, running, completed, failed
+    Column("initial_request", JSON, nullable=False),
+    Column("final_state", JSON, nullable=True),
+    Column("start_time", DateTime, default=utc_timestamp, nullable=False),
+    Column("end_time", DateTime, nullable=True),
+    Column("error_message", Text, nullable=True),
+    Column("logs", Text, nullable=True) # Could be a JSON array of log lines
+)
+
+lambda_artifacts = Table(
+    "lambda_artifacts",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("lambda_run_id", Integer, ForeignKey("lambda_runs.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("file_name", String(255), nullable=False),
+    Column("mime_type", String(255), nullable=True),
+    Column("size_bytes", BigInteger, nullable=False),
+    Column("signed_url", Text, nullable=True),
+    Column("created_at", DateTime, default=utc_timestamp, nullable=False)
+)
+
 
 # --- Indexes for Performance ---
 Index("tmp_docs_exp_idx", temporary_documents_table.c.expires_at)
