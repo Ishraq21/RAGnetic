@@ -1,0 +1,251 @@
+# app/executors/docker_executor.py
+import asyncio
+import os
+import shutil
+import json
+import logging
+import sys
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+from datetime import datetime
+
+import docker
+import redis
+from docker.errors import ImageNotFound, ContainerError
+from sqlalchemy import insert
+
+from app.db import get_async_db_session, initialize_db_connections
+from app.db.dao import update_lambda_run_status, create_lambda_artifact, get_lambda_run
+from app.db.models import ragnetic_logs_table
+from app.schemas.lambda_tool import LambdaRequestPayload
+from app.core.config import get_path_settings, get_memory_storage_config
+from app.services.file_service import FileService
+
+# This is a temporary path modification to ensure the sandbox/runner module is found
+_APP_PATHS = get_path_settings()
+sys.path.append(str(_APP_PATHS["PROJECT_ROOT"]))
+
+from celery import Celery
+
+logger = logging.getLogger(__name__)
+
+# Define sandbox-related paths from the main project settings
+_SANDBOX_DIR = _APP_PATHS["PROJECT_ROOT"] / "sandbox"
+_LAMBDA_RUNS_DIR = _APP_PATHS["PROJECT_ROOT"] / ".ragnetic" / "lambda_runs"
+_LAMBDA_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+celery_app = Celery("lambda_executor", broker="redis://localhost:6379/0")
+
+
+@celery_app.task(name="lambda_executor.run_job")
+def run_lambda_job_task(run_id: str, payload: Dict[str, Any]):
+    """
+    Celery task that runs the Docker executor.
+    """
+    conn_name = get_memory_storage_config().get("connection_name") or "ragnetic_db"
+    initialize_db_connections(conn_name)
+
+    executor = LocalDockerExecutor()
+    asyncio.run(executor.execute(run_id, payload))
+
+
+class LocalDockerExecutor:
+    def __init__(self):
+        try:
+            self.client = docker.from_env()
+            self.file_service = FileService()
+        except Exception as e:
+            logger.critical(f"Could not connect to Docker daemon: {e}")
+            raise RuntimeError("Docker daemon not running or not accessible.") from e
+
+    async def _ensure_image(self, image_name: str):
+        try:
+            await asyncio.to_thread(self.client.images.get, image_name)
+        except ImageNotFound:
+            logger.warning(f"Image '{image_name}' not found. Building...")
+            await asyncio.to_thread(self._build_image, image_name)
+
+    async def execute(self, run_id: str, payload: Dict[str, Any]):
+        """
+        Main execution method. It sets up a temporary workspace, runs the container,
+        and handles output collection and cleanup.
+        """
+        run_payload = LambdaRequestPayload(**payload)
+
+        workspace_dir = _LAMBDA_RUNS_DIR / run_id
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            self._prepare_workspace(workspace_dir, run_payload)
+            await self._run_container(run_id, workspace_dir, run_payload)
+        except Exception as e:
+            logger.error(f"Execution failed for run {run_id}: {e}", exc_info=True)
+            async with get_async_db_session() as db:
+                await update_lambda_run_status(db, run_id, "failed", error_message=str(e))
+        finally:
+            shutil.rmtree(workspace_dir, ignore_errors=True)
+            logger.info(f"Cleaned up workspace for run {run_id}.")
+
+    def _prepare_workspace(self, workspace_dir: Path, payload: LambdaRequestPayload):
+        """
+        Prepares the workspace directory with the execution request and input files.
+        This is where we'll use the FileService to stage user-uploaded files.
+        """
+        request_file_path = workspace_dir / "request.json"
+        with open(request_file_path, "w") as f:
+            f.write(payload.model_dump_json(indent=2))
+        logger.info(f"Prepared request.json for run.")
+
+        for input_file in payload.inputs:
+            self.file_service.stage_input_file(
+                temp_doc_id=input_file.temp_doc_id,
+                user_id=payload.user_id,
+                thread_id=payload.thread_id,
+                run_id=payload.run_id,
+                file_name=input_file.file_name
+            )
+
+    async def _run_container(self, run_id: str, workspace_dir: Path, payload: LambdaRequestPayload):
+        image_name = "ragnetic-lambda:py310-cpu"
+        await self._ensure_image(image_name)
+
+        logger.info(f"Starting Docker container for run {run_id} using image '{image_name}'.")
+
+        # Get resource limits, ensuring they are set before use.
+        cpu_limit = payload.resource_spec.cpu if payload.resource_spec.cpu is not None else "1"
+        mem_limit = f"{payload.resource_spec.memory_gb}g" if payload.resource_spec.memory_gb is not None else "1g"
+
+        env_vars_for_container = {}
+        network_mode = 'none'
+
+        try:
+            container = await asyncio.to_thread(
+                self.client.containers.run,
+                image_name,
+                detach=True,
+                remove=True,
+                volumes={str(workspace_dir): {'bind': '/work', 'mode': 'rw'}},
+                network_mode=network_mode,
+                environment=env_vars_for_container,
+                cpu_count=int(cpu_limit),
+                mem_limit=mem_limit,
+            )
+
+            log_output = await asyncio.to_thread(container.logs, stream=False)
+            log_output = log_output.decode('utf-8')
+            await self._save_logs(run_id, log_output)
+
+            await asyncio.to_thread(container.wait)
+            await self._process_output(run_id, workspace_dir)
+
+        except ContainerError as e:
+            logger.error(f"Container failed for run {run_id}: {e}", exc_info=True)
+            async with get_async_db_session() as db:
+                await update_lambda_run_status(db, run_id, "failed", error_message=str(e))
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during container execution for run {run_id}: {e}",
+                         exc_info=True)
+            raise
+
+    def _build_image(self, image_name: str):
+        """
+        Builds the Docker image from the Dockerfile.
+        """
+        try:
+            logger.info(f"Building Docker image '{image_name}'. This may take a few minutes...")
+            _, logs = self.client.images.build(
+                path=str(_SANDBOX_DIR),
+                tag=image_name,
+                rm=True
+            )
+            for log in logs:
+                if 'stream' in log:
+                    logger.info(log['stream'].strip())
+            logger.info(f"Successfully built Docker image '{image_name}'.")
+        except Exception as e:
+            logger.critical(f"Failed to build Docker image '{image_name}': {e}")
+            raise
+
+    async def _save_logs(self, run_id: str, log_output: str):
+        """Parses the structured logs from the container output and saves them to the database."""
+        async with get_async_db_session() as db:
+            log_lines = log_output.strip().split('\n')
+            for line in log_lines:
+                try:
+                    log_data = json.loads(line)
+                    log_entry = {
+                        "timestamp": datetime.fromisoformat(log_data['timestamp']),
+                        "level": log_data['level'],
+                        "message": log_data['message'],
+                        "module": log_data.get('module'),
+                        "function": log_data.get('function'),
+                        "line": log_data.get('line'),
+                        "details": log_data.get('details'),
+                        "correlation_id": run_id
+                    }
+                    await db.execute(insert(ragnetic_logs_table).values(**log_entry))
+                except json.JSONDecodeError:
+                    logger.warning(f"Could not parse log line for run {run_id}: {line}")
+            await db.commit()
+
+    async def _save_artifacts_and_state(self, run_id: str, workspace_dir: Path):
+        """
+        Helper method to process and save all output data.
+        """
+        output_dir = workspace_dir / "outputs"
+        final_state = {}
+
+        async with get_async_db_session() as db:
+            error_file = output_dir / "error.json"
+            if error_file.exists():
+                with open(error_file, 'r') as f:
+                    error_data = json.load(f)
+                await update_lambda_run_status(
+                    db,
+                    run_id,
+                    "failed",
+                    final_state=error_data,
+                    error_message=error_data.get("message")
+                )
+                return
+
+            artifacts = []
+            artifacts_file = output_dir / "artifacts.json"
+            if artifacts_file.exists():
+                with open(artifacts_file, 'r') as f:
+                    artifacts = json.load(f)
+
+            result_file = output_dir / "result.json"
+            if result_file.exists():
+                with open(result_file, 'r') as f:
+                    final_state = json.load(f)
+
+            run_data = await get_lambda_run(db, run_id)
+            if run_data:
+                for artifact in artifacts:
+                    try:
+                        artifact_metadata = self.file_service.collect_artifact(run_id, artifact['relative_path'])
+                        await create_lambda_artifact(
+                            db,
+                            lambda_run_id=run_data["id"],
+                            file_name=artifact_metadata["file_name"],
+                            size_bytes=artifact_metadata["size_bytes"],
+                            mime_type=artifact_metadata["mime_type"],
+                            signed_url=artifact_metadata["signed_url"]
+                        )
+                    except Exception as e:
+                        logger.error(f"Error collecting artifact for run {run_id}: {e}")
+            await update_lambda_run_status(db, run_id, "completed", final_state=final_state)
+
+    async def _process_output(self, run_id: str, workspace_dir: Path):
+        """
+        Analyzes the output of the sandbox run, collects artifacts, and updates the database.
+        """
+        try:
+            await self._save_artifacts_and_state(run_id, workspace_dir)
+            logger.info(f"Lambda run '{run_id}' completed successfully. Output processed.")
+        except Exception as e:
+            logger.error(f"Error processing output for run {run_id}: {e}", exc_info=True)
+            async with get_async_db_session() as db:
+                await update_lambda_run_status(db, run_id, "failed", error_message=f"Output processing failed: {e}")

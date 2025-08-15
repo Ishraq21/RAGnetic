@@ -21,6 +21,10 @@ from fastapi import Form
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.db.dao import create_chat_message
+from app.tools.lambda_tool import LambdaTool
+from app.api.lambda_tool import router as lambda_tool_router
+from app.db.dao import create_lambda_run, get_lambda_run, list_lambda_artifacts, create_lambda_artifact
+
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Depends, status, UploadFile, File
 from fastapi.templating import Jinja2Templates
@@ -347,7 +351,7 @@ app.include_router(workflows.router, prefix="/api/v1")
 app.include_router(webhooks.router, prefix="/webhooks/v1")
 app.include_router(citations_api_router)
 app.include_router(evaluation_api_router)
-
+app.include_router(lambda_tool_router)
 
 
 
@@ -365,8 +369,6 @@ class WebSocketUploadedFileItem(BaseModel):
     file_size: int
     temp_doc_id: str
 
-# This model is conceptual, based on what frontend sends to WS.
-# Your actual chat message model (if it exists) might need updating.
 class ChatMessagePayloadWithFiles(BaseModel):
     agent: str
     thread_id: Optional[str] = None

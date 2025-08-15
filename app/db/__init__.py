@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import create_engine
 from app.core.config import get_db_connection, get_db_connection_config, get_path_settings
@@ -87,3 +89,12 @@ def get_sync_db_engine():
     conn_str = get_db_connection(conn_name)
     sync_conn_str = conn_str.replace('+aiosqlite', '').replace('+asyncpg', '')
     return create_engine(sync_conn_str)
+
+
+@asynccontextmanager
+async def get_async_db_session():
+    """Provides a context-managed asynchronous database session."""
+    if AsyncSessionLocal is None:
+        raise RuntimeError("Database connections not initialized. Call initialize_db_connections first.")
+    async with AsyncSessionLocal() as session:
+        yield session

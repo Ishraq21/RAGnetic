@@ -47,9 +47,11 @@ from app.db.models import metadata, agent_runs, chat_sessions_table, users_table
     workflow_runs_table
 from app.evaluation.benchmark import run_benchmark
 from app.evaluation.dataset_generator import generate_test_set
+from app.executors.docker_executor import LocalDockerExecutor
 from app.pipelines.embed import embed_agent_data
 from app.schemas.data_prep import DatasetPreparationConfig
 from app.schemas.fine_tuning import FineTuningJobConfig, FineTuningStatus
+from app.schemas.lambda_tool import LambdaRequestPayload, LambdaResourceSpec
 from app.schemas.orchestrator import OrchestratorConfig
 from app.training.data_prep.conversational_jsonl_loader import ConversationalJsonlLoader
 from app.training.data_prep.jsonl_instruction_loader import JsonlInstructionLoader
@@ -3543,6 +3545,93 @@ def inspect_orchestration(
         typer.secho(f"An error occurred while inspecting the orchestration: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
+@app.command(name="build-sandbox", help="Builds the Docker image for the LambdaTool execution sandbox.")
+def build_sandbox_image():
+    """
+    Builds the Docker image for the LambdaTool.
+    """
+    typer.secho("Building RAGnetic LambdaTool sandbox image...", bold=True)
+    try:
+        executor = LocalDockerExecutor()
+        executor._build_image("ragnetic-lambda:py310-cpu")
+    except Exception as e:
+        typer.secho(f"Failed to build sandbox image: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="test-lambda", help="Submits a test job to the LambdaTool and displays the result.")
+def test_lambda_tool(
+        job_name: str = typer.Argument("simple_test_job", help="A name for the test job."),
+        code: str = typer.Option(
+            "import math; result = math.sqrt(144); print(f'The result is {result}')",
+            "--code", "-c",
+            help="The Python code to execute in the sandbox."
+        ),
+):
+    """
+    Submits a test job to the LambdaTool via the API and displays the final output.
+    """
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    if not api_key:
+        typer.secho("Error: No API key found. Please log in or set a master key.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    url = f"{server_url}/lambda/execute"
+    headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+
+    # Use the LambdaRequestPayload schema to build a valid request
+    test_payload = LambdaRequestPayload(
+        mode="code",
+        code=code,
+        output_artifacts=["outputs/test_output.txt"],
+        resource_spec=LambdaResourceSpec(cpu="1", memory_gb=1),
+    )
+
+    response = None
+    try:
+        typer.secho(f"Submitting test job '{job_name}'...", fg=typer.colors.CYAN)
+        response = requests.post(url, headers=headers, json=test_payload.model_dump(), timeout=15)
+        response.raise_for_status()
+        run_id = response.json()["run_id"]
+        typer.secho(f"Job submitted successfully. Run ID: {run_id}", fg=typer.colors.GREEN)
+        typer.echo("Waiting for job to complete...")
+
+        # Poll the API to check job status
+        status_url = f"{server_url}/lambda/runs/{run_id}"
+        max_retries = 30
+        for i in range(max_retries):
+            time.sleep(1)  # Wait 1 second between polls
+            status_response = requests.get(status_url, headers=headers)
+            status_response.raise_for_status()
+            run_status = status_response.json()["status"]
+
+            if run_status in ["completed", "failed"]:
+                typer.secho(f"\nJob finished with status: {run_status.upper()}", bold=True,
+                            fg=typer.colors.GREEN if run_status == "completed" else typer.colors.RED)
+
+                # Display final state and artifacts
+                run_details = status_response.json()
+                if run_details.get("final_state"):
+                    typer.secho("\n--- Final Output ---", bold=True)
+                    typer.echo(json.dumps(run_details["final_state"], indent=2))
+
+                if run_details.get("artifacts"):
+                    typer.secho("\n--- Artifacts ---", bold=True)
+                    for artifact in run_details["artifacts"]:
+                        typer.echo(f"  - {artifact['file_name']} ({artifact['size_bytes']} bytes)")
+                        typer.secho(f"    Download URL: {artifact['signed_url']}", fg=typer.colors.BLUE)
+
+                return  # Exit successfully
+
+        typer.secho("\nJob timed out. Check logs for details.", fg=typer.colors.YELLOW)
+        raise typer.Exit(code=1)
+
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"An error occurred: {e}", fg=typer.colors.RED)
+        if response and response.text:
+            typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
 
 if __name__ == "__main__":
     setup_cli_logging()

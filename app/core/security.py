@@ -205,10 +205,39 @@ class PermissionChecker:
         logger.debug(f"PermissionChecker initialized for: {required_permissions}")
         # --- NEW: Define a mapping for API key scopes to permissions ---
         self.scope_permission_map = {
-            "admin": ["*"],
-            "editor": ["read:workflows", "create:workflows", "update:workflows", "delete:workflows", "read:agents",
-                       "create:agents", "update:agents"],
-            "viewer": ["read:workflows", "read:agents"]
+            "admin": [
+                "lambda:execute",
+                "lambda:read_run_details",
+                "analytics:read_lambda_runs",
+                "analytics:read_lambda_artifacts",
+
+                # Other admin permissions
+                "read:workflows", "create:workflows", "update:workflows", "delete:workflows",
+                "read:agents", "create:agents", "update:agents", "delete:agents",
+                "read:users", "create:users", "update:users", "delete:users",
+                "read:roles", "create:roles", "update:roles", "delete:roles",
+                "read:api_keys", "create:api_keys", "revoke:api_keys",
+                "*",
+            ],
+            "editor": [
+                "lambda:execute",
+                "lambda:read_run_details",
+                "analytics:read_lambda_runs",
+                "analytics:read_lambda_artifacts",
+
+                # Other editor permissions
+                "read:workflows", "create:workflows", "update:workflows",
+                "read:agents", "create:agents", "update:agents"
+            ],
+            "viewer": [
+                "lambda:read_run_details",
+                "analytics:read_lambda_runs",
+                "analytics:read_lambda_artifacts",
+
+                # Other viewer permissions
+                "read:workflows",
+                "read:agents"
+            ]
         }
 
     async def __call__(self, current_user: User = Depends(

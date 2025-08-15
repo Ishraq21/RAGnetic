@@ -19,13 +19,6 @@ logger = logging.getLogger("ragnetic")
 
 router = APIRouter(prefix="/api/v1/security", tags=["Security API"])
 
-
-# --- Authentication Endpoints ---
-
-# app/api/security.py
-
-# ... (rest of the file) ...
-
 @router.post("/login", response_model=Token)
 async def login_for_access_token(
         request: LoginRequest,

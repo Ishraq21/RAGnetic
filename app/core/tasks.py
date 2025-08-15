@@ -63,7 +63,8 @@ celery_app.conf.update(
     include=[
         'app.core.tasks',
         'app.training.trainer_tasks',
-        'app.workflows.tasks'
+        'app.workflows.tasks',
+        'app.executors.docker_executor',
     ]
 )
 
