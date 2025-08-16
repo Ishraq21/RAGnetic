@@ -124,7 +124,7 @@ class LocalDockerExecutor:
                 self.client.containers.run,
                 image_name,
                 detach=True,
-                remove=True,
+                auto_remove=False,
                 volumes={str(workspace_dir): {'bind': '/work', 'mode': 'rw'}},
                 network_mode=network_mode,
                 environment=env_vars_for_container,
@@ -132,12 +132,23 @@ class LocalDockerExecutor:
                 mem_limit=mem_limit,
             )
 
-            log_output = await asyncio.to_thread(container.logs, stream=False)
-            log_output = log_output.decode('utf-8')
-            await self._save_logs(run_id, log_output)
-
             await asyncio.to_thread(container.wait)
+
+            try:
+                log_output = await asyncio.to_thread(
+                    container.logs, stdout=True, stderr=True, stream=False, timestamps=False, tail="all"
+                )
+                log_output = log_output.decode('utf-8', errors='ignore')
+                await self._save_logs(run_id, log_output)
+            except docker.errors.APIError as e:
+                logger.warning(f"Could not fetch container logs for run {run_id}: {e}")
+
             await self._process_output(run_id, workspace_dir)
+
+            try:
+                await asyncio.to_thread(container.remove, force=True)
+            except Exception as e:
+                logger.debug(f"Container remove failed for run {run_id}: {e}")
 
         except ContainerError as e:
             logger.error(f"Container failed for run {run_id}: {e}", exc_info=True)
@@ -168,25 +179,46 @@ class LocalDockerExecutor:
             raise
 
     async def _save_logs(self, run_id: str, log_output: str):
-        """Parses the structured logs from the container output and saves them to the database."""
+        """Parse JSON log lines; insert only columns that exist in ragnetic_logs_table."""
         async with get_async_db_session() as db:
-            log_lines = log_output.strip().split('\n')
+            log_lines = (log_output or "").strip().split("\n")
             for line in log_lines:
+                if not line.strip():
+                    continue
                 try:
                     log_data = json.loads(line)
-                    log_entry = {
-                        "timestamp": datetime.fromisoformat(log_data['timestamp']),
-                        "level": log_data['level'],
-                        "message": log_data['message'],
-                        "module": log_data.get('module'),
-                        "function": log_data.get('function'),
-                        "line": log_data.get('line'),
-                        "details": log_data.get('details'),
-                        "correlation_id": run_id
-                    }
-                    await db.execute(insert(ragnetic_logs_table).values(**log_entry))
                 except json.JSONDecodeError:
                     logger.warning(f"Could not parse log line for run {run_id}: {line}")
+                    continue
+
+                # Build details and include run_id there (since the table has no correlation_id column)
+                base_details = log_data.get("details")
+                if isinstance(base_details, dict):
+                    details = {**base_details, "run_id": run_id}
+                else:
+                    details = {"run_id": run_id, "raw_details": base_details}
+
+                # Safe timestamp
+                ts_raw = log_data.get("timestamp")
+                try:
+                    ts = datetime.fromisoformat(ts_raw) if ts_raw else datetime.utcnow()
+                except Exception:
+                    ts = datetime.utcnow()
+
+                # Only the columns that exist in ragnetic_logs_table
+                log_entry = {
+                    "timestamp": ts,
+                    "level": log_data.get("level"),
+                    "message": log_data.get("message"),
+                    "module": log_data.get("module"),
+                    "function": log_data.get("function"),
+                    "line": log_data.get("line"),
+                    "exc_info": log_data.get("exc_info"),
+                    "details": details,
+                }
+
+                await db.execute(insert(ragnetic_logs_table).values(**log_entry))
+
             await db.commit()
 
     async def _save_artifacts_and_state(self, run_id: str, workspace_dir: Path):

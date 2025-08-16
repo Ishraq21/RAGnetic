@@ -859,9 +859,9 @@ async def update_lambda_run_status(db: AsyncSession, run_id: str, status: str,
                                    error_message: Optional[str] = None) -> None:
     """Updates the status and final state of a Lambda run."""
     update_data = {"status": status, "end_time": datetime.utcnow()}
-    if final_state:
+    if final_state is not None:
         update_data["final_state"] = final_state
-    if error_message:
+    if error_message is not None:
         update_data["error_message"] = error_message
 
     stmt = update(lambda_runs).where(lambda_runs.c.run_id == run_id).values(**update_data)

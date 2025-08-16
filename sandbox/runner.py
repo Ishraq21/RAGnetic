@@ -1,29 +1,17 @@
-# sandbox/runner.py
 import json
 import logging
 import os
 import sys
 import traceback
 import io
-import papermill as pm
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from typing import Dict, Any, List
 
-# --- Existing imports ---
-from app.executors import function_registry
-from app.executors.function_registry import basic_utilities
-from app.executors.function_registry import data_analysis
-from app.executors.function_registry import file_utilities
-
-# Define the whitelist of allowed environment variables
-# This list is intentionally empty because the LambdaTool will not be
-# configured to use any external APIs or require host environment variables.
-
 # Configure a basic logger for structured output to stdout
 logging.basicConfig(
     level=logging.INFO,
-    format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", "mode": "%(mode)s", "message": "%(message)s"}',
+    format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s"}',
     datefmt="%Y-%m-%dT%H:%M:%S"
 )
 logger = logging.getLogger(__name__)
@@ -36,24 +24,22 @@ REQUEST_FILE = WORK_DIR / "request.json"
 
 SANDBOX_ROOT = WORK_DIR
 
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    allowed = {"math"}  # add more if you need them
+    root = name.split(".")[0]
+    if root not in allowed:
+        raise ImportError(f"Import of '{name}' is not allowed")
+    return __import__(name, globals, locals, fromlist, level)
+
+
 def _is_within_sandbox(path: Path) -> bool:
     """Check if a given path is inside the sandbox root."""
     return path.resolve().is_relative_to(SANDBOX_ROOT)
 
 
-def save_output(output_data: Any):
-    """Saves output data to result.json."""
-    try:
-        with open(OUTPUTS_DIR / "result.json", "w") as f:
-            json.dump(output_data, f)
-    except Exception as e:
-        logger.error(f"Failed to save output to result.json: {e}")
-        raise
-
-
 def main():
     """Main execution entrypoint for the sandbox runner."""
-    # Ensure all function modules are imported to register the functions
     try:
         logger.info("Sandbox runner started.")
 
@@ -68,19 +54,35 @@ def main():
 
         mode = request_data.get("mode")
         payload = request_data.get("payload", {})
-        output_artifacts = payload.get("output_artifacts", [])
+
+        # We'll explicitly define the output artifacts here, as the code
+        # execution mode does not produce them on its own.
+        output_artifacts = ["outputs/test_output.txt"]
 
         if mode == "code":
-            execute_code_mode(payload.get("code", ""))
+            code_str = request_data.get("code") or payload.get("code", "")
+            execute_code_mode(code_str)
+
         elif mode == "function":
-            execute_function_mode(payload.get("function_name"), payload.get("function_args", {}))
+            fn_name = request_data.get("function_name") or payload.get("function_name")
+            fn_args = request_data.get("function_args") or payload.get("function_args", {}) or {}
+            execute_function_mode(fn_name, fn_args)
+
         elif mode == "notebook":
-            execute_notebook_mode(payload.get("notebook_file_path"), payload.get("parameters", {}),
-                                  payload.get("output_file_name"))
+            nb_path = request_data.get("notebook_file_path") or payload.get("notebook_file_path")
+            nb_params = request_data.get("parameters") or payload.get("parameters", {}) or {}
+            nb_out = request_data.get("output_file_name") or payload.get("output_file_name") or "executed.ipynb"
+            execute_notebook_mode(nb_path, nb_params, nb_out)
+
         else:
             raise ValueError(f"Unsupported execution mode: {mode}")
 
         logger.info("Execution completed successfully.")
+
+        result_path = OUTPUTS_DIR / "result.json"
+        if not result_path.exists():
+            with open(result_path, "w") as f:
+                json.dump({"status": "ok", "mode": mode}, f)
 
         # Collect and log output artifacts
         artifacts = collect_artifacts(output_artifacts)
@@ -101,11 +103,22 @@ def main():
         sys.exit(1)
 
 
-# --- Existing functions (execute_code_mode, execute_function_mode, etc.) ---
-
 def execute_function_mode(function_name: str, args: Dict[str, Any]):
-    """Calls a pre-vetted function from the regislogging.basicConfig(level=logging.INFOtry."""
-    logger.info(f"Executing in 'function' mode: {function_name}")
+    """Calls a pre-vetted function from a registry baked into the sandbox image."""
+    logger.info(f"Executing in 'function' mode: {function_name}", extra={"mode": "function"})
+
+    try:
+        # Try the in-image registry path
+        from app.executors import function_registry  # type: ignore
+    except Exception:
+        try:
+            # Fallback: allow a local file named function_registry.py in /work or PYTHONPATH
+            import function_registry  # type: ignore
+        except Exception as e:
+            raise ImportError(
+                "Function mode is unavailable in this sandbox: no 'function_registry' module found. "
+                "Either run in 'code' mode or bake your registry into the Docker image."
+            ) from e
 
     function_data = function_registry.FunctionRegistration.get_function(function_name)
     if not function_data:
@@ -114,55 +127,70 @@ def execute_function_mode(function_name: str, args: Dict[str, Any]):
     func = function_data["function"]
 
     try:
-        result = func(**args)
-        logger.info(f"Function call result: {result}")
+        result = func(**(args or {}))
+        logger.info(f"Function call result: {result}", extra={"mode": "function"})
         with open(OUTPUTS_DIR / "result.json", "w") as f:
-            json.dump(result, f)
-
+            json.dump({"status": "ok", "function": function_name, "result": result}, f)
     except Exception as e:
-        logger.error(f"Error executing function '{function_name}': {e}")
+        logger.error(f"Error executing function '{function_name}': {e}", extra={"mode": "function"})
         raise
 
 
 def execute_code_mode(code: str):
-    """Executes raw Python code."""
-    logger.info("Executing in 'code' mode.", extra={"mode": "code"})
+    """
+    Executes raw Python code in a restricted sandbox, captures its output,
+    and saves the result to a structured JSON file.
+    """
+    logger.info("Executing code in 'code' mode.")
 
     safe_globals = {
         "__builtins__": {
+            "__import__": _safe_import,
             "print": print, "len": len, "range": range, "dict": dict, "list": list,
             "str": str, "int": int, "float": float, "bool": bool, "enumerate": enumerate,
             "zip": zip,
-        },
+        }
     }
     local_vars = {}
 
-    # Capture stdout/stderr
-    with io.StringIO() as buf, redirect_stdout(buf), redirect_stderr(buf):
-        try:
+    # Capture stdout and stderr
+    output_buffer = io.StringIO()
+    try:
+        with redirect_stdout(output_buffer), redirect_stderr(output_buffer):
             exec(code, safe_globals, local_vars)
-            output = buf.getvalue()
-            if output:
-                logger.info(f"Execution Output:\n{output}", extra={"mode": "code"})
-                save_output({"output": output})
-            else:
-                save_output({"output": "Code executed successfully with no output."})
 
-        except Exception as e:
-            logger.error(
-                f"Code execution error: {e}",
-                extra={
-                    "mode": "code",
-                    "error_type": type(e).__name__,
-                    "traceback": traceback.format_exc()
-                }
-            )
-            raise
+        # Capture the output from the buffer
+        stdout_output = output_buffer.getvalue()
+
+        logger.info(f"Execution output captured (bytes={len(stdout_output)})", extra={"mode": "code"})
+
+
+        # Write the final state to the result.json file
+        final_state = {"output": stdout_output, "status": "completed"}
+        with open(OUTPUTS_DIR / "result.json", "w") as f:
+            json.dump(final_state, f)
+
+        # Write the stdout to a plain text file as an artifact
+        with open(OUTPUTS_DIR / "test_output.txt", "w") as f:
+            f.write(stdout_output)
+
+    except Exception as e:
+        error_payload = {
+            "error_type": type(e).__name__,
+            "message": str(e),
+            "traceback": traceback.format_exc(),
+            "status": "failed"
+        }
+        with open(OUTPUTS_DIR / "error.json", "w") as f:
+            json.dump(error_payload, f)
+        raise
 
 
 def execute_notebook_mode(notebook_file_path: str, parameters: Dict[str, Any], output_file_name: str):
     """Executes a notebook, passing parameters, and saves the output."""
     logger.info(f"Executing notebook mode for file: {notebook_file_path}", extra={"mode": "notebook"})
+
+    import papermill as pm
 
     input_path = WORK_DIR / notebook_file_path
     if not _is_within_sandbox(input_path):
@@ -173,7 +201,6 @@ def execute_notebook_mode(notebook_file_path: str, parameters: Dict[str, Any], o
     output_path = OUTPUTS_DIR / output_file_name
 
     try:
-        # Run the notebook with papermill
         pm.execute_notebook(
             input_path=str(input_path),
             output_path=str(output_path),
