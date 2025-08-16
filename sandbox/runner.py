@@ -26,7 +26,7 @@ SANDBOX_ROOT = WORK_DIR
 
 
 def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
-    allowed = {"math"}  # add more if you need them
+    allowed = {"math", "statistics", "json", "re", "datetime" "sympy"}
     root = name.split(".")[0]
     if root not in allowed:
         raise ImportError(f"Import of '{name}' is not allowed")
@@ -145,12 +145,37 @@ def execute_code_mode(code: str):
 
     safe_globals = {
         "__builtins__": {
+            # imports
             "__import__": _safe_import,
-            "print": print, "len": len, "range": range, "dict": dict, "list": list,
-            "str": str, "int": int, "float": float, "bool": bool, "enumerate": enumerate,
-            "zip": zip,
-        }
+
+            # io & introspection
+            "print": print, "len": len, "enumerate": enumerate, "range": range, "zip": zip,
+
+            # core types / conversions
+            "dict": dict, "list": list, "tuple": tuple, "set": set,
+            "str": str, "int": int, "float": float, "bool": bool, "complex": complex,
+            "chr": chr, "ord": ord, "bin": bin, "oct": oct, "hex": hex,
+
+            # numbers & math-y helpers
+            "abs": abs, "round": round, "pow": pow, "min": min, "max": max, "sum": sum, "divmod": divmod,
+
+            # iteration & ordering
+            "sorted": sorted, "reversed": reversed, "next": next, "iter": iter, "slice": slice,
+
+            # predicates & higher-order
+            "any": any, "all": all, "map": map, "filter": filter,
+
+            # type checks / formatting
+            "isinstance": isinstance, "issubclass": issubclass,
+            "format": format, "repr": repr,
+        },
+
+        # Optional convenience: let users use these without an explicit import
+        "math": __import__("math"),
+        "json": __import__("json"),
+        "re": __import__("re"),
     }
+
     local_vars = {}
 
     # Capture stdout and stderr

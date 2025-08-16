@@ -21,7 +21,6 @@ from fastapi import Form
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.db.dao import create_chat_message
-from app.tools.lambda_tool import LambdaTool
 from app.api.lambda_tool import router as lambda_tool_router
 from app.db.dao import create_lambda_run, get_lambda_run, list_lambda_artifacts, create_lambda_artifact
 
@@ -118,6 +117,23 @@ WEBSOCKET_MODE = config.get('SERVER', 'websocket_mode', fallback='memory')
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost")
 allowed_origins = get_cors_settings()
 
+
+def _infer_server_url(websocket: WebSocket) -> str:
+    headers = dict(websocket.headers)
+    xf_proto = headers.get("x-forwarded-proto")
+    xf_host  = headers.get("x-forwarded-host")
+
+    scheme = xf_proto or ("https" if websocket.url.scheme == "wss" else "http")
+    host   = xf_host or websocket.url.hostname
+    port   = websocket.url.port
+
+    # If proxy provided host:port already, don’t re-append a port
+    if xf_host and ":" in xf_host:
+        return f"{scheme}://{host}"
+
+    if port and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
+        return f"{scheme}://{host}:{port}"
+    return f"{scheme}://{host}"
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -601,7 +617,7 @@ async def websocket_chat(ws: WebSocket,
             all_tools.append(APIToolkit())
 
         if "lambda_tool" in agent_config.tools:
-            all_tools.append(LambdaTool())
+            all_tools.append(LambdaTool(server_url=_infer_server_url(ws)))
 
         langgraph_agent = get_agent_workflow(all_tools).compile()
 
