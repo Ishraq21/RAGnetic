@@ -3633,6 +3633,65 @@ def test_lambda_tool(
             typer.echo(f"API Response: {response.text}")
         raise typer.Exit(code=1)
 
+
+@app.command(name="inspect-lambda", help="Inspect a specific LambdaTool run and its details.")
+def inspect_lambda_run(
+    run_id: str = typer.Argument(..., help="The unique ID of the LambdaTool run to inspect.")
+):
+    """
+    Fetches and displays the details for a single LambdaTool run, including logs and artifacts.
+    """
+    server_url = _get_server_url()
+    api_key = _get_api_key_for_cli()
+    if not api_key:
+        typer.secho("Error: No API key found. Please log in or set a master key.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    url = f"{server_url}/lambda/runs/{run_id}"
+    headers = {"X-API-Key": api_key}
+    response = None
+
+    try:
+        typer.secho(f"Fetching details for LambdaTool run: {run_id}...", fg=typer.colors.CYAN)
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        run_data = response.json()
+
+        typer.secho("\n--- LambdaTool Run Details ---", bold=True)
+        typer.echo(f"  Run ID: {typer.style(run_data.get('run_id'), fg=typer.colors.CYAN)}")
+        typer.echo(f"  Status: {typer.style(run_data.get('status', 'N/A'), fg=typer.colors.GREEN if run_data.get('status') == 'completed' else typer.colors.RED)}")
+        typer.echo(f"  User ID: {run_data.get('user_id', 'N/A')}")
+        typer.echo(f"  Start Time: {run_data.get('start_time', 'N/A')}")
+        typer.echo(f"  End Time: {run_data.get('end_time', 'N/A')}")
+        typer.echo(f"  Error Message: {run_data.get('error_message', 'None')}")
+
+        if run_data.get('initial_request'):
+            typer.secho("\n--- Initial Request ---", bold=True, fg=typer.colors.MAGENTA)
+            typer.echo(json.dumps(run_data['initial_request'], indent=2))
+
+        if run_data.get('final_state'):
+            typer.secho("\n--- Final State ---", bold=True, fg=typer.colors.GREEN)
+            typer.echo(json.dumps(run_data['final_state'], indent=2))
+
+        if run_data.get('artifacts'):
+            typer.secho("\n--- Artifacts ---", bold=True, fg=typer.colors.YELLOW)
+            for artifact in run_data['artifacts']:
+                typer.echo(f"  - File: {artifact.get('file_name')}")
+                typer.echo(f"    Size: {artifact.get('size_bytes')} bytes")
+                typer.echo(f"    URL: {artifact.get('signed_url')}")
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            typer.secho(f"Error: Run with ID '{run_id}' not found.", fg=typer.colors.RED)
+        else:
+            typer.secho(f"HTTP Error: {e}", fg=typer.colors.RED)
+            if response and response.text:
+                typer.echo(f"API Response: {response.text}")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.secho(f"An unexpected error occurred while inspecting the run: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
 if __name__ == "__main__":
     setup_cli_logging()
     app()
