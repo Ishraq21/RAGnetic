@@ -7,6 +7,8 @@ import io
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from typing import Dict, Any, List
+import ast
+
 
 # Configure a basic logger for structured output to stdout
 logging.basicConfig(
@@ -24,11 +26,17 @@ REQUEST_FILE = WORK_DIR / "request.json"
 
 SANDBOX_ROOT = WORK_DIR
 
+ALLOWED_MODULES = {
+    "math", "statistics", "random", "numpy", "pandas", "matplotlib", "textblob", "csv", "re"
+}
+
+os.environ.setdefault("MPLBACKEND", "Agg")
+os.environ.setdefault("MPLCONFIGDIR", str(WORK_DIR / ".mplconfig"))
+(Path(os.environ["MPLCONFIGDIR"])).mkdir(parents=True, exist_ok=True)
 
 def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
-    allowed = {"math", "statistics", "json", "re", "datetime" "sympy"}
     root = name.split(".")[0]
-    if root not in allowed:
+    if root not in ALLOWED_MODULES:
         raise ImportError(f"Import of '{name}' is not allowed")
     return __import__(name, globals, locals, fromlist, level)
 
@@ -54,10 +62,25 @@ def main():
 
         mode = request_data.get("mode")
         payload = request_data.get("payload", {})
+        requested_artifacts = payload.get("output_artifacts") or []
 
         # We'll explicitly define the output artifacts here, as the code
         # execution mode does not produce them on its own.
-        output_artifacts = ["outputs/test_output.txt"]
+        # Auto-discover all files saved under /work/outputs
+        # Predefine artifacts: honor user-specified list if present
+        if requested_artifacts:
+            output_artifacts = []
+            for rel_path in requested_artifacts:
+                p = WORK_DIR / rel_path
+                if _is_within_sandbox(p) and p.exists() and p.is_file():
+                    output_artifacts.append(rel_path)
+                else:
+                    logger.warning(f"Requested artifact not found or invalid: {rel_path}")
+        else:
+            # fallback: auto-discover everything under outputs
+            output_artifacts = [
+                f"outputs/{p.name}" for p in OUTPUTS_DIR.glob("*") if p.is_file()
+            ]
 
         if mode == "code":
             code_str = request_data.get("code") or payload.get("code", "")
@@ -85,7 +108,18 @@ def main():
                 json.dump({"status": "ok", "mode": mode}, f)
 
         # Collect and log output artifacts
-        artifacts = collect_artifacts(output_artifacts)
+        artifacts = []
+        if requested_artifacts:
+            for rel_path in output_artifacts:
+                p = WORK_DIR / rel_path
+                if p.exists() and p.is_file():
+                    artifacts.append({
+                        "file_name": Path(rel_path).name,
+                        "relative_path": rel_path,
+                        "size_bytes": p.stat().st_size,
+                    })
+        else:
+            artifacts = collect_artifacts()
         with open(OUTPUTS_DIR / "artifacts.json", "w") as f:
             json.dump(artifacts, f)
 
@@ -136,6 +170,21 @@ def execute_function_mode(function_name: str, args: Dict[str, Any]):
         raise
 
 
+
+def _safe_open(path, mode="r", *args, **kwargs):
+    p = Path(path)
+    p = (WORK_DIR / p).resolve() if not p.is_absolute() else p.resolve()
+
+    # Only allow reads from /work/inputs
+    if "r" in mode and not p.is_relative_to(INPUTS_DIR):
+        raise PermissionError(f"Read denied outside inputs: {p}")
+
+    # Only allow writes to /work/outputs
+    if any(flag in mode for flag in ("w", "a", "x", "+")) and not p.is_relative_to(OUTPUTS_DIR):
+        raise PermissionError(f"Write denied outside outputs: {p}")
+
+    return open(p, mode, *args, **kwargs)
+
 def execute_code_mode(code: str):
     """
     Executes raw Python code in a restricted sandbox, captures its output,
@@ -168,9 +217,14 @@ def execute_code_mode(code: str):
             # type checks / formatting
             "isinstance": isinstance, "issubclass": issubclass,
             "format": format, "repr": repr,
+
+            # scalars
+            "str": str, "int": int, "float": float, "bool": bool,
+
+            "open": _safe_open,
         },
 
-        # Optional convenience: let users use these without an explicit import
+        # convenience
         "math": __import__("math"),
         "json": __import__("json"),
         "re": __import__("re"),
@@ -178,24 +232,39 @@ def execute_code_mode(code: str):
 
     local_vars = {}
 
-    # Capture stdout and stderr
     output_buffer = io.StringIO()
+    last_value_holder = {"value": None}
+
+    def custom_displayhook(value):
+        if value is not None:
+            last_value_holder["value"] = value
+            print(value)
+
+    try:
+        tree = ast.parse(code, mode="exec")
+        if tree.body and isinstance(tree.body[-1], ast.Expr):
+            # The last statement is an expression, not an assignment or function call
+            expression_source = ast.unparse(tree.body[-1].value)
+            code_to_execute = code + f"\nprint({expression_source})"
+        else:
+            code_to_execute = code
+    except Exception as e:
+        logger.warning(f"Failed to parse code for auto-printing. Executing as-is. Error: {e}")
+        code_to_execute = code
+
     try:
         with redirect_stdout(output_buffer), redirect_stderr(output_buffer):
-            exec(code, safe_globals, local_vars)
+            exec(code_to_execute, safe_globals, local_vars)
 
-        # Capture the output from the buffer
         stdout_output = output_buffer.getvalue()
 
-        logger.info(f"Execution output captured (bytes={len(stdout_output)})", extra={"mode": "code"})
-
-
-        # Write the final state to the result.json file
-        final_state = {"output": stdout_output, "status": "completed"}
+        final_state = {
+            "output": stdout_output,
+            "status": "completed"
+        }
         with open(OUTPUTS_DIR / "result.json", "w") as f:
-            json.dump(final_state, f)
+            json.dump(final_state, f, default=str)
 
-        # Write the stdout to a plain text file as an artifact
         with open(OUTPUTS_DIR / "test_output.txt", "w") as f:
             f.write(stdout_output)
 
@@ -239,22 +308,21 @@ def execute_notebook_mode(notebook_file_path: str, parameters: Dict[str, Any], o
         raise
 
 
-def collect_artifacts(output_paths: List[str]) -> List[Dict[str, Any]]:
-    """Gathers metadata for output files from the sandbox."""
+def collect_artifacts() -> List[Dict[str, Any]]:
     artifacts = []
-    for p in output_paths:
-        file_path = WORK_DIR / p
-        if not _is_within_sandbox(file_path):
-            logger.warning(f"Skipping artifact outside sandbox: {file_path}")
-            continue
-        if file_path.exists() and file_path.is_file():
+    for p in OUTPUTS_DIR.glob("*"):
+        if p.is_file():
             artifacts.append({
-                "file_name": file_path.name,
-                "relative_path": p,
-                "size_bytes": file_path.stat().st_size
+                "file_name": p.name,
+                "relative_path": f"outputs/{p.name}",
+                "size_bytes": p.stat().st_size,
             })
     return artifacts
 
 
 if __name__ == "__main__":
     main()
+
+
+
+#22

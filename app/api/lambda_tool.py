@@ -120,7 +120,7 @@ async def stream_lambda_logs(
                     "message": log.message,
                     "details": log.details
                 }
-                await websocket.send_text(json.dumps({"log": json.dumps(log_entry)}))
+                await websocket.send_text(json.dumps({"log": log_entry}))
 
             await websocket.send_text(json.dumps({"done": True}))
 
