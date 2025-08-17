@@ -51,7 +51,7 @@ class LambdaTool(BaseTool):
         # 2) Submit job
         submit_url = f"{self.server_url}/api/v1/lambda/execute"
         try:
-            resp = requests.post(submit_url, headers=headers, data=payload.model_dump_json(), timeout=15)
+            resp = requests.post(submit_url, headers=headers, json=payload.model_dump(), timeout=15)
             resp.raise_for_status()
         except requests.RequestException as e:
             logger.error(f"LambdaTool submit error: {e}")
