@@ -256,7 +256,7 @@ def execute_code_mode(code: str):
         with redirect_stdout(output_buffer), redirect_stderr(output_buffer):
             exec(code_to_execute, safe_globals, local_vars)
 
-        stdout_output = output_buffer.getvalue()
+        stdout_output = output_buffer.getvalue().strip()
 
         final_state = {
             "output": stdout_output,
