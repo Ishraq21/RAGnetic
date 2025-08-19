@@ -176,8 +176,12 @@ def execute_code_mode(code: str):
     try:
         tree = ast.parse(code, mode="exec")
         if tree.body and isinstance(tree.body[-1], ast.Expr):
-            expression_source = ast.unparse(tree.body[-1].value)
-            code_to_execute = code + f"\nprint({expression_source})"
+            last_expr = tree.body[-1].value
+            if not (isinstance(last_expr, ast.Call) and getattr(last_expr.func, "id", None) == "print"):
+                expression_source = ast.unparse(last_expr)
+                code_to_execute = code + f"\nprint({expression_source})"
+            else:
+                code_to_execute = code
         else:
             code_to_execute = code
     except Exception as e:
