@@ -15,7 +15,19 @@ class LambdaNetworkPolicy(BaseModel):
 class LambdaInputFile(BaseModel):
     temp_doc_id: str
     file_name: str
-    path_in_sandbox: Optional[str] = Field(None, description="The path where the file will be mounted in the sandbox.")
+    path_in_sandbox: Optional[str] = Field(
+        None,
+        description="The path where the file will be mounted in the sandbox."
+    )
+
+    # 🔹 Enriched metadata for robust staging
+    original_name: Optional[str] = None
+    user_id: Optional[int] = None
+    thread_id: Optional[str] = None
+    file_path: Optional[str] = Field(
+        None,
+        description="Absolute path on the host where the original file is stored (if still present)."
+    )
 
 class LambdaRequestPayload(BaseModel):
     mode: str = Field(..., description="Execution mode: 'code', 'function', or 'notebook'.")
@@ -27,3 +39,6 @@ class LambdaRequestPayload(BaseModel):
     resource_spec: LambdaResourceSpec = Field(default_factory=LambdaResourceSpec)
     network_policy: LambdaNetworkPolicy = Field(default_factory=LambdaNetworkPolicy)
     ttl_seconds: int = Field(3600, description="Time-to-live for the run and artifacts.")
+    user_id: Optional[int] = None
+    thread_id: Optional[str] = None
+    function_source: Optional[str] = None
