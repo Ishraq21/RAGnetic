@@ -86,19 +86,11 @@ class LocalDockerExecutor:
             logger.info(f"Cleaned up workspace for run {run_id}.")
 
     def _prepare_workspace(self, workspace_dir: Path, run_id: str, payload: LambdaRequestPayload):
+
         request_file_path = workspace_dir / "request.json"
         with open(request_file_path, "w") as f:
             f.write(payload.model_dump_json(indent=2))
-        logger.info(f"Prepared request.json for run {run_id}.")
-
-        for input_file in payload.inputs:
-            self.file_service.stage_input_file(
-                temp_doc_id=input_file.temp_doc_id,
-                user_id=payload.user_id,
-                thread_id=payload.thread_id,
-                run_id=run_id,
-                file_name=input_file.file_name
-            )
+        logger.info(f"Prepared request.json for run {run_id} (inputs already pre-staged).")
 
     async def _run_container(self, run_id: str, workspace_dir: Path, payload: LambdaRequestPayload):
         image_name = "ragnetic-lambda:py310-cpu"
@@ -242,11 +234,31 @@ class LocalDockerExecutor:
 
     async def _process_output(self, run_id: str, workspace_dir: Path):
         """
-        Analyzes the output of the sandbox run and updates the database.
+        Collects all outputs from the sandbox run:
+        - Copies everything in /work/outputs back into host outputs dir.
+        - Updates DB with result.json or error.json if present.
         """
         try:
+            output_dir = workspace_dir / "outputs"
+            host_output_dir = _LAMBDA_RUNS_DIR / run_id / "outputs"
+            host_output_dir.mkdir(parents=True, exist_ok=True)
+
+            # 1. Copy all files from container outputs → host outputs
+            if output_dir.exists():
+                for item in output_dir.iterdir():
+                    dest = host_output_dir / item.name
+                    try:
+                        if item.is_file():
+                            shutil.copy(item, dest)
+                        elif item.is_dir():
+                            shutil.copytree(item, dest, dirs_exist_ok=True)
+                    except Exception as e:
+                        logger.warning(f"Failed to copy output {item} for run {run_id}: {e}")
+
+            # 2. Process result/error JSON to update DB state
             await self._save_final_state(run_id, workspace_dir)
-            logger.info(f"Lambda run '{run_id}' completed successfully. Output processed.")
+
+            logger.info(f"Lambda run '{run_id}' completed successfully. Outputs staged to {host_output_dir}.")
         except Exception as e:
             logger.error(f"Error processing output for run {run_id}: {e}", exc_info=True)
             async with get_async_db_session() as db:

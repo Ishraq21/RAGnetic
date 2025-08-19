@@ -28,23 +28,40 @@ class FileService:
         self.base_dir = _LAMBDA_RUNS_DIR
         self.upload_dir = _TEMP_CHAT_UPLOADS_DIR
 
-    def stage_input_file(self, temp_doc_id: str, user_id: int, thread_id: str, run_id: str, file_name: str) -> Path:
+    def stage_input_file(
+            self,
+            temp_doc_id: str,
+            user_id: int,
+            thread_id: str,
+            run_id: str,
+            file_name: str
+    ) -> Dict[str, str]:
         """
-        Copies a source file (from a user upload) to the specific run's input directory.
-        Returns the path to the staged file.
+        Copies a source file (from a user upload) to the run's input dir,
+        and returns both host + sandbox paths.
         """
+        # 1. Build the path to the original uploaded file
         original_file_path = self.upload_dir / str(user_id) / thread_id / f"{temp_doc_id}_{file_name}"
         if not original_file_path.exists():
             raise FileNotFoundError(f"Original temporary file not found for ID: {temp_doc_id}")
 
+        # 2. Build the path for the new staged file in the run-specific directory
         run_input_dir = self.base_dir / run_id / "inputs"
         run_input_dir.mkdir(parents=True, exist_ok=True)
 
-        destination_path = run_input_dir / file_name
+        staged_name = f"{temp_doc_id}_{file_name}"
+        destination_path = run_input_dir / staged_name
+
+        # 3. Perform the copy operation
         shutil.copy(original_file_path, destination_path)
         logger.info(f"Staged input file from {original_file_path} to {destination_path}")
-        return destination_path
 
+        # 4. Return the metadata including the sandbox path
+        return {
+            "host_path": str(destination_path),
+            "sandbox_path": f"/work/inputs/{staged_name}",
+        }
+#22
     def cleanup_run_data(self, run_id: str):
         """
         Removes the entire directory for a finished or failed run.
