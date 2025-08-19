@@ -10,7 +10,7 @@ WORKDIR /home/sandbox-user
 
 # Install core dependencies. Add others as needed.
 RUN pip install --no-cache-dir \
-    pandas numpy scikit-learn requests pyarrow fastapi uvicorn matplotlib seaborn jsonschema papermill textblob
+    pandas numpy scikit-learn requests pyarrow fastapi uvicorn matplotlib seaborn jsonschema papermill textblob seaborn
 
 # Preload NLTK corpora required by TextBlob
 RUN python -m textblob.download_corpora

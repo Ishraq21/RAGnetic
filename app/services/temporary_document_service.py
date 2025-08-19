@@ -10,7 +10,7 @@ import asyncio
 import filetype
 
 from fastapi import UploadFile
-from sqlalchemy import select
+from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
@@ -18,6 +18,7 @@ from app.core.config import get_path_settings
 from app.core.embed_config import get_embedding_model
 from app.core.parsing_utils import parse_document_to_chunks
 from app.agents.config_manager import AgentConfig
+from app.db import get_async_db_session
 from app.db.dao import create_document_chunk, create_temp_document, delete_temp_document_data
 from app.db.models import temporary_documents_table
 from app.schemas.agent import DocumentMetadata
@@ -282,5 +283,48 @@ class TemporaryDocumentService:
 
         logger.info(f"Finished cleanup for user {user_id} and thread {thread_id}.")
 
+    def get_latest_by_filename(self, file_name: str) -> Dict[str, Any]:
+        """
+        Look up the most recent temp_doc by original filename.
+        Safe in both sync + threaded contexts (e.g., LangChain tools).
+        Returns enriched metadata including file path for FileService.
+        """
+
+        async def _fetch():
+            async with get_async_db_session() as db:
+                stmt = (
+                    select(temporary_documents_table)
+                    .where(temporary_documents_table.c.original_name == file_name)
+                    .order_by(desc(temporary_documents_table.c.created_at))
+                    .limit(1)
+                )
+                result = await db.execute(stmt)
+                row = result.mappings().first()
+                if not row:
+                    return None
+
+                # Build original path (where process_and_store_temp_document saved the file)
+                user_id = row["user_id"]
+                thread_id = row["thread_id"]
+                temp_doc_id = row["temp_doc_id"]
+                original_name = row["original_name"]
+                file_path = (
+                        _TEMP_CHAT_UPLOADS_DIR / str(user_id) / thread_id / f"{temp_doc_id}_{original_name}"
+                )
+
+                return {
+                    "temp_doc_id": temp_doc_id,
+                    "original_name": original_name,
+                    "user_id": user_id,
+                    "thread_id": thread_id,
+                    "file_path": str(file_path),
+                }
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(_fetch())
+        else:
+            return loop.run_until_complete(_fetch())
 
 #22

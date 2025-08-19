@@ -367,7 +367,10 @@ lambda_runs = Table(
     Column("start_time", DateTime, default=utc_timestamp, nullable=False),
     Column("end_time", DateTime, nullable=True),
     Column("error_message", Text, nullable=True),
-    Column("logs", Text, nullable=True) # Could be a JSON array of log lines
+    Column("logs", Text, nullable=True),
+    Column("thread_id", String(255), ForeignKey("chat_sessions.thread_id", ondelete="CASCADE"), index=True),  # NEW
+
+
 )
 
 lambda_artifacts = Table(

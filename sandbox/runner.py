@@ -27,7 +27,7 @@ REQUEST_FILE = WORK_DIR / "request.json"
 SANDBOX_ROOT = WORK_DIR
 
 ALLOWED_MODULES = {
-    "math", "statistics", "random", "numpy", "pandas", "matplotlib", "textblob", "csv", "re"
+    "math", "statistics", "random", "numpy", "pandas", "matplotlib", "textblob", "csv", "re", "seaborn"
 }
 
 os.environ.setdefault("MPLBACKEND", "Agg")
