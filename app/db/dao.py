@@ -19,7 +19,7 @@ from app.db.models import chat_messages_table
 from uuid import uuid4
 from sqlalchemy import func
 from app.schemas.security import RoleCreate
-from app.db.models import lambda_runs, lambda_artifacts
+from app.db.models import lambda_runs
 
 
 logger = logging.getLogger("ragnetic")
@@ -845,12 +845,6 @@ async def get_lambda_run(db: AsyncSession, run_id: str) -> Optional[Dict[str, An
         return None
 
     run_dict = dict(run_row)
-
-    # Fetch associated artifacts
-    artifact_stmt = select(lambda_artifacts).where(lambda_artifacts.c.lambda_run_id == run_row.id)
-    artifact_rows = (await db.execute(artifact_stmt)).mappings().all()
-    run_dict['artifacts'] = [dict(r) for r in artifact_rows]
-
     return run_dict
 
 
@@ -868,24 +862,3 @@ async def update_lambda_run_status(db: AsyncSession, run_id: str, status: str,
     await db.execute(stmt)
     await db.commit()
 
-async def create_lambda_artifact(db: AsyncSession, lambda_run_id: int, file_name: str, size_bytes: int,
-                                 mime_type: Optional[str] = None, signed_url: Optional[str] = None) -> Dict[str, Any]:
-    """Creates a new Lambda artifact record."""
-    stmt = insert(lambda_artifacts).values(
-        lambda_run_id=lambda_run_id,
-        file_name=file_name,
-        size_bytes=size_bytes,
-        mime_type=mime_type,
-        signed_url=signed_url,
-        created_at=datetime.utcnow()
-    ).returning(*lambda_artifacts.c)
-    row = (await db.execute(stmt)).mappings().first()
-    await db.commit()
-    return dict(row)
-
-
-async def list_lambda_artifacts(db: AsyncSession, lambda_run_id: int) -> List[Dict[str, Any]]:
-    """Retrieves all artifacts associated with a specific Lambda run ID."""
-    stmt = select(lambda_artifacts).where(lambda_artifacts.c.lambda_run_id == lambda_run_id)
-    rows = (await db.execute(stmt)).mappings().all()
-    return [dict(r) for r in rows]

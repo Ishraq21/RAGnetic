@@ -373,17 +373,6 @@ lambda_runs = Table(
 
 )
 
-lambda_artifacts = Table(
-    "lambda_artifacts",
-    metadata,
-    Column("id", Integer, primary_key=True),
-    Column("lambda_run_id", Integer, ForeignKey("lambda_runs.id", ondelete="CASCADE"), nullable=False, index=True),
-    Column("file_name", String(255), nullable=False),
-    Column("mime_type", String(255), nullable=True),
-    Column("size_bytes", BigInteger, nullable=False),
-    Column("signed_url", Text, nullable=True),
-    Column("created_at", DateTime, default=utc_timestamp, nullable=False)
-)
 
 
 # --- Indexes for Performance ---

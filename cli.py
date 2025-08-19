@@ -3584,7 +3584,6 @@ def test_lambda_tool(
     test_payload = LambdaRequestPayload(
         mode="code",
         code=code,
-        output_artifacts=["outputs/test_output.txt"],
         resource_spec=LambdaResourceSpec(cpu="1", memory_gb=1),
     )
 
@@ -3610,17 +3609,13 @@ def test_lambda_tool(
                 typer.secho(f"\nJob finished with status: {run_status.upper()}", bold=True,
                             fg=typer.colors.GREEN if run_status == "completed" else typer.colors.RED)
 
-                # Display final state and artifacts
+                # Display final state
                 run_details = status_response.json()
                 if run_details.get("final_state"):
                     typer.secho("\n--- Final Output ---", bold=True)
                     typer.echo(json.dumps(run_details["final_state"], indent=2))
 
-                if run_details.get("artifacts"):
-                    typer.secho("\n--- Artifacts ---", bold=True)
-                    for artifact in run_details["artifacts"]:
-                        typer.echo(f"  - {artifact['file_name']} ({artifact['size_bytes']} bytes)")
-                        typer.secho(f"    Download URL: {artifact['signed_url']}", fg=typer.colors.BLUE)
+
 
                 return  # Exit successfully
 
@@ -3639,7 +3634,7 @@ def inspect_lambda_run(
     run_id: str = typer.Argument(..., help="The unique ID of the LambdaTool run to inspect.")
 ):
     """
-    Fetches and displays the details for a single LambdaTool run, including logs and artifacts.
+    Fetches and displays the details for a single LambdaTool run, including logs.
     """
     server_url = _get_server_url()
     api_key = _get_api_key_for_cli()
@@ -3657,7 +3652,7 @@ def inspect_lambda_run(
         response.raise_for_status()
         run_data = response.json()
 
-        typer.secho("\n--- LambdaTool Run Details ---", bold=True)
+        typer.secho("\nLambdaTool Run Details:", bold=True)
         typer.echo(f"  Run ID: {typer.style(run_data.get('run_id'), fg=typer.colors.CYAN)}")
         typer.echo(f"  Status: {typer.style(run_data.get('status', 'N/A'), fg=typer.colors.GREEN if run_data.get('status') == 'completed' else typer.colors.RED)}")
         typer.echo(f"  User ID: {run_data.get('user_id', 'N/A')}")
@@ -3666,19 +3661,12 @@ def inspect_lambda_run(
         typer.echo(f"  Error Message: {run_data.get('error_message', 'None')}")
 
         if run_data.get('initial_request'):
-            typer.secho("\n--- Initial Request ---", bold=True, fg=typer.colors.MAGENTA)
+            typer.secho("\nInitial Request:", bold=True, fg=typer.colors.MAGENTA)
             typer.echo(json.dumps(run_data['initial_request'], indent=2))
 
         if run_data.get('final_state'):
-            typer.secho("\n--- Final State ---", bold=True, fg=typer.colors.GREEN)
+            typer.secho("\nFinal State:", bold=True, fg=typer.colors.GREEN)
             typer.echo(json.dumps(run_data['final_state'], indent=2))
-
-        if run_data.get('artifacts'):
-            typer.secho("\n--- Artifacts ---", bold=True, fg=typer.colors.YELLOW)
-            for artifact in run_data['artifacts']:
-                typer.echo(f"  - File: {artifact.get('file_name')}")
-                typer.echo(f"    Size: {artifact.get('size_bytes')} bytes")
-                typer.echo(f"    URL: {artifact.get('signed_url')}")
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:

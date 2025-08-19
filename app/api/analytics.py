@@ -14,7 +14,7 @@ from sqlalchemy import select, func, join, and_
 
 from app.db import get_db
 from app.db.models import conversation_metrics_table, chat_sessions_table, users_table, citations_table, \
-    chat_messages_table, document_chunks_table, lambda_runs, lambda_artifacts
+    chat_messages_table, document_chunks_table, lambda_runs
 from app.core.security import PermissionChecker
 from app.schemas.security import User
 from pydantic import BaseModel, Field
@@ -860,7 +860,7 @@ class LambdaRunSummaryEntry(BaseModel):
     duration_s: Optional[float]
     error_message: Optional[str]
     mode: str
-    total_artifacts: int
+    total_outputs: int
 
     class Config:
         from_attributes = True
@@ -878,6 +878,20 @@ async def get_lambda_runs_summary(
     Requires: 'analytics:read_lambda_runs' permission.
     """
     try:
+        # dialect-safe extraction for mode + outputs length
+        if db.bind.dialect.name == "sqlite":
+            mode_col = func.json_extract(lambda_runs.c.initial_request, '$.mode').label("mode")
+            outputs_len = func.coalesce(
+                func.json_array_length(func.json_extract(lambda_runs.c.final_state, '$.outputs')),
+                0
+            ).label("total_outputs")
+        else:  # Postgres
+            mode_col = lambda_runs.c.initial_request.op('->>')('mode').label("mode")
+            outputs_len = func.coalesce(
+                func.jsonb_array_length(lambda_runs.c.final_state['outputs']),
+                0
+            ).label("total_outputs")
+
         stmt = select(
             lambda_runs.c.run_id,
             lambda_runs.c.status,
@@ -885,22 +899,14 @@ async def get_lambda_runs_summary(
             lambda_runs.c.start_time,
             lambda_runs.c.end_time,
             lambda_runs.c.error_message,
-            lambda_runs.c.initial_request.op('->>')('mode').label('mode'),
-            func.count(lambda_artifacts.c.id).label('total_artifacts')
-        ).outerjoin(
-            lambda_artifacts, lambda_runs.c.id == lambda_artifacts.c.lambda_run_id
-        ).group_by(
-            lambda_runs.c.id
+            mode_col,
+            outputs_len
         ).order_by(
             lambda_runs.c.start_time.desc()
         ).limit(limit)
 
-        filters = []
         if status:
-            filters.append(lambda_runs.c.status == status)
-
-        if filters:
-            stmt = stmt.where(*filters)
+            stmt = stmt.where(lambda_runs.c.status == status)
 
         result = await db.execute(stmt)
         rows = result.fetchall()
@@ -917,9 +923,8 @@ async def get_lambda_runs_summary(
                 duration_s=duration_s,
                 error_message=row.error_message,
                 mode=row.mode,
-                total_artifacts=row.total_artifacts
+                total_outputs=row.total_outputs
             ))
-
         return summary_list
 
     except Exception as e:
@@ -928,23 +933,45 @@ async def get_lambda_runs_summary(
                             detail="Could not retrieve LambdaTool run summary.")
 
 
-@router.get("/lambda-runs/{run_id}/artifacts/{file_name}")
-async def get_lambda_run_artifact(
+
+@router.get("/lambda-runs/{run_id}/outputs/{file_name}")
+async def get_lambda_run_output(
     run_id: str = Path(..., description="The ID of the LambdaTool run."),
-    file_name: str = Path(..., description="The name of the artifact file."),
-    current_user: User = Depends(PermissionChecker(["analytics:read_lambda_artifacts"])),
+    file_name: str = Path(..., description="The name of the output file."),
+    current_user: User = Depends(PermissionChecker(["analytics:read_lambda_outputs"])),
+    db: AsyncSession = Depends(get_db),
 ):
     """
-    Serves a specific artifact file from a completed LambdaTool run.
-    Requires: 'analytics:read_lambda_artifacts' permission.
+    Serves a specific output file from a **completed** LambdaTool run.
+    Requires: 'analytics:read_lambda_outputs' permission.
     """
     try:
+        # 1. Check run status first
+        stmt = select(lambda_runs.c.status).where(lambda_runs.c.run_id == run_id)
+        result = await db.execute(stmt)
+        run_row = result.first()
+        if not run_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
+
+        if run_row.status != "completed":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Run {run_id} is not yet completed (status={run_row.status})."
+            )
+
+        # 2. Locate file on disk
         file_service = FileService()
-        file_path = file_service.get_file_for_download(run_id, file_name)
+        file_path = file_service.get_result_file(run_id, file_name)
 
         return FileResponse(file_path, filename=file_name)
+
     except FileNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"API: Failed to serve artifact for run {run_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not retrieve artifact.")
+        logger.error(f"API: Failed to serve output for run {run_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not retrieve output file."
+        )

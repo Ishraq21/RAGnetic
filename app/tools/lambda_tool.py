@@ -135,16 +135,15 @@ class LambdaTool(BaseTool):
             status = data.get("status")
             if status in ("completed", "failed"):
                 final_state = data.get("final_state") or {}
-                artifacts = data.get("artifacts") or []
                 error_msg = data.get("error_message")
 
                 if status == "failed":
                     structured_msg = (
-                        final_state.get("message")
-                        or (
-                            final_state.get("error_type")
-                            and final_state.get("traceback")
-                        )
+                            final_state.get("message")
+                            or (
+                                    final_state.get("error_type")
+                                    and final_state.get("traceback")
+                            )
                     )
                     msg = structured_msg or error_msg or "Unknown error."
                     return f"Sandbox run **failed** (run_id={run_id}).\n\n{msg}"
@@ -152,8 +151,8 @@ class LambdaTool(BaseTool):
                 output_str = None
                 if isinstance(final_state, dict):
                     output_str = (
-                        final_state.get("output")
-                        or final_state.get("result")
+                            final_state.get("output")
+                            or final_state.get("result")
                     )
                 if isinstance(output_str, dict):
                     output_str = json.dumps(output_str, indent=2)
@@ -166,14 +165,6 @@ class LambdaTool(BaseTool):
                 else:
                     lines.append("\n**Final State**:\n")
                     lines.append("```json\n" + json.dumps(final_state, indent=2) + "\n```")
-
-                if artifacts:
-                    lines.append("\n**Artifacts**:")
-                    for a in artifacts:
-                        name = a.get("file_name", "artifact")
-                        size = a.get("size_bytes", "?")
-                        url = a.get("signed_url", "")
-                        lines.append(f"- {name} ({size} bytes) {url}")
 
                 return "\n".join(lines)
 

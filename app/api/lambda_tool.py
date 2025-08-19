@@ -90,7 +90,7 @@ async def get_lambda_run_details(
         user: User = Depends(PermissionChecker(["lambda:read_run_details"])),
 ):
     """
-    Retrieves the status, logs, and artifacts of a LambdaTool run.
+    Retrieves the status and final state of a LambdaTool run.
     Requires 'lambda:read_run_details' permission.
     """
     run_data = await get_lambda_run(db, run_id)

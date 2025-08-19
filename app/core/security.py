@@ -209,7 +209,6 @@ class PermissionChecker:
                 "lambda:execute",
                 "lambda:read_run_details",
                 "analytics:read_lambda_runs",
-                "analytics:read_lambda_artifacts",
 
                 # Other admin permissions
                 "read:workflows", "create:workflows", "update:workflows", "delete:workflows",
@@ -223,7 +222,6 @@ class PermissionChecker:
                 "lambda:execute",
                 "lambda:read_run_details",
                 "analytics:read_lambda_runs",
-                "analytics:read_lambda_artifacts",
 
                 # Other editor permissions
                 "read:workflows", "create:workflows", "update:workflows",
@@ -232,7 +230,6 @@ class PermissionChecker:
             "viewer": [
                 "lambda:read_run_details",
                 "analytics:read_lambda_runs",
-                "analytics:read_lambda_artifacts",
 
                 # Other viewer permissions
                 "read:workflows",
