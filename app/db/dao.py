@@ -822,8 +822,19 @@ async def list_temp_documents_for_user_thread(
     return [dict(r) for r in rows]
 
 
-async def create_lambda_run(db: AsyncSession, user_id: int, thread_id: str, payload: str) -> Dict[str, Any]:
-    run_id = str(uuid4())
+async def create_lambda_run(
+    db: AsyncSession,
+    user_id: int,
+    thread_id: str,
+    payload: str,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Creates a new lambda run record. If run_id is provided (e.g. staged earlier),
+    it will be used. Otherwise a new one is generated.
+    """
+    run_id = run_id or str(uuid4())
+
     stmt = insert(lambda_runs).values(
         run_id=run_id,
         user_id=user_id,
@@ -832,9 +843,11 @@ async def create_lambda_run(db: AsyncSession, user_id: int, thread_id: str, payl
         start_time=datetime.utcnow(),
         status="pending"
     ).returning(*lambda_runs.c)
+
     row = (await db.execute(stmt)).mappings().first()
     await db.commit()
     return dict(row)
+
 
 
 async def get_lambda_run(db: AsyncSession, run_id: str) -> Optional[Dict[str, Any]]:
@@ -862,3 +875,16 @@ async def update_lambda_run_status(db: AsyncSession, run_id: str, status: str,
     await db.execute(stmt)
     await db.commit()
 
+
+def get_temp_docs_metadata(conn, temp_doc_ids: list[str]):
+    query = (
+        select(
+            temporary_documents_table.c.temp_doc_id,
+            temporary_documents_table.c.original_name.label("file_name"),
+            temporary_documents_table.c.user_id,
+            temporary_documents_table.c.thread_id,
+        )
+        .where(temporary_documents_table.c.temp_doc_id.in_(temp_doc_ids))
+    )
+    result = conn.execute(query)
+    return [dict(row) for row in result]

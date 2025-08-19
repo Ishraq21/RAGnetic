@@ -26,9 +26,9 @@ router = APIRouter(prefix="/api/v1/lambda", tags=["LambdaTool"])
 
 @router.post("/execute", status_code=status.HTTP_202_ACCEPTED)
 async def execute_lambda_code(
-    payload: LambdaRequestPayload,
-    user: User = Depends(PermissionChecker(["lambda:execute"])),
-    db: AsyncSession = Depends(get_db),
+        payload: LambdaRequestPayload,
+        user: User = Depends(PermissionChecker(["lambda:execute"])),
+        db: AsyncSession = Depends(get_db),
 ):
     """
     Submit a LambdaTool job for execution inside the sandbox (via Celery worker).
@@ -36,11 +36,12 @@ async def execute_lambda_code(
     try:
         from app.executors.docker_executor import run_lambda_job_task
 
+        # Always enforce user_id
         payload.user_id = user.id
 
+        # ✅ Guarantee thread_id exists
         if not payload.thread_id:
             new_thread_id = str(uuid.uuid4())
-
             agent_config = AgentConfig(name="lambda_tool", description="Lambda execution agent")
             agent_name = agent_config.name
 
@@ -55,26 +56,32 @@ async def execute_lambda_code(
                 )
                 .returning(chat_sessions_table.c.thread_id)
             )
-
             result = await db.execute(insert_stmt)
             payload.thread_id = result.scalar_one()
             await db.commit()
 
-        # Save run record
+        # Use the run_id from the payload (provided by the tool)
+        # and ensure it's set if not provided.
+        if not getattr(payload, "run_id", None):
+            payload.run_id = str(uuid.uuid4())
+
+        # Save run record in DB
+        # Pass the pre-generated run_id directly
         run_record = await create_lambda_run(
             db,
+            run_id=payload.run_id,
             user_id=user.id,
             thread_id=payload.thread_id,
             payload=payload.model_dump_json(),
         )
-        run_id = run_record["run_id"]
 
         # Dispatch job to Celery worker
+        # Use the same run_id for the job payload
         job_payload = payload.model_dump()
-        job_payload["run_id"] = run_id
         run_lambda_job_task.delay(job_payload)
 
-        return {"run_id": run_id, "thread_id": payload.thread_id, "status": "dispatched"}
+        # Return the same run_id for the client to poll on
+        return {"run_id": payload.run_id, "thread_id": payload.thread_id, "status": "dispatched"}
 
     except Exception as e:
         logger.error(f"Failed to submit LambdaTool job: {e}", exc_info=True)
@@ -82,6 +89,7 @@ async def execute_lambda_code(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to submit job: {e}",
         )
+#22
 
 @router.get("/runs/{run_id}")
 async def get_lambda_run_details(

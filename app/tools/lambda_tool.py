@@ -2,12 +2,14 @@ import os
 import time
 import json
 import logging
+import uuid
 from typing import List, Dict, Any, ClassVar, Type
 
 import requests
 from pydantic import BaseModel, Field
 from langchain_core.tools import BaseTool
 
+from app.services.file_service import FileService
 from app.services.temporary_document_service import TemporaryDocumentService
 from app.schemas.lambda_tool import LambdaRequestPayload
 from app.core.config import get_server_api_keys
@@ -43,57 +45,71 @@ class LambdaTool(BaseTool):
     args_schema: ClassVar[Type[BaseModel]] = LambdaRequestPayload
 
     def _run(self, **tool_input: Any) -> str:
-        """Validate payload, submit job to the server, and poll for results."""
+        """Validate payload, stage input files, submit job, and poll for results."""
         try:
             raw_payload = dict(tool_input)
+            file_service = FileService()
+            run_id = str(uuid.uuid4())
+            thread_id = raw_payload.get("thread_id") or str(uuid.uuid4())
+            raw_payload["thread_id"] = thread_id
+            raw_payload["run_id"] = run_id
 
-            # Normalize inputs: map filenames → UUID temp_doc_ids
-            inputs: List[Dict[str, Any]] = []
-            SUPPORTED_DATA_EXTS = (
-                ".csv", ".tsv", ".txt",
-                ".xls", ".xlsx", ".parquet", ".json",
-            )
+            staged_inputs: List[Dict[str, Any]] = []
+            svc = TemporaryDocumentService(agent_config=AgentConfig(name="lambda_tool", description="Internal agent"))
+
+            staged_file_path = None
 
             for f in raw_payload.get("inputs", []):
-                temp_id, fname = None, None
+                fname = f.get("file_name") if isinstance(f, dict) else getattr(f, "file_name", None)
 
-                if hasattr(f, "temp_doc_id"):  # Pydantic object
-                    temp_id = f.temp_doc_id
-                    fname = getattr(f, "file_name", None)
-                elif isinstance(f, dict):
-                    temp_id = f.get("temp_doc_id")
-                    fname = f.get("file_name")
+                if not fname:
+                    staged_inputs.append(f)
+                    continue
 
-                if temp_id and fname and fname.lower().endswith(SUPPORTED_DATA_EXTS):
-                    agent_config = AgentConfig(
-                        name="lambda_tool",
-                        description="Internal agent for lambda tool",
-                    )
-                    svc = TemporaryDocumentService(agent_config=agent_config)
+                record = svc.get_latest_by_filename(fname)
+                if not record:
+                    raise ValueError(f"No temporary document found for filename {fname}")
 
-                    record = svc.get_latest_by_filename(fname)
-                    if not record:
-                        raise ValueError(f"No temporary document found for filename {fname}")
+                temp_id = record["temp_doc_id"]
+                user_id = record["user_id"]
+                thread_id = record["thread_id"]
 
-                    inputs.append(
-                        {
-                            "temp_doc_id": record["temp_doc_id"],
-                            "file_name": fname,
-                        }
-                    )
-                elif temp_id or fname:
-                    inputs.append({"temp_doc_id": temp_id, "file_name": fname})
+                staged_info = file_service.stage_input_file(
+                    temp_doc_id=temp_id,
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    file_name=fname,
+                )
 
-            raw_payload["inputs"] = inputs
+                staged_file_path = staged_info["sandbox_path"]
+
+                staged_inputs.append({
+                    "temp_doc_id": temp_id,
+                    "file_name": fname,
+                    "path_in_sandbox": staged_file_path,
+                    "original_name": fname,
+                    "user_id": user_id,
+                    "thread_id": thread_id,
+                })
+
+            raw_payload["inputs"] = staged_inputs
+
+            # Check for the existence of the 'payload' key before accessing it.
+            # This makes the code more resilient to inconsistent AI model payloads.
+            if raw_payload.get("mode") == "code" and raw_payload.get("payload") and staged_file_path:
+                raw_payload["payload"]["code"] = raw_payload["payload"]["code"].replace(
+                    f"open('{fname}'",
+                    f"open('{staged_file_path}'"
+                )
+
             payload = LambdaRequestPayload(**raw_payload)
-
         except Exception as e:
-            logger.error(f"Invalid LambdaTool payload: {e}")
+            logger.error(f"Invalid LambdaTool payload: {e}", exc_info=True)
             return f"LambdaTool: invalid payload. {e}"
 
         if not self.api_keys:
             return "LambdaTool: no server API key configured."
-
         headers = {
             "Content-Type": "application/json",
             "X-API-Key": self.api_keys[0],
@@ -110,14 +126,14 @@ class LambdaTool(BaseTool):
             )
             resp.raise_for_status()
         except requests.RequestException as e:
-            logger.error(f"LambdaTool submit error: {e}")
+            logger.error(f"LambdaTool submit error: {e}", exc_info=True)
             return f"LambdaTool: failed to submit job. {e}"
 
         run_id = (resp.json() or {}).get("run_id")
         if not run_id:
             return "LambdaTool: submission succeeded but no run_id was returned."
 
-        # 3) Poll for completion (quick, bounded wait)
+        # 3) Poll for completion...
         wait_secs = int(os.getenv("LAMBDA_TOOL_WAIT_SECONDS", "30"))
         get_url = f"{self.server_url}/api/v1/lambda/runs/{run_id}"
         deadline = time.time() + wait_secs
@@ -168,7 +184,6 @@ class LambdaTool(BaseTool):
 
                 return "\n".join(lines)
 
-        # 4) Timed out waiting → fall back to “submitted”
         return (
             f"Job submitted (run_id={run_id}) and still running after {wait_secs}s. "
             f"Check status later or increase LAMBDA_TOOL_WAIT_SECONDS."

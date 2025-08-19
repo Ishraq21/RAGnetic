@@ -20,7 +20,6 @@ class LambdaInputFile(BaseModel):
         description="The path where the file will be mounted in the sandbox."
     )
 
-    # 🔹 Enriched metadata for robust staging
     original_name: Optional[str] = None
     user_id: Optional[int] = None
     thread_id: Optional[str] = None
@@ -45,3 +44,9 @@ class LambdaRequestPayload(BaseModel):
     user_id: Optional[int] = None
     thread_id: Optional[str] = None
     function_source: Optional[str] = None
+
+    run_id: Optional[str] = Field(
+        None,
+        description="Unique run identifier. If not provided, the server will generate one."
+    )
+
