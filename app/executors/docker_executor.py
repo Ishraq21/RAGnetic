@@ -15,7 +15,7 @@ from docker.errors import ImageNotFound, ContainerError
 from sqlalchemy import insert
 
 from app.db import get_async_db_session, initialize_db_connections
-from app.db.dao import update_lambda_run_status, create_lambda_artifact, get_lambda_run
+from app.db.dao import update_lambda_run_status, get_lambda_run
 from app.db.models import ragnetic_logs_table
 from app.schemas.lambda_tool import LambdaRequestPayload
 from app.core.config import get_path_settings, get_memory_storage_config
@@ -215,12 +215,8 @@ class LocalDockerExecutor:
 
             await db.commit()
 
-    async def _save_artifacts_and_state(self, run_id: str, workspace_dir: Path):
-        """
-        Helper method to process and save all output data.
-        """
+    async def _save_final_state(self, run_id: str, workspace_dir: Path):
         output_dir = workspace_dir / "outputs"
-        final_state = {}
 
         async with get_async_db_session() as db:
             error_file = output_dir / "error.json"
@@ -236,42 +232,27 @@ class LocalDockerExecutor:
                 )
                 return
 
-            artifacts = []
-            artifacts_file = output_dir / "artifacts.json"
-            if artifacts_file.exists():
-                with open(artifacts_file, 'r') as f:
-                    artifacts = json.load(f)
-
+            final_state = {}
             result_file = output_dir / "result.json"
             if result_file.exists():
                 with open(result_file, 'r') as f:
                     final_state = json.load(f)
 
-            run_data = await get_lambda_run(db, run_id)
-            if run_data:
-                for artifact in artifacts:
-                    try:
-                        artifact_metadata = self.file_service.collect_artifact(run_id, artifact['relative_path'])
-                        await create_lambda_artifact(
-                            db,
-                            lambda_run_id=run_data["id"],
-                            file_name=artifact_metadata["file_name"],
-                            size_bytes=artifact_metadata["size_bytes"],
-                            mime_type=artifact_metadata["mime_type"],
-                            signed_url=artifact_metadata["signed_url"]
-                        )
-                    except Exception as e:
-                        logger.error(f"Error collecting artifact for run {run_id}: {e}")
             await update_lambda_run_status(db, run_id, "completed", final_state=final_state)
 
     async def _process_output(self, run_id: str, workspace_dir: Path):
         """
-        Analyzes the output of the sandbox run, collects artifacts, and updates the database.
+        Analyzes the output of the sandbox run and updates the database.
         """
         try:
-            await self._save_artifacts_and_state(run_id, workspace_dir)
+            await self._save_final_state(run_id, workspace_dir)
             logger.info(f"Lambda run '{run_id}' completed successfully. Output processed.")
         except Exception as e:
             logger.error(f"Error processing output for run {run_id}: {e}", exc_info=True)
             async with get_async_db_session() as db:
-                await update_lambda_run_status(db, run_id, "failed", error_message=f"Output processing failed: {e}")
+                await update_lambda_run_status(
+                    db,
+                    run_id,
+                    "failed",
+                    error_message=f"Output processing failed: {e}"
+                )

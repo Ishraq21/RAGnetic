@@ -22,7 +22,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.db.dao import create_chat_message
 from app.api.lambda_tool import router as lambda_tool_router
-from app.db.dao import create_lambda_run, get_lambda_run, list_lambda_artifacts, create_lambda_artifact
+from app.db.dao import create_lambda_run, get_lambda_run
 
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Depends, status, UploadFile, File

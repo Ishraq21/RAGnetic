@@ -35,7 +35,10 @@ class LambdaRequestPayload(BaseModel):
     function_name: Optional[str] = None
     function_args: Optional[Dict[str, Any]] = Field(default_factory=dict)
     inputs: List[LambdaInputFile] = Field(default_factory=list)
-    output_artifacts: Optional[List[str]] = Field(default_factory=list, description="List of file paths in the sandbox to collect as artifacts.")
+    outputs: Optional[List[str]] = Field(
+        default_factory=list,
+        description="List of file paths in the sandbox to collect as outputs."
+    )
     resource_spec: LambdaResourceSpec = Field(default_factory=LambdaResourceSpec)
     network_policy: LambdaNetworkPolicy = Field(default_factory=LambdaNetworkPolicy)
     ttl_seconds: int = Field(3600, description="Time-to-live for the run and artifacts.")
