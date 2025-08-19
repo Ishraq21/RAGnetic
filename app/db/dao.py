@@ -822,12 +822,12 @@ async def list_temp_documents_for_user_thread(
     return [dict(r) for r in rows]
 
 
-async def create_lambda_run(db: AsyncSession, user_id: int, payload: str) -> Dict[str, Any]:
-    """Creates a new Lambda run record in the database."""
+async def create_lambda_run(db: AsyncSession, user_id: int, thread_id: str, payload: str) -> Dict[str, Any]:
     run_id = str(uuid4())
     stmt = insert(lambda_runs).values(
         run_id=run_id,
         user_id=user_id,
+        thread_id=thread_id,
         initial_request=json.loads(payload),
         start_time=datetime.utcnow(),
         status="pending"

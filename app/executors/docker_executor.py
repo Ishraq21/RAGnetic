@@ -39,15 +39,13 @@ celery_app = Celery("lambda_executor", broker="redis://localhost:6379/0")
 
 
 @celery_app.task(name="lambda_executor.run_job")
-def run_lambda_job_task(run_id: str, payload: Dict[str, Any]):
-    """
-    Celery task that runs the Docker executor.
-    """
+def run_lambda_job_task(job_payload: Dict[str, Any]):
     conn_name = get_memory_storage_config().get("connection_name") or "ragnetic_db"
     initialize_db_connections(conn_name)
 
     executor = LocalDockerExecutor()
-    asyncio.run(executor.execute(run_id, payload))
+    run_id = job_payload["run_id"]
+    asyncio.run(executor.execute(run_id, job_payload))
 
 
 class LocalDockerExecutor:
@@ -77,7 +75,7 @@ class LocalDockerExecutor:
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            self._prepare_workspace(workspace_dir, run_payload)
+            self._prepare_workspace(workspace_dir, run_id, run_payload)
             await self._run_container(run_id, workspace_dir, run_payload)
         except Exception as e:
             logger.error(f"Execution failed for run {run_id}: {e}", exc_info=True)
@@ -87,22 +85,18 @@ class LocalDockerExecutor:
             shutil.rmtree(workspace_dir, ignore_errors=True)
             logger.info(f"Cleaned up workspace for run {run_id}.")
 
-    def _prepare_workspace(self, workspace_dir: Path, payload: LambdaRequestPayload):
-        """
-        Prepares the workspace directory with the execution request and input files.
-        This is where we'll use the FileService to stage user-uploaded files.
-        """
+    def _prepare_workspace(self, workspace_dir: Path, run_id: str, payload: LambdaRequestPayload):
         request_file_path = workspace_dir / "request.json"
         with open(request_file_path, "w") as f:
             f.write(payload.model_dump_json(indent=2))
-        logger.info(f"Prepared request.json for run.")
+        logger.info(f"Prepared request.json for run {run_id}.")
 
         for input_file in payload.inputs:
             self.file_service.stage_input_file(
                 temp_doc_id=input_file.temp_doc_id,
                 user_id=payload.user_id,
                 thread_id=payload.thread_id,
-                run_id=payload.run_id,
+                run_id=run_id,
                 file_name=input_file.file_name
             )
 

@@ -3,6 +3,8 @@ import asyncio
 import uuid
 import json
 import logging
+from sqlalchemy import insert
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from fastapi import APIRouter, HTTPException, Depends, status
@@ -12,7 +14,8 @@ from sqlalchemy import select, and_, asc
 
 from app.db import get_db, get_async_db_session
 from app.db.dao import create_lambda_run, get_lambda_run, get_user_by_id
-from app.db.models import ragnetic_logs_table
+from app.db.models import ragnetic_logs_table, chat_sessions_table
+from app.schemas.agent import AgentConfig
 from app.schemas.lambda_tool import LambdaRequestPayload
 from app.core.security import PermissionChecker, get_current_user_from_websocket
 from app.schemas.security import User
@@ -23,28 +26,62 @@ router = APIRouter(prefix="/api/v1/lambda", tags=["LambdaTool"])
 
 @router.post("/execute", status_code=status.HTTP_202_ACCEPTED)
 async def execute_lambda_code(
-        payload: LambdaRequestPayload,
-        user: User = Depends(PermissionChecker(["lambda:execute"])),
-        db: AsyncSession = Depends(get_db),
+    payload: LambdaRequestPayload,
+    user: User = Depends(PermissionChecker(["lambda:execute"])),
+    db: AsyncSession = Depends(get_db),
 ):
     """
-    Submits a new LambdaTool execution job to a background worker.
+    Submit a LambdaTool job for execution inside the sandbox (via Celery worker).
     """
     try:
         from app.executors.docker_executor import run_lambda_job_task
 
-        # The create_lambda_run function now requires a user_id
-        run_record = await create_lambda_run(db, user_id=user.id, payload=payload.model_dump_json())
+        payload.user_id = user.id
+
+        if not payload.thread_id:
+            new_thread_id = str(uuid.uuid4())
+
+            agent_config = AgentConfig(name="lambda_tool", description="Lambda execution agent")
+            agent_name = agent_config.name
+
+            insert_stmt = (
+                insert(chat_sessions_table)
+                .values(
+                    thread_id=new_thread_id,
+                    agent_name=agent_name,
+                    user_id=user.id,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+                .returning(chat_sessions_table.c.thread_id)
+            )
+
+            result = await db.execute(insert_stmt)
+            payload.thread_id = result.scalar_one()
+            await db.commit()
+
+        # Save run record
+        run_record = await create_lambda_run(
+            db,
+            user_id=user.id,
+            thread_id=payload.thread_id,
+            payload=payload.model_dump_json(),
+        )
         run_id = run_record["run_id"]
 
-        # Dispatch the job to the Celery worker
-        run_lambda_job_task.delay(run_id, payload.model_dump())
+        # Dispatch job to Celery worker
+        job_payload = payload.model_dump()
+        job_payload["run_id"] = run_id
+        run_lambda_job_task.delay(job_payload)
 
-        return {"run_id": run_id, "status": "dispatched"}
+        return {"run_id": run_id, "thread_id": payload.thread_id, "status": "dispatched"}
+
     except Exception as e:
         logger.error(f"Failed to submit LambdaTool job: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to submit job: {e}")
-
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to submit job: {e}",
+        )
 
 @router.get("/runs/{run_id}")
 async def get_lambda_run_details(
@@ -59,13 +96,6 @@ async def get_lambda_run_details(
     run_data = await get_lambda_run(db, run_id)
     if not run_data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lambda run not found.")
-
-    # Optional: Add an ownership check to ensure the user can view this run
-    if run_data.get('user_id') != user.id:
-        # A superuser could still be allowed, but for simplicity, we'll enforce strict ownership
-        # In a real app, this would be `if not user.is_superuser and run_data.get('user_id') != user.id`
-        # raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
-        pass
 
     return run_data
 
