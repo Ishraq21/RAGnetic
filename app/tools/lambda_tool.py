@@ -58,6 +58,7 @@ class LambdaTool(BaseTool):
             svc = TemporaryDocumentService(agent_config=AgentConfig(name="lambda_tool", description="Internal agent"))
 
             staged_file_path = None
+            original_file_name = None
 
             for f in raw_payload.get("inputs", []):
                 fname = f.get("file_name") if isinstance(f, dict) else getattr(f, "file_name", None)
@@ -73,6 +74,7 @@ class LambdaTool(BaseTool):
                 temp_id = record["temp_doc_id"]
                 user_id = record["user_id"]
                 thread_id = record["thread_id"]
+                original_file_name = record["original_name"]
 
                 staged_info = file_service.stage_input_file(
                     temp_doc_id=temp_id,
@@ -88,20 +90,19 @@ class LambdaTool(BaseTool):
                     "temp_doc_id": temp_id,
                     "file_name": fname,
                     "path_in_sandbox": staged_file_path,
-                    "original_name": fname,
+                    "original_name": original_file_name,
                     "user_id": user_id,
                     "thread_id": thread_id,
                 })
 
             raw_payload["inputs"] = staged_inputs
 
-            # Check for the existence of the 'payload' key before accessing it.
-            # This makes the code more resilient to inconsistent AI model payloads.
-            if raw_payload.get("mode") == "code" and raw_payload.get("payload") and staged_file_path:
-                raw_payload["payload"]["code"] = raw_payload["payload"]["code"].replace(
-                    f"open('{fname}'",
-                    f"open('{staged_file_path}'"
-                )
+
+            if raw_payload.get("mode") == "code" and raw_payload.get("code") and staged_file_path:
+                sandbox_rel = f"/work/inputs/{temp_id}_{fname}"
+                code_string = raw_payload["code"]
+                raw_payload["code"] = code_string.replace(original_file_name, sandbox_rel)
+                logger.info(f"Rewrote file reference: {original_file_name} -> {sandbox_rel}")
 
             payload = LambdaRequestPayload(**raw_payload)
         except Exception as e:
