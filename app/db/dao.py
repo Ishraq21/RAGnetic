@@ -689,6 +689,7 @@ async def delete_temp_document_data(db: AsyncSession, temp_doc_id: str) -> bool:
     """
     Atomically deletes a temporary document record and all its associated
     chunks and citations. Returns True on success, False otherwise.
+    (Note: This function should be called within a transaction context).
     """
     try:
         # Step 1: Find the temporary document row to get its ID
@@ -696,17 +697,14 @@ async def delete_temp_document_data(db: AsyncSession, temp_doc_id: str) -> bool:
             select(temporary_documents_table.c.id)
             .where(temporary_documents_table.c.temp_doc_id == temp_doc_id)
         )).scalar_one_or_none()
-
         if not temp_doc_row:
             logger.warning(f"Attempted to delete non-existent temp document with ID: {temp_doc_id}")
             return False
-
         # Step 2: Get all chunks associated with this temp document
         chunk_ids_to_delete = (await db.execute(
             select(document_chunks_table.c.id)
             .where(document_chunks_table.c.temp_document_id == temp_doc_row)
         )).scalars().all()
-
         if chunk_ids_to_delete:
             # Step 3: Delete citations linked to these chunks
             await db.execute(
@@ -714,27 +712,23 @@ async def delete_temp_document_data(db: AsyncSession, temp_doc_id: str) -> bool:
                 .where(citations_table.c.chunk_id.in_(chunk_ids_to_delete))
             )
             logger.info(f"Deleted citations for chunks of temp doc {temp_doc_id}.")
-
             # Step 4: Delete the chunks themselves
             await db.execute(
                 delete(document_chunks_table)
                 .where(document_chunks_table.c.id.in_(chunk_ids_to_delete))
             )
             logger.info(f"Deleted {len(chunk_ids_to_delete)} chunks for temp doc {temp_doc_id}.")
-
         # Step 5: Delete the temporary document record
         await db.execute(
             delete(temporary_documents_table)
             .where(temporary_documents_table.c.id == temp_doc_row)
         )
         logger.info(f"Deleted temporary document record for temp doc {temp_doc_id}.")
-
-        await db.commit()
         return True
     except Exception as e:
-        await db.rollback()
         logger.error(f"Failed to atomically delete temp document data for {temp_doc_id}: {e}", exc_info=True)
-        return False
+        # Re-raise the exception to trigger a rollback in the calling function
+        raise
 
 
 async def get_temp_document_by_user_thread_id(
