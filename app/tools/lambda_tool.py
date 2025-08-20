@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import json
 import logging
@@ -16,6 +17,19 @@ from app.core.config import get_server_api_keys
 from app.agents.config_manager import AgentConfig
 
 logger = logging.getLogger(__name__)
+
+def _guess_filenames_from_code(code: str) -> List[str]:
+    """Infer candidate filenames from code when 'inputs' aren't provided."""
+    if not code:
+        return []
+    candidates = set()
+    # quoted filenames like "invoice_sample.txt" or 'data.csv'
+    for m in re.finditer(r"""['"]([^'"/\\\s]+\.[A-Za-z0-9]{1,8})['"]""", code):
+        candidates.add(m.group(1))
+    # explicit /work/<name.ext>
+    for m in re.finditer(r"""/work/([^\s'"]+\.[A-Za-z0-9]{1,8})""", code):
+        candidates.add(m.group(1))
+    return list(candidates)
 
 
 class LambdaTool(BaseTool):
@@ -45,7 +59,7 @@ class LambdaTool(BaseTool):
     args_schema: ClassVar[Type[BaseModel]] = LambdaRequestPayload
 
     def _run(self, **tool_input: Any) -> str:
-        """Validate payload, stage input files, submit job, and poll for results."""
+        """Validate payload, stage input files (declared or inferred), submit job, and poll for results."""
         try:
             raw_payload = dict(tool_input)
             file_service = FileService()
@@ -54,57 +68,75 @@ class LambdaTool(BaseTool):
             raw_payload["thread_id"] = thread_id
             raw_payload["run_id"] = run_id
 
-            staged_inputs: List[Dict[str, Any]] = []
             svc = TemporaryDocumentService(agent_config=AgentConfig(name="lambda_tool", description="Internal agent"))
 
-            staged_file_path = None
-            original_file_name = None
+            staged_inputs: List[Dict[str, Any]] = []
+            name_map: Dict[str, str] = {}  # {original_name or /work/original_name -> sandbox_path}
 
-            for f in raw_payload.get("inputs", []):
+            declared_inputs = raw_payload.get("inputs") or []
+            if (raw_payload.get("mode") == "code") and raw_payload.get("code") and not declared_inputs:
+                inferred = _guess_filenames_from_code(raw_payload["code"])
+                declared_inputs = [{"file_name": fn} for fn in inferred]
+
+            missing: List[str] = []
+            for f in declared_inputs:
                 fname = f.get("file_name") if isinstance(f, dict) else getattr(f, "file_name", None)
-
                 if not fname:
-                    staged_inputs.append(f)
                     continue
 
                 record = svc.get_latest_by_filename(fname)
                 if not record:
-                    raise ValueError(f"No temporary document found for filename {fname}")
+                    missing.append(fname)
+                    continue
 
                 temp_id = record["temp_doc_id"]
                 user_id = record["user_id"]
-                thread_id = record["thread_id"]
+                th_id = record["thread_id"]
                 original_file_name = record["original_name"]
 
                 staged_info = file_service.stage_input_file(
                     temp_doc_id=temp_id,
                     user_id=user_id,
-                    thread_id=thread_id,
+                    thread_id=th_id,
                     run_id=run_id,
                     file_name=fname,
                 )
+                sandbox_path = staged_info["sandbox_path"]  # e.g., /work/inputs/<uuid>_<name>
 
-                staged_file_path = staged_info["sandbox_path"]
+                # Map both bare filename and /work/<filename> to the staged path
+                name_map[original_file_name] = sandbox_path
+                name_map[f"/work/{original_file_name}"] = sandbox_path
+                name_map[f"/mnt/work/{original_file_name}"] = sandbox_path
 
                 staged_inputs.append({
                     "temp_doc_id": temp_id,
                     "file_name": fname,
-                    "path_in_sandbox": staged_file_path,
+                    "path_in_sandbox": sandbox_path,
                     "original_name": original_file_name,
                     "user_id": user_id,
-                    "thread_id": thread_id,
+                    "thread_id": th_id,
                 })
+
+            if missing and not staged_inputs:
+                return (
+                        "LambdaTool: no matching temporary documents were found for: "
+                        + ", ".join(sorted(set(missing)))
+                )
 
             raw_payload["inputs"] = staged_inputs
 
-
-            if raw_payload.get("mode") == "code" and raw_payload.get("code") and staged_file_path:
-                sandbox_rel = f"/work/inputs/{temp_id}_{fname}"
+            if raw_payload.get("mode") == "code" and raw_payload.get("code") and name_map:
                 code_string = raw_payload["code"]
-                raw_payload["code"] = code_string.replace(original_file_name, sandbox_rel)
-                logger.info(f"Rewrote file reference: {original_file_name} -> {sandbox_rel}")
+                # Replace longer keys first to avoid partial overlaps
+                for orig in sorted(name_map.keys(), key=len, reverse=True):
+                    code_string = code_string.replace(orig, name_map[orig])
+                raw_payload["code"] = code_string
+                for orig, path in name_map.items():
+                    if not orig.startswith("/work/"):
+                        logger.info(f"Rewrote file reference: {orig} -> {path}")
 
             payload = LambdaRequestPayload(**raw_payload)
+
         except Exception as e:
             logger.error(f"Invalid LambdaTool payload: {e}", exc_info=True)
             return f"LambdaTool: invalid payload. {e}"
@@ -157,20 +189,14 @@ class LambdaTool(BaseTool):
                 if status == "failed":
                     structured_msg = (
                             final_state.get("message")
-                            or (
-                                    final_state.get("error_type")
-                                    and final_state.get("traceback")
-                            )
+                            or (final_state.get("error_type") and final_state.get("traceback"))
                     )
                     msg = structured_msg or error_msg or "Unknown error."
                     return f"Sandbox run **failed** (run_id={run_id}).\n\n{msg}"
 
                 output_str = None
                 if isinstance(final_state, dict):
-                    output_str = (
-                            final_state.get("output")
-                            or final_state.get("result")
-                    )
+                    output_str = final_state.get("output") or final_state.get("result")
                 if isinstance(output_str, dict):
                     output_str = json.dumps(output_str, indent=2)
 
@@ -182,6 +208,13 @@ class LambdaTool(BaseTool):
                 else:
                     lines.append("\n**Final State**:\n")
                     lines.append("```json\n" + json.dumps(final_state, indent=2) + "\n```")
+
+                # Show files if present (supports both keys)
+                if isinstance(final_state, dict):
+                    artifacts = final_state.get("artifacts") or final_state.get("result_files")
+                    if artifacts:
+                        lines.append("\n**Files**:\n")
+                        lines.append("```json\n" + json.dumps(artifacts, indent=2) + "\n```")
 
                 return "\n".join(lines)
 

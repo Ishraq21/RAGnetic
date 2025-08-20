@@ -232,6 +232,16 @@ class LocalDockerExecutor:
 
             await update_lambda_run_status(db, run_id, "completed", final_state=final_state)
 
+    def _safe_copy(self, src: Path, dst: Path, run_id: str):
+        """Copy a file unless src and dst are the same file."""
+        try:
+            if src.resolve() == dst.resolve():
+                logger.debug(f"Skipping redundant copy for run {run_id}: {src}")
+                return
+            shutil.copy2(src, dst)
+        except Exception as e:
+            logger.warning(f"Failed to copy output {src} for run {run_id}: {e}")
+
     async def _process_output(self, run_id: str, workspace_dir: Path):
         """
         Collects all outputs from the sandbox run:
@@ -247,13 +257,13 @@ class LocalDockerExecutor:
             if output_dir.exists():
                 for item in output_dir.iterdir():
                     dest = host_output_dir / item.name
-                    try:
-                        if item.is_file():
-                            shutil.copy(item, dest)
-                        elif item.is_dir():
-                            shutil.copytree(item, dest, dirs_exist_ok=True)
-                    except Exception as e:
-                        logger.warning(f"Failed to copy output {item} for run {run_id}: {e}")
+                    if item.is_file():
+                        self._safe_copy(item, dest, run_id)
+                    elif item.is_dir():
+                        if dest.resolve() == item.resolve():
+                            logger.debug(f"Skipping redundant copy of directory for run {run_id}: {item}")
+                            continue
+                        shutil.copytree(item, dest, dirs_exist_ok=True)
 
             # 2. Process result/error JSON to update DB state
             await self._save_final_state(run_id, workspace_dir)
