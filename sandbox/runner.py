@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import sys
 import traceback
 import io
@@ -26,10 +27,18 @@ REQUEST_FILE = WORK_DIR / "request.json"
 SANDBOX_ROOT = WORK_DIR
 
 ALLOWED_MODULES = {
-    "math", "statistics", "random", "numpy", "pandas", "matplotlib",
-    "textblob", "csv", "re", "seaborn"
-}
+    # core math/data viz
+    "math", "statistics", "random", "numpy", "pandas", "matplotlib", "seaborn",
 
+    # ML / scientific stack
+    "sklearn", "scipy",
+
+    # stdlib commonly used in EDA/scripts
+    "json", "re", "io", "itertools", "collections", "datetime", "time", "pathlib", "base64",
+
+    # keep if you still use it anywhere
+    "textblob", "csv",
+}
 os.environ.setdefault("MPLBACKEND", "Agg")
 os.environ.setdefault("MPLCONFIGDIR", str(WORK_DIR / ".mplconfig"))
 (Path(os.environ["MPLCONFIGDIR"])).mkdir(parents=True, exist_ok=True)
@@ -67,16 +76,9 @@ def main():
             code_str = request_data.get("code") or payload.get("code", "")
             execute_code_mode(code_str)
 
-        elif mode == "function":
-            fn_name = request_data.get("function_name") or payload.get("function_name")
-            fn_args = request_data.get("function_args") or payload.get("function_args", {}) or {}
-            execute_function_mode(fn_name, fn_args)
-
-        elif mode == "notebook":
-            nb_path = request_data.get("notebook_file_path") or payload.get("notebook_file_path")
-            nb_params = request_data.get("parameters") or payload.get("parameters", {}) or {}
-            nb_out = request_data.get("output_file_name") or payload.get("output_file_name") or "executed.ipynb"
-            execute_notebook_mode(nb_path, nb_params, nb_out)
+        # elif mode == "function":
+            # fn_name = request_data.get("function_name") or payload.get("function_name")
+            # fn_args = request_data.get("function_args") or payload.get("function_args", {}) or {}
 
         else:
             raise ValueError(f"Unsupported execution mode: {mode}")
@@ -95,9 +97,9 @@ def main():
             json.dump(error_payload, f)
         sys.exit(1)
 
+"""
 
 def execute_function_mode(function_name: str, args: Dict[str, Any]):
-    """Calls a pre-vetted function from a registry baked into the sandbox image."""
     logger.info(f"Executing in 'function' mode: {function_name}", extra={"mode": "function"})
 
     try:
@@ -133,7 +135,7 @@ def execute_function_mode(function_name: str, args: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Error executing function '{function_name}': {e}", extra={"mode": "function"})
         raise
-
+"""
 
 def _safe_open(path, mode="r", *args, **kwargs):
     """Allow read/write anywhere under /work."""
@@ -146,10 +148,42 @@ def _safe_open(path, mode="r", *args, **kwargs):
     return open(p, mode, *args, **kwargs)
 
 
+def _normalize_code(code: str) -> str:
+    """
+    Make LLM-provided code executable:
+    - Strip ``` fences (optionally with language tag).
+    - Convert literal escape sequences like '\\n', '\\t', '\\r' to real characters
+      if the string appears to be single-line or dominated by escaped newlines.
+    """
+    if not code:
+        return code
+
+    s = code.strip()
+
+    # Strip Markdown code fences if present
+    if s.startswith("```") and s.endswith("```"):
+        s = re.sub(r"^```[a-zA-Z0-9_+-]*\s*", "", s)  # remove leading fence
+        s = re.sub(r"\s*```$", "", s)                # remove trailing fence
+
+    # If we see literal "\n" but very few real newlines, decode escapes
+    has_literal_newlines = "\\n" in s
+    real_newline_count = s.count("\n")
+    if has_literal_newlines and real_newline_count <= 1:
+        try:
+            s = bytes(s, "utf-8").decode("unicode_escape")
+        except Exception:
+            s = s.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
+
+    return s
+
+
 
 def execute_code_mode(code: str):
     """Executes raw Python code in a restricted sandbox and saves the result."""
     logger.info("Executing code in 'code' mode.")
+
+    # 1) Normalize LLM-provided code so escaped newlines don’t break parsing
+    code = _normalize_code(code)
 
     safe_globals = {
         "__builtins__": {
@@ -170,7 +204,8 @@ def execute_code_mode(code: str):
         "re": __import__("re"),
     }
 
-    local_vars = {}
+    env = dict(safe_globals)
+
     output_buffer = io.StringIO()
 
     try:
@@ -184,13 +219,14 @@ def execute_code_mode(code: str):
                 code_to_execute = code
         else:
             code_to_execute = code
+
     except Exception as e:
         logger.warning(f"Failed to parse code for auto-printing. Executing as-is. Error: {e}")
         code_to_execute = code
 
     try:
         with redirect_stdout(output_buffer), redirect_stderr(output_buffer):
-            exec(code_to_execute, safe_globals, local_vars)
+            exec(code_to_execute, env, env)
 
         stdout_output = output_buffer.getvalue().strip()
 
@@ -203,43 +239,10 @@ def execute_code_mode(code: str):
             json.dump(final_state, f, default=str)
 
     except Exception:
-        logger.error("Code execution failed", exc_info=True)
+        tb = traceback.format_exc()
+        logger.error("Code execution failed", extra={"details": {"traceback": tb}})
         raise
 
-def execute_notebook_mode(notebook_file_path: str, parameters: Dict[str, Any], output_file_name: str):
-    """Executes a notebook, passing parameters, and saves the output notebook."""
-    logger.info(f"Executing notebook mode for file: {notebook_file_path}", extra={"mode": "notebook"})
-
-    import papermill as pm
-
-    input_path = WORK_DIR / notebook_file_path
-    if not _is_within_sandbox(input_path):
-        raise PermissionError(f"Access outside sandbox denied: {input_path}")
-    if not input_path.exists():
-        raise FileNotFoundError(f"Notebook file not found at: {input_path}")
-
-    output_path = OUTPUTS_DIR / output_file_name
-
-    try:
-        pm.execute_notebook(
-            input_path=str(input_path),
-            output_path=str(output_path),
-            parameters=parameters,
-            log_level="INFO"
-        )
-
-        final_state = {
-            "status": "completed",
-            "notebook": str(output_path.name),
-            "output": None,
-            "result_files": _collect_result_files()
-        }
-        with open(OUTPUTS_DIR / "result.json", "w") as f:
-            json.dump(final_state, f, default=str)
-        logger.info(f"Notebook executed successfully. Output saved to {output_path}", extra={"mode": "notebook"})
-    except Exception as e:
-        logger.error(f"Notebook execution failed: {e}", extra={"mode": "notebook"})
-        raise
 
 
 def _collect_result_files():
