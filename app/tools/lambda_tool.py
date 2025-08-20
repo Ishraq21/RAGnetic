@@ -31,6 +31,21 @@ def _guess_filenames_from_code(code: str) -> List[str]:
         candidates.add(m.group(1))
     return list(candidates)
 
+def _normalize_code_for_payload(code: str) -> str:
+    if not code:
+        return code
+    s = code.strip()
+    # strip markdown fences
+    if s.startswith("```") and s.endswith("```"):
+        s = re.sub(r"^```[a-zA-Z0-9_+-]*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s)
+    # decode literal escapes if needed
+    if "\\n" in s and "\n" not in s:
+        try:
+            s = bytes(s, "utf-8").decode("unicode_escape")
+        except Exception:
+            s = s.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
+    return s
 
 class LambdaTool(BaseTool):
     """
@@ -127,13 +142,18 @@ class LambdaTool(BaseTool):
 
             if raw_payload.get("mode") == "code" and raw_payload.get("code") and name_map:
                 code_string = raw_payload["code"]
-                # Replace longer keys first to avoid partial overlaps
                 for orig in sorted(name_map.keys(), key=len, reverse=True):
                     code_string = code_string.replace(orig, name_map[orig])
+                # Normalize code to turn literal '\n' into real newlines and strip ``` fences
+                code_string = _normalize_code_for_payload(code_string)
                 raw_payload["code"] = code_string
                 for orig, path in name_map.items():
                     if not orig.startswith("/work/"):
                         logger.info(f"Rewrote file reference: {orig} -> {path}")
+
+            # Also normalize if there was no name_map rewrite but mode=code
+            if raw_payload.get("mode") == "code" and raw_payload.get("code"):
+                raw_payload["code"] = _normalize_code_for_payload(raw_payload["code"])
 
             payload = LambdaRequestPayload(**raw_payload)
 
