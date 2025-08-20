@@ -136,15 +136,15 @@ def execute_function_mode(function_name: str, args: Dict[str, Any]):
 
 
 def _safe_open(path, mode="r", *args, **kwargs):
+    """Allow read/write anywhere under /work."""
     p = Path(path)
     p = (WORK_DIR / p).resolve() if not p.is_absolute() else p.resolve()
 
-    if "r" in mode and not p.is_relative_to(INPUTS_DIR):
-        raise PermissionError(f"Read denied outside inputs: {p}")
-    if any(flag in mode for flag in ("w", "a", "x", "+")) and not p.is_relative_to(OUTPUTS_DIR):
-        raise PermissionError(f"Write denied outside outputs: {p}")
+    if not p.is_relative_to(WORK_DIR):
+        raise PermissionError(f"Access denied outside sandbox root: {p}")
 
     return open(p, mode, *args, **kwargs)
+
 
 
 def execute_code_mode(code: str):
