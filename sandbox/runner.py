@@ -85,7 +85,6 @@ def _jsonify(obj, _depth=0, _seen=None):
             return _finite_number(val)
         return val
 
-    # ---- From here on, track cycles (containers / complex objects) ----
     oid = id(obj)
     if oid in _seen:
         return {"__type__": "cycle_ref"}
@@ -202,7 +201,6 @@ ALLOWED_MODULES = {
     # stdlib commonly used in EDA/scripts
     "json", "re", "io", "itertools", "collections", "datetime", "time", "pathlib", "base64","decimal", "uuid", "enum", "typing",
 
-    # keep if you still use it anywhere
     "textblob", "csv",
 }
 os.environ.setdefault("MPLBACKEND", "Agg")
@@ -241,7 +239,9 @@ def main():
 
         if mode == "code":
             code_str = request_data.get("code") or payload.get("code", "")
-            execute_code_mode(code_str)
+            outputs_decl = request_data.get("outputs") or payload.get("outputs") or []
+            run_id = request_data.get("run_id") or payload.get("run_id")
+            execute_code_mode(code_str, outputs_decl, run_id)
 
         # elif mode == "function":
             # fn_name = request_data.get("function_name") or payload.get("function_name")
@@ -345,7 +345,7 @@ def _normalize_code(code: str) -> str:
 
 
 
-def execute_code_mode(code: str):
+def execute_code_mode(code: str, declared_outputs: list | None = None, run_id: str | None = None):
     """Executes raw Python code in a restricted sandbox and saves the result."""
     logger.info("Executing code in 'code' mode.")
 
@@ -378,6 +378,9 @@ def execute_code_mode(code: str):
         env["pd"] = pd
 
     output_buffer = io.StringIO()
+    stdout_name = f"stdout-{run_id}.txt" if run_id else "stdout.txt"
+    stdout_created = False
+
 
     try:
         tree = ast.parse(code, mode="exec")
@@ -417,11 +420,38 @@ def execute_code_mode(code: str):
         except Exception:
             pass
 
+        try:
+            if stdout_output:
+                OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+                with open(OUTPUTS_DIR / stdout_name, "w", encoding="utf-8") as f:
+                    f.write(stdout_output)
+                stdout_created = True
+        except Exception as e:
+            logger.warning(f"Failed to persist stdout artifact: {e}")
+
+        if declared_outputs:
+            out_name = str(declared_outputs[0]).strip()
+            if out_name:
+                out_path = (OUTPUTS_DIR / out_name)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    if out_name.lower().endswith(".json") and output_json is not None:
+                        with open(out_path, "w", encoding="utf-8") as f:
+                            json.dump(output_json, f, ensure_ascii=False, indent=2)
+                    else:
+                        # Otherwise write the raw stdout.
+                        with open(out_path, "w", encoding="utf-8") as f:
+                            f.write(stdout_output)
+                except Exception as e:
+                    logger.warning(f"Failed to persist declared output '{out_name}': {e}")
+
         final_state = {
             "output": stdout_output,
             "output_json": output_json,
             "status": "completed",
-            "result_files": _collect_result_files()
+            "stdout_artifact": stdout_name if stdout_created else None,
+            "result_files": _collect_result_files(),
+            "run_id": run_id,
         }
         with open(OUTPUTS_DIR / "result.json", "w") as f:
             json.dump(final_state, f, default=str)
@@ -434,10 +464,9 @@ def execute_code_mode(code: str):
 
 
 def _collect_result_files():
-    """Auto-discover all files in /outputs and return structured metadata."""
     result_files = []
-    max_bytes = int(os.getenv("MAX_RESULT_FILE_BYTES", str(50 * 1024 * 1024)))  # 50MB default
-    for p in OUTPUTS_DIR.glob("*"):
+    max_bytes = int(os.getenv("MAX_RESULT_FILE_BYTES", str(50 * 1024 * 1024)))
+    for p in OUTPUTS_DIR.rglob("*"):
         if not p.is_file() or p.name in ("result.json", "error.json"):
             continue
         size = p.stat().st_size
@@ -446,10 +475,11 @@ def _collect_result_files():
             continue
         result_files.append({
             "file_name": p.name,
-            "relative_path": f"outputs/{p.name}",
+            "relative_path": str(p.relative_to(OUTPUTS_DIR.parent)),  # e.g. "outputs/sub/thing.txt"
             "size_bytes": size,
         })
     return result_files
+
 
 
 if __name__ == "__main__":
