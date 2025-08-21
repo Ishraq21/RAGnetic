@@ -40,6 +40,26 @@ PREVIEW_ROWS  = int(os.getenv("JSONIFY_PREVIEW_ROWS", "20"))
 MAX_STRING    = int(os.getenv("JSONIFY_MAX_STRING", "20000"))
 MAX_BYTES_B64 = int(os.getenv("JSONIFY_MAX_BYTES_B64", "32768"))
 
+
+JSON_START = "<<<RAGNETIC_JSON_BEGIN>>>"
+JSON_END   = "<<<RAGNETIC_JSON_END>>>"
+
+
+def _strip_sentinel_block(s: str) -> str:
+    start = s.rfind(JSON_START)
+    if start == -1:
+        return s
+    end = s.find(JSON_END, start + len(JSON_START))
+    if end == -1:
+        return s
+
+    before = s[:start].rstrip()
+    after  = s[end + len(JSON_END):].lstrip()
+
+    if before and after and not before.endswith("\n"):
+        before += "\n"
+    return (before + after).strip()
+
 def _finite_number(x):
     # Replace NaN/Inf with None to keep strict JSON (allow_nan=False)
     return x if (isinstance(x, (int,)) or (isinstance(x, float) and math.isfinite(x))) else None
@@ -201,7 +221,7 @@ ALLOWED_MODULES = {
     # stdlib commonly used in EDA/scripts
     "json", "re", "io", "itertools", "collections", "datetime", "time", "pathlib", "base64","decimal", "uuid", "enum", "typing",
 
-    "textblob", "csv",
+    "textblob", "csv", "requests"
 }
 os.environ.setdefault("MPLBACKEND", "Agg")
 os.environ.setdefault("MPLCONFIGDIR", str(WORK_DIR / ".mplconfig"))
@@ -346,10 +366,10 @@ def _normalize_code(code: str) -> str:
 
 
 def execute_code_mode(code: str, declared_outputs: list | None = None, run_id: str | None = None):
-    """Executes raw Python code in a restricted sandbox and saves the result."""
+    """Executes raw Python code in a restricted sandbox and saves the result, robust to arbitrary prints."""
     logger.info("Executing code in 'code' mode.")
 
-    # 1) Normalize LLM-provided code so escaped newlines don’t break parsing
+    # Normalize incoming code
     code = _normalize_code(code)
 
     safe_globals = {
@@ -379,56 +399,94 @@ def execute_code_mode(code: str, declared_outputs: list | None = None, run_id: s
 
     output_buffer = io.StringIO()
     stdout_name = f"stdout-{run_id}.txt" if run_id else "stdout.txt"
-    stdout_created = False
 
-
+    # --- Build code with sentinel-wrapped JSON of last expression (or null) ---
     try:
         tree = ast.parse(code, mode="exec")
+        expr_src = None
         if tree.body and isinstance(tree.body[-1], ast.Expr):
             last_expr = tree.body[-1].value
+            # If the last node is a bare expression (not a print call), capture it
             if not (isinstance(last_expr, ast.Call) and getattr(last_expr.func, "id", None) == "print"):
-                expression_source = ast.unparse(last_expr)
-                code_to_execute = code + (
-                        "\nimport json\n"
-                        "print(json.dumps(_jsonify(" + expression_source + "), indent=2, allow_nan=False))"
-                )
-            else:
-                code_to_execute = code
-        else:
-            code_to_execute = code
+                expr_src = ast.unparse(last_expr)
+        # Always inject the sentinel print; use last expression or null
+        expr_src = expr_src or "None"
+        code_to_execute = (
+                code
+                + f'\nimport json\n'
+                  f'print("{JSON_START}", flush=True)\n'
+                  f'print(json.dumps(_jsonify({expr_src}), allow_nan=False), flush=True)\n'
+                  f'print("{JSON_END}", flush=True)\n'
+        )
 
     except Exception as e:
-        logger.warning(f"Failed to parse code for auto-printing. Executing as-is. Error: {e}")
-        code_to_execute = code
+        logger.warning(f"Failed to parse code for last-expression capture. Injecting null. Error: {e}")
+        # Still inject a null sentinel so downstream parsing works
+        code_to_execute = (
+                code
+                + f'\nimport json\n'
+                  f'print("{JSON_START}", flush=True)\n'
+                  f'print("null", flush=True)\n'
+                  f'print("{JSON_END}", flush=True)\n'
+        )
 
     try:
+        # Exec user code with our sentinel injection
         with redirect_stdout(output_buffer), redirect_stderr(output_buffer):
             exec(code_to_execute, env, env)
 
-        stdout_output = output_buffer.getvalue()
+        raw_stdout = output_buffer.getvalue()
 
-        # cap very large outputs
+        human_stdout = raw_stdout
+        if os.getenv("KEEP_SENTINEL_IN_STDOUT", "0") != "1":
+            human_stdout = _strip_sentinel_block(human_stdout)
+
+        # Extract JSON from sentinels BEFORE any truncation
+        output_json = None
+
+        # 1) Robust path: find sentinel window and parse that slice
+        start = raw_stdout.rfind(JSON_START)
+        end = raw_stdout.rfind(JSON_END)
+        if start != -1 and end != -1 and start < end:
+            candidate = raw_stdout[start + len(JSON_START): end].strip()
+            try:
+                output_json = json.loads(candidate)
+            except Exception:
+                output_json = None
+
+        # 2) (Legacy) As a fallback only, try whole-stdout-is-JSON
+        if output_json is None:
+            stripped = raw_stdout.lstrip()
+            if stripped[:1] in ("{", "[", '"', "n"):  # object/array/string/null
+                try:
+                    output_json = json.loads(raw_stdout)
+                except Exception:
+                    output_json = None
+
+        # Now optionally truncate stdout for the human-facing artifact
         MAX_STDOUT = int(os.getenv("MAX_STDOUT_CHARS", "200000"))
+        stdout_output = human_stdout
         if len(stdout_output) > MAX_STDOUT:
             stdout_output = stdout_output[:MAX_STDOUT] + "\n…[truncated]"
         stdout_output = stdout_output.strip()
 
-        # try to parse machine-readable JSON, keep None if not JSON
-        output_json = None
+        # Persist stdout artifact
         try:
-            output_json = json.loads(stdout_output)
-        except Exception:
-            pass
-
-        try:
-            if stdout_output:
-                OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-                with open(OUTPUTS_DIR / stdout_name, "w", encoding="utf-8") as f:
-                    f.write(stdout_output)
-                stdout_created = True
+            OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+            with open(OUTPUTS_DIR / stdout_name, "w", encoding="utf-8") as f:
+                f.write(human_stdout)
         except Exception as e:
             logger.warning(f"Failed to persist stdout artifact: {e}")
 
+        # If we parsed the last expression, also save it explicitly
+        if output_json is not None:
+            try:
+                with open(OUTPUTS_DIR / "last_expr.json", "w", encoding="utf-8") as f:
+                    json.dump(output_json, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.warning(f"Failed to persist last_expr.json: {e}")
+
+        # Handle declared outputs
         if declared_outputs:
             out_name = str(declared_outputs[0]).strip()
             if out_name:
@@ -439,19 +497,18 @@ def execute_code_mode(code: str, declared_outputs: list | None = None, run_id: s
                         with open(out_path, "w", encoding="utf-8") as f:
                             json.dump(output_json, f, ensure_ascii=False, indent=2)
                     else:
-                        # Otherwise write the raw stdout.
                         with open(out_path, "w", encoding="utf-8") as f:
                             f.write(stdout_output)
                 except Exception as e:
                     logger.warning(f"Failed to persist declared output '{out_name}': {e}")
 
+        # Final state file (machine-readable)
         final_state = {
             "output": stdout_output,
             "output_json": output_json,
             "status": "completed",
-            "stdout_artifact": stdout_name if stdout_created else None,
+            "stdout_artifact": stdout_name,
             "result_files": _collect_result_files(),
-            "run_id": run_id,
         }
         with open(OUTPUTS_DIR / "result.json", "w") as f:
             json.dump(final_state, f, default=str)
@@ -475,7 +532,7 @@ def _collect_result_files():
             continue
         result_files.append({
             "file_name": p.name,
-            "relative_path": str(p.relative_to(OUTPUTS_DIR.parent)),  # e.g. "outputs/sub/thing.txt"
+            "relative_path": str(p.relative_to(OUTPUTS_DIR.parent)),
             "size_bytes": size,
         })
     return result_files
