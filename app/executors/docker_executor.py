@@ -10,7 +10,6 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 import docker
-import redis
 from docker.errors import ImageNotFound, ContainerError
 from sqlalchemy import insert
 
@@ -21,7 +20,7 @@ from app.schemas.lambda_tool import LambdaRequestPayload
 from app.core.config import get_path_settings, get_memory_storage_config
 from app.services.file_service import FileService
 
-# This is a temporary path modification to ensure the sandbox/runner module is found
+
 _APP_PATHS = get_path_settings()
 sys.path.append(str(_APP_PATHS["PROJECT_ROOT"]))
 
@@ -29,11 +28,10 @@ from celery import Celery
 
 logger = logging.getLogger(__name__)
 
-# Define sandbox-related paths from the main project settings
+# Paths
 _SANDBOX_DIR = _APP_PATHS["PROJECT_ROOT"] / "sandbox"
 _LAMBDA_RUNS_DIR = _APP_PATHS["PROJECT_ROOT"] / ".ragnetic" / "lambda_runs"
 _LAMBDA_RUNS_DIR.mkdir(parents=True, exist_ok=True)
-
 
 celery_app = Celery("lambda_executor", broker="redis://localhost:6379/0")
 
@@ -66,44 +64,65 @@ class LocalDockerExecutor:
 
     async def execute(self, run_id: str, payload: Dict[str, Any]):
         """
-        Main execution method. It sets up a temporary workspace, runs the container,
-        and handles output collection and cleanup.
+        Set up the run directory, launch the container with the run root mounted at /work,
+        then collect artifacts and update DB state.
         """
         run_payload = LambdaRequestPayload(**payload)
 
-        workspace_dir = _LAMBDA_RUNS_DIR / run_id
-        workspace_dir.mkdir(parents=True, exist_ok=True)
+        # Bind-mount THIS directory to /work (so /work/inputs and /work/outputs are visible)
+        run_root = _LAMBDA_RUNS_DIR / run_id
+        mount_dir = run_root
+        persistent_out = run_root / "outputs"
+
+        # Ensure baseline structure that runner/code expects
+        (mount_dir / "inputs").mkdir(parents=True, exist_ok=True)
+        persistent_out.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"[{run_id}] mount_dir={mount_dir.resolve()}")
+        logger.info(f"[{run_id}] persistent_out={persistent_out.resolve()}")
+        try:
+            try:
+                listing = os.listdir(mount_dir / "inputs")
+            except Exception as e:
+                listing = [f"<could not list inputs: {e}>"]
+            logger.info(f"[{run_id}] inputs listing: {listing}")
+        except Exception:
+            pass
 
         try:
-            self._prepare_workspace(workspace_dir, run_id, run_payload)
-            await self._run_container(run_id, workspace_dir, run_payload)
+            self._prepare_workspace(mount_dir, run_id, run_payload)
+            await self._run_container(run_id, mount_dir, run_payload, persistent_out)
         except Exception as e:
             logger.error(f"Execution failed for run {run_id}: {e}", exc_info=True)
             async with get_async_db_session() as db:
                 await update_lambda_run_status(db, run_id, "failed", error_message=str(e))
-        finally:
-            shutil.rmtree(workspace_dir, ignore_errors=True)
-            logger.info(f"Cleaned up workspace for run {run_id}.")
+        # NOTE: Do NOT delete run_root/mount_dir; it contains the staged outputs
 
-    def _prepare_workspace(self, workspace_dir: Path, run_id: str, payload: LambdaRequestPayload):
-
-        request_file_path = workspace_dir / "request.json"
+    def _prepare_workspace(self, mount_dir: Path, run_id: str, payload: LambdaRequestPayload):
+        """Write request.json into the mount dir (run root)."""
+        request_file_path = mount_dir / "request.json"
         with open(request_file_path, "w") as f:
             f.write(payload.model_dump_json(indent=2))
-        logger.info(f"Prepared request.json for run {run_id} (inputs already pre-staged).")
+        logger.info(f"Prepared request.json for run {run_id} at {request_file_path}")
 
-    async def _run_container(self, run_id: str, workspace_dir: Path, payload: LambdaRequestPayload):
+    async def _run_container(
+        self,
+        run_id: str,
+        mount_dir: Path,
+        payload: LambdaRequestPayload,
+        persistent_out: Path,
+    ):
         image_name = "ragnetic-lambda:py310-cpu"
         await self._ensure_image(image_name)
 
         logger.info(f"Starting Docker container for run {run_id} using image '{image_name}'.")
 
-        # Get resource limits, ensuring they are set before use.
+        # Resource limits
         cpu_limit = payload.resource_spec.cpu if payload.resource_spec.cpu is not None else "1"
         mem_limit = f"{payload.resource_spec.memory_gb}g" if payload.resource_spec.memory_gb is not None else "1g"
 
-        env_vars_for_container = {}
-        network_mode = 'none'
+        env_vars_for_container: Dict[str, str] = {}
+        network_mode = "none"
 
         try:
             container = await asyncio.to_thread(
@@ -111,7 +130,7 @@ class LocalDockerExecutor:
                 image_name,
                 detach=True,
                 auto_remove=False,
-                volumes={str(workspace_dir): {'bind': '/work', 'mode': 'rw'}},
+                volumes={str(mount_dir): {"bind": "/work", "mode": "rw"}},  # mount run root at /work
                 network_mode=network_mode,
                 environment=env_vars_for_container,
                 cpu_count=int(cpu_limit),
@@ -120,17 +139,20 @@ class LocalDockerExecutor:
 
             await asyncio.to_thread(container.wait)
 
+            # Collect container logs (structured JSON from runner logger if present)
             try:
                 log_output = await asyncio.to_thread(
                     container.logs, stdout=True, stderr=True, stream=False, timestamps=False, tail="all"
                 )
-                log_output = log_output.decode('utf-8', errors='ignore')
+                log_output = log_output.decode("utf-8", errors="ignore")
                 await self._save_logs(run_id, log_output)
             except docker.errors.APIError as e:
                 logger.warning(f"Could not fetch container logs for run {run_id}: {e}")
 
-            await self._process_output(run_id, workspace_dir)
+            # Move artifacts into persistent_out and update DB state
+            await self._process_output(run_id, mount_dir, persistent_out)
 
+            # Cleanup container
             try:
                 await asyncio.to_thread(container.remove, force=True)
             except Exception as e:
@@ -141,24 +163,20 @@ class LocalDockerExecutor:
             async with get_async_db_session() as db:
                 await update_lambda_run_status(db, run_id, "failed", error_message=str(e))
         except Exception as e:
-            logger.error(f"An unexpected error occurred during container execution for run {run_id}: {e}",
-                         exc_info=True)
+            logger.error(
+                f"An unexpected error occurred during container execution for run {run_id}: {e}",
+                exc_info=True,
+            )
             raise
 
     def _build_image(self, image_name: str):
-        """
-        Builds the Docker image from the Dockerfile.
-        """
+        """Build the Docker image from the sandbox Dockerfile."""
         try:
             logger.info(f"Building Docker image '{image_name}'. This may take a few minutes...")
-            _, logs = self.client.images.build(
-                path=str(_SANDBOX_DIR),
-                tag=image_name,
-                rm=True
-            )
+            _, logs = self.client.images.build(path=str(_SANDBOX_DIR), tag=image_name, rm=True)
             for log in logs:
-                if 'stream' in log:
-                    logger.info(log['stream'].strip())
+                if "stream" in log:
+                    logger.info(log["stream"].strip())
             logger.info(f"Successfully built Docker image '{image_name}'.")
         except Exception as e:
             logger.critical(f"Failed to build Docker image '{image_name}': {e}")
@@ -177,21 +195,20 @@ class LocalDockerExecutor:
                     logger.warning(f"Could not parse log line for run {run_id}: {line}")
                     continue
 
-                # Build details and include run_id there (since the table has no correlation_id column)
+                # Merge details & add run_id
                 base_details = log_data.get("details")
                 if isinstance(base_details, dict):
                     details = {**base_details, "run_id": run_id}
                 else:
                     details = {"run_id": run_id, "raw_details": base_details}
 
-                # Safe timestamp
+                # Timestamp
                 ts_raw = log_data.get("timestamp")
                 try:
                     ts = datetime.fromisoformat(ts_raw) if ts_raw else datetime.utcnow()
                 except Exception:
                     ts = datetime.utcnow()
 
-                # Only the columns that exist in ragnetic_logs_table
                 log_entry = {
                     "timestamp": ts,
                     "level": log_data.get("level"),
@@ -207,27 +224,27 @@ class LocalDockerExecutor:
 
             await db.commit()
 
-    async def _save_final_state(self, run_id: str, workspace_dir: Path):
-        output_dir = workspace_dir / "outputs"
+    async def _save_final_state(self, run_id: str, mount_dir: Path):
+        output_dir = mount_dir / "outputs"
 
         async with get_async_db_session() as db:
             error_file = output_dir / "error.json"
             if error_file.exists():
-                with open(error_file, 'r') as f:
+                with open(error_file, "r") as f:
                     error_data = json.load(f)
                 await update_lambda_run_status(
                     db,
                     run_id,
                     "failed",
                     final_state=error_data,
-                    error_message=error_data.get("message")
+                    error_message=error_data.get("message"),
                 )
                 return
 
-            final_state = {}
+            final_state: Dict[str, Any] = {}
             result_file = output_dir / "result.json"
             if result_file.exists():
-                with open(result_file, 'r') as f:
+                with open(result_file, "r") as f:
                     final_state = json.load(f)
 
             await update_lambda_run_status(db, run_id, "completed", final_state=final_state)
@@ -242,33 +259,32 @@ class LocalDockerExecutor:
         except Exception as e:
             logger.warning(f"Failed to copy output {src} for run {run_id}: {e}")
 
-    async def _process_output(self, run_id: str, workspace_dir: Path):
+    async def _process_output(self, run_id: str, mount_dir: Path, persistent_out: Path):
         """
-        Collects all outputs from the sandbox run:
-        - Copies everything in /work/outputs back into host outputs dir.
-        - Updates DB with result.json or error.json if present.
+        Copy everything from /work/outputs (inside container == mount_dir/outputs on host)
+        into the persistent outputs folder under the run root and update DB state.
         """
         try:
-            output_dir = workspace_dir / "outputs"
-            host_output_dir = _LAMBDA_RUNS_DIR / run_id / "outputs"
+            output_dir = mount_dir / "outputs"
+            host_output_dir = persistent_out
             host_output_dir.mkdir(parents=True, exist_ok=True)
 
-            # 1. Copy all files from container outputs → host outputs
+            logger.info(f"[{run_id}] staging from {output_dir.resolve()} → {host_output_dir.resolve()}")
+
             if output_dir.exists():
                 for item in output_dir.iterdir():
                     dest = host_output_dir / item.name
                     if item.is_file():
                         self._safe_copy(item, dest, run_id)
                     elif item.is_dir():
-                        if dest.resolve() == item.resolve():
-                            logger.debug(f"Skipping redundant copy of directory for run {run_id}: {item}")
-                            continue
-                        shutil.copytree(item, dest, dirs_exist_ok=True)
+                        if dest.resolve() != item.resolve():
+                            shutil.copytree(item, dest, dirs_exist_ok=True)
 
-            # 2. Process result/error JSON to update DB state
-            await self._save_final_state(run_id, workspace_dir)
+            # Update DB with final state read from mount_dir/outputs/result.json
+            await self._save_final_state(run_id, mount_dir)
 
             logger.info(f"Lambda run '{run_id}' completed successfully. Outputs staged to {host_output_dir}.")
+
         except Exception as e:
             logger.error(f"Error processing output for run {run_id}: {e}", exc_info=True)
             async with get_async_db_session() as db:
@@ -276,5 +292,5 @@ class LocalDockerExecutor:
                     db,
                     run_id,
                     "failed",
-                    error_message=f"Output processing failed: {e}"
+                    error_message=f"Output processing failed: {e}",
                 )
