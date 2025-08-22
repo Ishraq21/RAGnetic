@@ -3,6 +3,7 @@ import json
 import logging
 from sqlalchemy import insert, select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session as SyncSession
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from app.db.models import conversation_metrics_table, users_table, roles_table, user_api_keys_table, \
     role_permissions_table, user_organizations_table, organizations_table, document_chunks_table, citations_table, \
@@ -667,7 +668,7 @@ async def mark_temp_document_cleaned(db: AsyncSession, row_id: int) -> None:
     stmt = (
         update(temporary_documents_table)
         .where(temporary_documents_table.c.id == row_id)
-        .values(cleaned_up=True, updated_at=datetime.utcnow())
+        .values(cleaned_up=True)
     )
     await db.execute(stmt)
     await db.commit()
@@ -729,6 +730,49 @@ async def delete_temp_document_data(db: AsyncSession, temp_doc_id: str) -> bool:
         logger.error(f"Failed to atomically delete temp document data for {temp_doc_id}: {e}", exc_info=True)
         # Re-raise the exception to trigger a rollback in the calling function
         raise
+
+def mark_temp_document_cleaned_sync(db: SyncSession, row_id: int) -> None:
+    db.execute(
+        update(temporary_documents_table)
+        .where(temporary_documents_table.c.id == row_id)
+        .values(cleaned_up=True)
+    )
+
+def delete_temp_document_data_sync(db: SyncSession, temp_doc_id: str) -> bool:
+    """
+    Sync version. Deletes citations -> chunks -> temp doc.
+    No commit here; call inside an explicit transaction (e.g., with Session.begin()).
+    """
+    # Find the temp doc row id
+    temp_doc_row_id = db.execute(
+        select(temporary_documents_table.c.id)
+        .where(temporary_documents_table.c.temp_doc_id == temp_doc_id)
+    ).scalar_one_or_none()
+    if not temp_doc_row_id:
+        logger.warning(f"[sync] Attempted to delete non-existent temp document: {temp_doc_id}")
+        return False
+
+    # Collect chunk ids
+    chunk_ids = db.execute(
+        select(document_chunks_table.c.id)
+        .where(document_chunks_table.c.temp_document_id == temp_doc_row_id)
+    ).scalars().all()
+
+    if chunk_ids:
+        db.execute(
+            delete(citations_table)
+            .where(citations_table.c.chunk_id.in_(chunk_ids))
+        )
+        db.execute(
+            delete(document_chunks_table)
+            .where(document_chunks_table.c.id.in_(chunk_ids))
+        )
+
+    db.execute(
+        delete(temporary_documents_table)
+        .where(temporary_documents_table.c.id == temp_doc_row_id)
+    )
+    return True
 
 
 async def get_temp_document_by_user_thread_id(
