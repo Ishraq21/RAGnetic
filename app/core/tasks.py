@@ -14,7 +14,7 @@ from app.db.models import chat_sessions_table, temporary_documents_table
 from app.db import get_sync_db_engine
 from app.services.temporary_document_service import TemporaryDocumentService
 from app.core.config import get_db_connection, get_memory_storage_config, get_log_storage_config, get_path_settings
-from app.db.dao import delete_temp_document_data, mark_temp_document_cleaned
+from app.db.dao import delete_temp_document_data_sync, mark_temp_document_cleaned_sync
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ celery_app.conf.update(
 def cleanup_temporary_documents():
     """
     Celery task to clean up temporary documents that have expired.
-    This task is now idempotent, transactional, and robust.
+    Idempotent, transactional, and robust.
     """
     task_logger.info("Starting robust cleanup task for expired temporary documents.")
 
@@ -97,6 +97,9 @@ def cleanup_temporary_documents():
 
         task_logger.info(f"Found {len(expired_docs)} expired temporary documents to clean up.")
 
+        # End the implicit transaction started by the SELECT so we can open clean per-doc txns
+        db_session.rollback()
+
         # Step 2: Process each expired document
         for row in expired_docs:
             temp_doc_id = row["temp_doc_id"]
@@ -104,19 +107,19 @@ def cleanup_temporary_documents():
             try:
                 # Start a new transaction for each cleanup operation
                 with db_session.begin():
-                    # 1. Perform filesystem cleanup using the static method
+                    # 1) Filesystem cleanup
                     TemporaryDocumentService.cleanup_fs(row)
 
-                    # 2. Perform database cleanup (using sync DAO function directly)
-                    delete_temp_document_data(db_session, temp_doc_id)
+                    # 2) Database cleanup (sync helpers; no commits inside)
+                    delete_temp_document_data_sync(db_session, temp_doc_id)
 
-                    # 3. Mark the record as cleaned up
-                    mark_temp_document_cleaned(db_session, row["id"])
+                    # 3) Mark the record as cleaned up (sync helper; no commit)
+                    mark_temp_document_cleaned_sync(db_session, row["id"])
 
                 task_logger.info(f"Cleanup for temp doc '{temp_doc_id}' completed successfully.")
 
             except Exception:
-                # The `with db_session.begin()` block will automatically rollback on an exception
+                # Context manager rolls back automatically on exception
                 task_logger.exception(
                     f"A critical error occurred during cleanup of temp_doc_id '{temp_doc_id}'. "
                     f"Transaction rolled back."
