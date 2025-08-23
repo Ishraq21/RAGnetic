@@ -2,6 +2,7 @@ import logging
 import glob
 import os
 import pandas as pd
+import json
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from sqlalchemy.sql import expression
@@ -14,7 +15,7 @@ from sqlalchemy import select, func, join, and_
 
 from app.db import get_db
 from app.db.models import conversation_metrics_table, chat_sessions_table, users_table, citations_table, \
-    chat_messages_table, document_chunks_table, lambda_runs
+    chat_messages_table, document_chunks_table, lambda_runs, benchmark_runs_table, benchmark_items_table
 from app.core.security import PermissionChecker
 from app.schemas.security import User
 from pydantic import BaseModel, Field
@@ -226,7 +227,8 @@ async def get_benchmark_summary(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail=f"No benchmark results found in '{_BENCHMARK_DIR}'. Run 'ragnetic evaluate benchmark' first.")
 
-        all_benchmark_files = sorted(glob.glob(str(_BENCHMARK_DIR / "*.csv")), reverse=True)
+        bench_path = FilePath(_BENCHMARK_DIR)
+        all_benchmark_files = sorted(glob.glob(str(bench_path / "*.csv")), reverse=True)
 
         if not all_benchmark_files:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -350,13 +352,42 @@ async def get_benchmark_summary(
         aggregated_df = combined_df.groupby('agent_name').agg(**final_agg_dict_for_df).reset_index()
 
         # Fill None values for object types if they didn't have unique values
+        required_defaults = {
+            "total_test_cases_evaluated": 0,
+            "avg_key_fact_recall": 0.0,
+            "avg_faithfulness": 0.0,
+            "avg_answer_relevance": 0.0,
+            "avg_retrieval_f1": 0.0,
+            "total_estimated_cost_usd": 0.0,
+            "total_tokens": 0,
+            "avg_retrieval_time_s": 0.0,
+            "avg_generation_time_s": 0.0,
+
+            # config sampling columns (strings/ints)
+            "agent_llm_model": "N/A",
+            "agent_embedding_model": "N/A",
+            "chunking_mode": "N/A",
+            "chunk_size": 0,
+            "chunk_overlap": 0,
+            "vector_store_type": "N/A",
+            "retrieval_strategy": "N/A",
+            "bm25_k": 0,
+            "semantic_k": 0,
+            "rerank_top_n": 0,
+            "hit_rate_k_value": 0,
+        }
+        for col, default in required_defaults.items():
+            if col not in aggregated_df.columns:
+                aggregated_df[col] = default
+
+        # Fill None values for object types if they didn't have unique values
         for col in aggregated_df.columns:
             if aggregated_df[col].dtype == 'object':
                 aggregated_df[col] = aggregated_df[col].fillna("N/A")
             elif pd.api.types.is_numeric_dtype(aggregated_df[col]):
-                aggregated_df[col] = aggregated_df[col].fillna(0)  # Fill numeric NaNs with 0
+                aggregated_df[col] = aggregated_df[col].fillna(0)
 
-        return [BenchmarkSummaryEntry.model_validate(row.to_dict()) for idx, row in aggregated_df.iterrows()]
+        return [BenchmarkSummaryEntry.model_validate(row.to_dict()) for _, row in aggregated_df.iterrows()]
 
     except HTTPException:  # Re-raise HTTPExceptions (e.g., from PermissionChecker)
         raise
@@ -975,3 +1006,166 @@ async def get_lambda_run_output(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not retrieve output file."
         )
+
+class BenchmarkRunRow(BaseModel):
+    run_id: str
+    agent_name: str
+    dataset_id: Optional[str] = None
+    status: str
+    total_items: int
+    completed_items: int
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    summary_metrics: Optional[Dict[str, Any]] = None
+
+class BenchmarkItemRow(BaseModel):
+    run_id: str
+    item_index: int
+    question: str
+    ground_truth_chunk_id: Optional[str] = None
+    retrieved_ids: Optional[List[str]] = None
+    retrieval_metrics: Optional[Dict[str, Any]] = None
+    context_size: Optional[int] = None
+    answer: Optional[str] = None
+    judge_scores: Optional[Dict[str, Any]] = None
+    token_usage: Optional[Dict[str, Any]] = None
+    costs: Optional[Dict[str, Any]] = None
+    durations: Optional[Dict[str, Any]] = None
+    citations: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+@router.get("/benchmarks/runs", response_model=List[BenchmarkRunRow], tags=["Analytics API"])
+async def list_benchmark_runs(
+    agent_name: Optional[str] = Query(None, description="Filter by agent name."),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(PermissionChecker(["analytics:read_benchmarks"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    List benchmark runs from the database (source of truth).
+    """
+    try:
+        stmt = select(benchmark_runs_table).order_by(benchmark_runs_table.c.started_at.desc())
+        if agent_name:
+            stmt = stmt.where(benchmark_runs_table.c.agent_name == agent_name)
+        stmt = stmt.limit(limit).offset(offset)
+        rows = (await db.execute(stmt)).mappings().all()
+        return [BenchmarkRunRow(**dict(r)) for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to list benchmark runs: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list benchmark runs.")
+
+@router.get("/benchmarks/runs/{run_id}", response_model=BenchmarkRunRow, tags=["Analytics API"])
+async def get_benchmark_run(
+    run_id: str = Path(..., description="Benchmark run ID."),
+    current_user: User = Depends(PermissionChecker(["analytics:read_benchmarks"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get a single benchmark run by run_id.
+    """
+    try:
+        row = (await db.execute(
+            select(benchmark_runs_table).where(benchmark_runs_table.c.run_id == run_id)
+        )).mappings().first()
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
+        return BenchmarkRunRow(**dict(row))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch benchmark run {run_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch run.")
+
+@router.get("/benchmarks/runs/{run_id}/items", response_model=List[BenchmarkItemRow], tags=["Analytics API"])
+async def get_benchmark_items(
+    run_id: str = Path(..., description="Benchmark run ID."),
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(PermissionChecker(["analytics:read_benchmarks"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    List per-item benchmark results for a run.
+    """
+    try:
+        stmt = (
+            select(benchmark_items_table)
+            .where(benchmark_items_table.c.run_id == run_id)
+            .order_by(benchmark_items_table.c.item_index.asc())
+            .limit(limit).offset(offset)
+        )
+        rows = (await db.execute(stmt)).mappings().all()
+        return [BenchmarkItemRow(**dict(r)) for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to fetch items for run {run_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch run items.")
+
+
+@router.get("/benchmarks/runs/{run_id}/export", tags=["Analytics API"])
+async def export_benchmark_run_csv(
+    run_id: str = Path(..., description="Benchmark run ID."),
+    current_user: User = Depends(PermissionChecker(["analytics:read_benchmarks"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Materializes a CSV for the given run_id from the DB and returns it.
+    The file is written into BENCHMARK_DIR using the canonical name
+    'benchmark_{agent}_{run_id}.csv' (overwriting if it exists), then served.
+    """
+    try:
+        # 1) Fetch run header (for agent name and existence check)
+        run_row = (await db.execute(
+            select(benchmark_runs_table).where(benchmark_runs_table.c.run_id == run_id)
+        )).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
+
+        agent_name = run_row["agent_name"] or "agent"
+
+        # 2) Fetch items
+        rows = (await db.execute(
+            select(benchmark_items_table)
+            .where(benchmark_items_table.c.run_id == run_id)
+            .order_by(benchmark_items_table.c.item_index.asc())
+        )).mappings().all()
+
+        if not rows:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No items for this run.")
+
+        # 3) Convert rows to a CSV-friendly dataframe
+        #    - JSON columns become JSON strings
+        def normalize_row(m):
+            d = dict(m)
+            for key in ("retrieved_ids", "retrieval_metrics", "judge_scores", "token_usage",
+                        "costs", "durations", "citations"):
+                if key in d and (isinstance(d[key], (dict, list)) or d[key] is None):
+                    d[key] = json.dumps(d[key]) if d[key] is not None else ""
+            return d
+
+        records = [normalize_row(r) for r in rows]
+        df = pd.DataFrame.from_records(records)
+
+        # 4) Compute target path (ensure BENCHMARK_DIR exists)
+        # _BENCHMARK_DIR is already defined at the top of this module via get_path_settings()
+        os.makedirs(_BENCHMARK_DIR, exist_ok=True)
+
+        # sanitize agent name for filename
+        safe_agent = "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in agent_name)
+        out_path = FilePath(_BENCHMARK_DIR) / f"benchmark_{safe_agent}_{run_id}.csv"
+
+        # 5) Write CSV and serve
+        df.to_csv(out_path, index=False)
+        return FileResponse(
+            str(out_path),
+            media_type="text/csv",
+            filename=out_path.name
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to export CSV for benchmark run {run_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to export benchmark CSV.")

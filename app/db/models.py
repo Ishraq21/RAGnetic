@@ -22,6 +22,7 @@ sender_enum = Enum("human", "ai", name="sender_enum")
 workflow_status_enum = Enum("running", "completed", "failed", "paused", name="workflow_status_enum")
 agent_status_enum = Enum("running", "completed", "failed", name="agent_status_enum")
 api_key_scope_enum = Enum("admin", "editor", "viewer", name="api_key_scope_enum")
+benchmark_status_enum = Enum('running', 'completed', 'failed', 'cancelled', name='benchmark_status')
 
 
 # --- Table Definitions ---
@@ -373,6 +374,44 @@ lambda_runs = Table(
 
 )
 
+benchmark_runs_table = Table(
+    "benchmark_runs", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("run_id", String(255), unique=True, nullable=False, index=True),
+    Column("agent_name", String(255), nullable=False, index=True),
+    Column("dataset_id", String(255), nullable=True, index=True),
+    Column("prompt_hash", String(64), nullable=True),
+    Column("agent_config_hash", String(64), nullable=True),
+    Column("judge_model", String(255), nullable=True),
+    Column("config_snapshot", JSON, nullable=True),
+    Column("total_items", Integer, default=0),
+    Column("completed_items", Integer, default=0),
+    Column("started_at", DateTime, default=utc_timestamp, nullable=False),
+    Column("ended_at", DateTime, nullable=True),
+    Column("status", benchmark_status_enum, nullable=False, default="running"),
+    Column("summary_metrics", JSON, nullable=True),
+    Column("error", Text, nullable=True),
+)
+
+benchmark_items_table = Table(
+    "benchmark_items", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("run_id", String(255), ForeignKey("benchmark_runs.run_id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("item_index", Integer, nullable=False),
+    Column("question", Text, nullable=False),
+    Column("ground_truth_chunk_id", String(255), nullable=True),
+    Column("retrieved_ids", JSON, nullable=True),
+    Column("retrieval_metrics", JSON, nullable=True),
+    Column("context_size", Integer, nullable=True),
+    Column("answer", Text, nullable=True),
+    Column("judge_scores", JSON, nullable=True),
+    Column("token_usage", JSON, nullable=True),
+    Column("costs", JSON, nullable=True),
+    Column("durations", JSON, nullable=True),
+    Column("citations", JSON, nullable=True),
+    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
+    UniqueConstraint("run_id", "item_index", name="uq_bench_item_run_idx"),
+)
 
 
 # --- Indexes for Performance ---

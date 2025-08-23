@@ -1,3 +1,4 @@
+import ast
 import asyncio
 import configparser
 import glob
@@ -5,6 +6,7 @@ import json
 import logging
 import logging.config
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -1402,10 +1404,10 @@ def test():
 
 @app.command("generate-test", help="Generates a test set from an agent's sources.")
 def generate_test_command(
-        agent_name: str = typer.Argument(..., help="The agent to build the test set from."),
-        output_file: str = typer.Option("test_set.json", "--output", "-o",
-                                        help="Path to save the generated JSON file."),
-        num_questions: int = typer.Option(50, "--num-questions", "-n", help="Number of questions to generate."),
+    agent_name: str = typer.Argument(..., help="The agent to build the test set from."),
+    output_file: str = typer.Option("test_set.json", "--output", "-o",
+                                    help="File name or path for the generated JSON."),
+    num_questions: int = typer.Option(50, "--num-questions", "-n", help="Number of questions to generate."),
 ):
     _validate_agent_name_cli(agent_name)
     logger = logging.getLogger(__name__)
@@ -1413,63 +1415,124 @@ def generate_test_command(
     try:
         agent_config = load_agent_config(agent_name)
         qa_pairs = asyncio.run(generate_test_set(agent_config, num_questions))
-        if qa_pairs:
-            with open(output_file, 'w') as f:
-                json.dump(qa_pairs, f, indent=2)
-            logger.info(f"\nSuccessfully generated {len(qa_pairs)} Q&A pairs to '{output_file}'")
+
+        # Default to BENCHMARK_DIR when a bare filename is provided
+        paths = get_path_settings()
+        bench_dir = Path(paths["BENCHMARK_DIR"])
+        bench_dir.mkdir(parents=True, exist_ok=True)
+
+        out_path = Path(output_file)
+        if not out_path.is_absolute():
+            out_path = bench_dir / out_path.name
+
+        with out_path.open("w", encoding="utf-8") as f:
+            json.dump(qa_pairs, f, indent=2)
+
+        logger.info(f"Saved {len(qa_pairs)} Q&A pairs → '{out_path}'")
     except Exception as e:
         logger.error(f"An error occurred during test set generation: {e}", exc_info=True)
         raise typer.Exit(code=1)
 
 
+
 @app.command("benchmark", help="Runs a retrieval quality benchmark on an agent.")
 def benchmark_command(
-        agent_name: str = typer.Argument(..., help="The agent to benchmark."),
-        test_set_file: str = typer.Option(..., "--test-set", "-t", help="Path to a JSON test set file."),
-        show_detailed_results: Optional[bool] = typer.Option(None, "--show-detailed-results", "-s",
-                                                             help="Explicitly show/hide detailed results in console."),
+    agent_name: str = typer.Argument(..., help="The agent to benchmark."),
+    test_set_file: str = typer.Option(..., "--test-set", "-t", help="Path to a JSON test set file."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Optional run ID (auto-generated if omitted)."),
+    export_csv: Optional[str] = typer.Option(None, "--export-csv", help="Optional CSV path (defaults to BENCHMARK_DIR/benchmark_{agent}_{run}.csv)."),
+    show_detailed_results: Optional[bool] = typer.Option(None, "--show-detailed-results", "-s",
+                                                         help="Explicitly show/hide detailed results in console."),
 ):
     _validate_agent_name_cli(agent_name)
     logger = logging.getLogger(__name__)
     logger.info(f"--- Running Benchmark for Agent: '{agent_name}' ---")
 
     try:
-        agent_config = load_agent_from_yaml_file(_AGENTS_DIR / f"{agent_name}.yaml")
-        with open(test_set_file, 'r') as f:
+        agent_config = load_agent_config(agent_name)
+
+        with open(test_set_file, "r", encoding="utf-8") as f:
             test_set = json.load(f)
 
-        results_df = run_benchmark(agent_config, test_set)
+        engine = db.get_sync_db_engine()
+        df = run_benchmark(
+            agent_config,
+            test_set,
+            run_id=run_id,
+            dataset_id=None,
+            sync_engine=engine,
+            export_csv_path=export_csv,
+        )
 
-        if not results_df.empty:
-            results_filename = _BENCHMARK_DIR / f"benchmark_{agent_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            results_df.to_csv(results_filename, index=False)
-            logger.info(f"Full benchmark results saved to: {results_filename}")
-
-            recall_score = results_df["key_fact_recalled"].mean()
-            avg_noise = results_df["contextual_noise"].mean()
-            total_cost = results_df["estimated_cost_usd"].sum()
-
-            typer.secho("\n--- Benchmark Complete ---", bold=True)
-            typer.echo("\nOverall Scores:")
-            typer.secho(f"  - Key Fact Recall: {recall_score:.2%}", fg=typer.colors.GREEN)
-            typer.secho(f"  - Average Context Size (Noise): {avg_noise:.2f} docs", fg=typer.colors.YELLOW)
-            typer.secho(f"  - Total Estimated Cost: ${total_cost:.6f} USD", fg=typer.colors.BLUE)
-            typer.secho(f"\nDetailed results saved to: {results_filename}", fg=typer.colors.BLUE)
-
-            should_show_console_results = show_detailed_results if show_detailed_results is not None else typer.confirm(
-                "\nShow detailed results in console?", default=False, abort=False)
-
-            if should_show_console_results:
-                display_columns = ["question", "generated_answer", "key_fact_recalled", "faithfulness", "total_tokens",
-                                   "estimated_cost_usd", "retrieval_f1"]
-                existing_columns = [col for col in display_columns if col in results_df.columns]
-                typer.echo(results_df[existing_columns].to_string())
-        else:
+        if df.empty:
             logger.error("Benchmark failed to produce results.")
+            raise typer.Exit(code=1)
+
+        # Gather summary from the new nested columns
+        rid = df["run_id"].iloc[0]
+        total_items = len(df)
+
+        avg_hit5 = float(df["retrieval"].apply(lambda r: (r or {}).get("hit@5", 0.0)).mean())
+        avg_mrr = float(df["retrieval"].apply(lambda r: (r or {}).get("mrr", 0.0)).mean())
+        avg_ndcg10 = float(df["retrieval"].apply(lambda r: (r or {}).get("ndcg@10", 0.0)).mean())
+
+        total_cost = float(df["costs"].apply(lambda c: (c or {}).get("total_usd", 0.0)).sum())
+        avg_ret_s = float(df["durations"].apply(lambda d: (d or {}).get("retrieval_s", 0.0)).mean())
+        avg_gen_s = float(df["durations"].apply(lambda d: (d or {}).get("generation_s", 0.0)).mean())
+
+        typer.secho("\n--- Benchmark Complete ---", bold=True)
+        typer.echo(f"  Run ID: {rid}")
+        typer.echo(f"  Items: {total_items}")
+        typer.secho(f"  Avg hit@5:    {avg_hit5:.3f}", fg=typer.colors.GREEN)
+        typer.secho(f"  Avg MRR:      {avg_mrr:.3f}", fg=typer.colors.GREEN)
+        typer.secho(f"  Avg nDCG@10:  {avg_ndcg10:.3f}", fg=typer.colors.GREEN)
+        typer.secho(f"  Total Cost:   ${total_cost:.6f}", fg=typer.colors.BLUE)
+        typer.secho(f"  Avg Retrieval Time: {avg_ret_s:.3f}s", fg=typer.colors.YELLOW)
+        typer.secho(f"  Avg Generation Time: {avg_gen_s:.3f}s", fg=typer.colors.YELLOW)
+
+        # Resolve where the CSV is
+        paths = get_path_settings()
+        bench_dir = Path(paths["BENCHMARK_DIR"])
+        agent_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", agent_name).strip("._")
+        default_csv = bench_dir / f"benchmark_{agent_slug}_{rid}.csv"
+        typer.secho(f"\nCSV: {export_csv or str(default_csv)}", fg=typer.colors.BLUE)
+
+        # Optional detailed view
+        should_show = show_detailed_results if show_detailed_results is not None else typer.confirm(
+            "\nShow detailed results in console?", default=False, abort=False
+        )
+        if should_show:
+            # Build a compact per-item view without changing the stored schema
+            rows = []
+            for _, row in df.iterrows():
+                r = row.get("retrieval") or {}
+                d = row.get("durations") or {}
+                c = row.get("costs") or {}
+                rows.append({
+                    "idx": row.get("item_index"),
+                    "q": (row.get("question") or "")[:100] + ("…" if len(row.get("question") or "") > 100 else ""),
+                    "ctx": row.get("context_size"),
+                    "hit@5": r.get("hit@5"),
+                    "mrr": r.get("mrr"),
+                    "ndcg@10": r.get("ndcg@10"),
+                    "ret_s": d.get("retrieval_s"),
+                    "gen_s": d.get("generation_s"),
+                    "cost_usd": c.get("total_usd"),
+                })
+            try:
+                import pandas as _pd
+                view = _pd.DataFrame(rows, columns=["idx", "q", "ctx", "hit@5", "mrr", "ndcg@10", "ret_s", "gen_s", "cost_usd"])
+                typer.echo(view.to_string(index=False))
+            except Exception:
+                # Fallback print if pandas is not available for some reason
+                for r in rows:
+                    typer.echo(f"[{r['idx']:>3}] hit@5={r['hit@5']} mrr={r['mrr']:.3f} ndcg@10={r['ndcg@10']:.3f} "
+                               f"ret={r['ret_s']:.2f}s gen={r['gen_s']:.2f}s cost=${r['cost_usd']:.6f} :: {r['q']}")
 
     except Exception as e:
         logger.error(f"An unexpected error occurred during benchmark: {e}", exc_info=True)
         raise typer.Exit(code=1)
+
 
 
 @app.command("inspect-run", help="Inspect a specific agent run and its steps.")
@@ -2703,151 +2766,234 @@ def analytics_latency_command(
 
 @analytics_app.command(name="benchmarks", help="Displays summaries of past benchmark runs.")
 def analytics_benchmarks_command(
-        agent_name: Optional[str] = typer.Option(None, "--agent", "-a",
-                                                 help="Filter benchmarks by a specific agent name."),
-        show_detailed: bool = typer.Option(False, "--detailed", "-d",
-                                           help="Show detailed results for each question in the benchmark."),
-        latest: bool = typer.Option(False, "--latest", "-l",
-                                    help="Show only the latest benchmark run for the specified agent."),
+    agent_name: Optional[str] = typer.Option(None, "--agent", "-a", help="Filter benchmarks by agent name."),
+    show_detailed: bool = typer.Option(False, "--detailed", "-d", help="Show detailed per-item rows."),
+    latest: bool = typer.Option(False, "--latest", "-l", help="Show only the latest benchmark run for the agent."),
 ):
     """
-    Retrieves and displays summaries of past benchmark runs from CSV files.
+    Summarize benchmark CSVs that may contain *nested* columns:
+    - retrieval, durations, costs, token_usage, judge (JSON-serializable)
+    Also supports older flat CSVs (key_fact_recalled, retrieval_f1, etc.).
     """
     logger.info("Retrieving benchmark results...")
 
-    if not os.path.exists(_BENCHMARK_DIR) or not os.listdir(_BENCHMARK_DIR):
-        typer.secho(f"No benchmark results found in '{_BENCHMARK_DIR}'. Run 'ragnetic evaluate benchmark' first.",
+    paths = get_path_settings()
+    bench_dir = Path(paths["BENCHMARK_DIR"])
+    if not bench_dir.exists() or not any(bench_dir.iterdir()):
+        typer.secho(f"No benchmark results found in '{bench_dir}'. Run 'ragnetic benchmark' first.",
                     fg=typer.colors.YELLOW)
         raise typer.Exit(code=0)
 
-    all_benchmark_files = sorted(glob.glob(str(_BENCHMARK_DIR / "*.csv")), reverse=True)
-
-    if not all_benchmark_files:
-        typer.secho(f"No .csv benchmark files found in '{_BENCHMARK_DIR}'.", fg=typer.colors.YELLOW)
+    files = sorted(glob.glob(str(bench_dir / "*.csv")), reverse=True)
+    if not files:
+        typer.secho(f"No .csv benchmark files found in '{bench_dir}'.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=0)
 
-    # Filter files based on agent_name if provided
-    filtered_files = []
+    # Optional filter by agent from filename: benchmark_{agent}_{runOrTimestamp}.csv
     if agent_name:
-        for f in all_benchmark_files:
-            # Filename format: benchmark_AGENTNAME_YYYYMMDD_HHMMSS.csv
-            # Extract agent name from filename: splits on '_' and takes the second part
-            filename_parts = Path(f).name.split('_')
-            if len(filename_parts) >= 2 and filename_parts[1] == agent_name:
-                filtered_files.append(f)
-        if not filtered_files:
+        filtered = []
+        for f in files:
+            parts = Path(f).name.split('_')
+            if len(parts) >= 3 and parts[1] == agent_name:
+                filtered.append(f)
+        if not filtered:
             typer.secho(f"No benchmark results found for agent: '{agent_name}'.", fg=typer.colors.YELLOW)
             raise typer.Exit(code=0)
-        all_benchmark_files = filtered_files
+        files = filtered
 
-    if latest and all_benchmark_files:
-        # If latest is true, take only the first one (since they are reverse sorted by name/timestamp)
-        all_benchmark_files = [all_benchmark_files[0]]
-        logger.info(f"Displaying latest benchmark run: {Path(all_benchmark_files[0]).name}")
-    elif latest and not all_benchmark_files:
+    if latest and files:
+        files = [files[0]]
+        logger.info(f"Displaying latest benchmark run: {Path(files[0]).name}")
+    elif latest and not files:
         typer.secho("No benchmark runs found to display the latest.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=0)
 
-    all_results_dfs = []
-    for f_path in all_benchmark_files:
+    def _maybe_parse(x):
+        if isinstance(x, (dict, list)):
+            return x
+        if not isinstance(x, str):
+            return None
+        s = x.strip()
+        if not s:
+            return None
+        # Prefer JSON; fall back to literal_eval (handles pandas dict-string with single quotes)
+        try:
+            return json.loads(s)
+        except Exception:
+            try:
+                return ast.literal_eval(s)
+            except Exception:
+                return None
+
+    all_dfs = []
+    for f_path in files:
         try:
             df = pd.read_csv(f_path)
-            df['benchmark_id'] = Path(f_path).name.replace('.csv', '')
-            all_results_dfs.append(df)
+            df["benchmark_id"] = Path(f_path).name.replace(".csv", "")
+
+            # Parse nested columns if present
+            for col in ("retrieval", "durations", "costs", "token_usage", "judge"):
+                if col in df.columns:
+                    df[col] = df[col].apply(_maybe_parse)
+
+            # Derive unified numeric columns (robust to new/old schema)
+            # Retrieval metrics
+            df["hit@5"] = df["retrieval"].apply(lambda r: (r or {}).get("hit@5", None)) if "retrieval" in df.columns else None
+            df["mrr"] = df["retrieval"].apply(lambda r: (r or {}).get("mrr", None)) if "retrieval" in df.columns else None
+            df["ndcg@10"] = df["retrieval"].apply(lambda r: (r or {}).get("ndcg@10", None)) if "retrieval" in df.columns else None
+
+            # Durations
+            df["retrieval_time_s_new"] = df["durations"].apply(lambda d: (d or {}).get("retrieval_s", None)) if "durations" in df.columns else None
+            df["generation_time_s_new"] = df["durations"].apply(lambda d: (d or {}).get("generation_s", None)) if "durations" in df.columns else None
+
+            # Costs
+            df["total_cost_usd_new"] = df["costs"].apply(lambda c: (c or {}).get("total_usd", None)) if "costs" in df.columns else None
+
+            # Token usage (LLM tokens only; embedding tokens shown separately)
+            def _sum_llm_tokens(tu):
+                if not isinstance(tu, dict):
+                    return None
+                def _tok(d):
+                    if not isinstance(d, dict):
+                        return 0
+                    if d.get("total_tokens") is not None:
+                        return d.get("total_tokens") or 0
+                    return (d.get("prompt_tokens", 0) or 0) + (d.get("completion_tokens", 0) or 0)
+                return _tok(tu.get("agent")) + _tok(tu.get("judge"))
+
+            df["total_llm_tokens_new"] = df["token_usage"].apply(_sum_llm_tokens) if "token_usage" in df.columns else None
+            df["embedding_tokens"] = df["token_usage"].apply(lambda t: (t or {}).get("embedding_tokens_query", 0)) if "token_usage" in df.columns else 0
+
+            # Judge metrics (new) and fallbacks (old)
+            df["faithfulness_new"] = df["judge"].apply(lambda j: (j or {}).get("faithfulness", None)) if "judge" in df.columns else None
+            df["relevance_new"] = df["judge"].apply(lambda j: (j or {}).get("relevance", None)) if "judge" in df.columns else None
+            df["conciseness_new"] = df["judge"].apply(lambda j: (j or {}).get("conciseness", None)) if "judge" in df.columns else None
+            df["coherence_new"] = df["judge"].apply(lambda j: (j or {}).get("coherence", None)) if "judge" in df.columns else None
+
+            all_dfs.append(df)
         except Exception as e:
             logger.error(f"Failed to read benchmark file '{f_path}': {e}", exc_info=True)
-            typer.secho(f"Warning: Could not read benchmark file '{Path(f_path).name}'. Skipping.",
-                        fg=typer.colors.YELLOW)
-            continue
+            typer.secho(f"Warning: Could not read '{Path(f_path).name}'. Skipping.", fg=typer.colors.YELLOW)
 
-    if not all_results_dfs:
+    if not all_dfs:
         typer.secho("No readable benchmark files found after filtering.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=0)
 
-    combined_df = pd.concat(all_results_dfs, ignore_index=True)
+    df = pd.concat(all_dfs, ignore_index=True)
+
+    # Unified rollups with fallbacks for old flat columns
+    def _mean(col_new, col_old=None, default=0.0):
+        if col_new in df.columns and pd.api.types.is_numeric_dtype(df[col_new]):
+            s = df[col_new].dropna()
+            if len(s):
+                return float(s.mean())
+        if col_old and col_old in df.columns and pd.api.types.is_numeric_dtype(df[col_old]):
+            s = df[col_old].dropna()
+            if len(s):
+                return float(s.mean())
+        return float(default)
+
+    def _sum(col_new, col_old=None, default=0.0):
+        if col_new in df.columns and pd.api.types.is_numeric_dtype(df[col_new]):
+            return float(df[col_new].fillna(0).sum())
+        if col_old and col_old in df.columns and pd.api.types.is_numeric_dtype(df[col_old]):
+            return float(df[col_old].fillna(0).sum())
+        return float(default)
+
+    total_items = int(df.shape[0])
+
+    avg_hit5   = _mean("hit@5")
+    avg_mrr    = _mean("mrr")
+    avg_ndcg10 = _mean("ndcg@10")
+
+    avg_ret_s = _mean("retrieval_time_s_new", "retrieval_time_s")
+    avg_gen_s = _mean("generation_time_s_new", "generation_time_s")
+
+    total_cost_usd = _sum("total_cost_usd_new", "estimated_cost_usd")
+    total_llm_tokens = _sum("total_llm_tokens_new", "total_tokens")
+    total_embed_tokens = _sum("embedding_tokens")
+
+    # Judge metrics new → fallback to old columns if present
+    avg_faith = _mean("faithfulness_new", "faithfulness")
+    avg_relev = _mean("relevance_new", "answer_relevance")
+    avg_conci = _mean("conciseness_new", "conciseness_score")
+    avg_coher = _mean("coherence_new", "coherence_score")
 
     if show_detailed:
         typer.secho("\n--- Detailed Benchmark Results ---", bold=True, fg=typer.colors.CYAN)
-        display_columns = [
-            "benchmark_id", "question", "generated_answer", "key_fact_recalled",
-            "faithfulness", "answer_relevance", "conciseness_score", "coherence_score",
-            "retrieval_f1", "estimated_cost_usd", "total_tokens",
-            "agent_llm_model", "agent_embedding_model",
-            "chunking_mode", "chunk_size", "chunk_overlap",
-            "vector_store_type", "retrieval_strategy", "bm25_k", "semantic_k", "rerank_top_n", "hit_rate_k_value"
-        ]
-        # Filter to only existing columns in case schema changes
-        detailed_df_cols = [col for col in display_columns if col in combined_df.columns]
+        # Build a compact view from unified columns
+        view_cols = []
+        rows = []
 
-        # Limit the 'generated_answer' column content for readability if too long
-        if 'generated_answer' in detailed_df_cols:
-            combined_df['generated_answer'] = combined_df['generated_answer'].str.slice(0, 100) + '...'
+        for _, r in df.iterrows():
+            retr = r.get("retrieval") if "retrieval" in df.columns else None
+            durs = r.get("durations") if "durations" in df.columns else None
+            costs = r.get("costs") if "costs" in df.columns else None
+            judge = r.get("judge") if "judge" in df.columns else None
 
-        typer.echo(combined_df[detailed_df_cols].to_string(index=False))
+            row = {
+                "benchmark_id": r.get("benchmark_id"),
+                "idx": r.get("item_index", None),
+                "question": (str(r.get("question") or "")[:100] + ("…" if len(str(r.get("question") or "")) > 100 else "")),
+                "ctx": r.get("context_size", None),
+                "hit@5": (retr or {}).get("hit@5") if isinstance(retr, dict) else r.get("retrieval_f1", None),
+                "mrr": (retr or {}).get("mrr") if isinstance(retr, dict) else None,
+                "ndcg@10": (retr or {}).get("ndcg@10") if isinstance(retr, dict) else None,
+                "ret_s": (durs or {}).get("retrieval_s") if isinstance(durs, dict) else r.get("retrieval_time_s", None),
+                "gen_s": (durs or {}).get("generation_s") if isinstance(durs, dict) else r.get("generation_time_s", None),
+                "cost_usd": (costs or {}).get("total_usd") if isinstance(costs, dict) else r.get("estimated_cost_usd", None),
+                "faith": (judge or {}).get("faithfulness") if isinstance(judge, dict) else r.get("faithfulness", None),
+                "relevance": (judge or {}).get("relevance") if isinstance(judge, dict) else r.get("answer_relevance", None),
+                "conciseness": (judge or {}).get("conciseness") if isinstance(judge, dict) else r.get("conciseness_score", None),
+                "coherence": (judge or {}).get("coherence") if isinstance(judge, dict) else r.get("coherence_score", None),
+            }
+            rows.append(row)
 
-    else:
-        # Aggregate across all selected benchmarks
-        overall_summary = {
-            "Total Test Cases Evaluated": combined_df.shape[0],  # Renamed from Total Runs for clarity in benchmarks
-            "Avg Key Fact Recall": combined_df[
-                "key_fact_recalled"].mean() if "key_fact_recalled" in combined_df.columns else 0.0,
-            "Avg Faithfulness": combined_df["faithfulness"].mean() if "faithfulness" in combined_df.columns else 0.0,
-            "Avg Answer Relevance": combined_df[
-                "answer_relevance"].mean() if "answer_relevance" in combined_df.columns else 0.0,
-            "Avg Retrieval F1": combined_df["retrieval_f1"].mean() if "retrieval_f1" in combined_df.columns else 0.0,
-            "Total Estimated Cost (USD)": combined_df[
-                "estimated_cost_usd"].sum() if "estimated_cost_usd" in combined_df.columns else 0.0,
-            "Total Tokens": combined_df["total_tokens"].sum() if "total_tokens" in combined_df.columns else 0,
-            "Avg Retrieval Time (s)": combined_df[
-                "retrieval_time_s"].mean() if "retrieval_time_s" in combined_df.columns else 0.0,
-            "Avg Generation Time (s)": combined_df[
-                "generation_time_s"].mean() if "generation_time_s" in combined_df.columns else 0.0,
+        try:
+            detailed = pd.DataFrame(rows, columns=[
+                "benchmark_id","idx","question","ctx","hit@5","mrr","ndcg@10","ret_s","gen_s","cost_usd",
+                "faith","relevance","conciseness","coherence"
+            ])
+            typer.echo(detailed.to_string(index=False))
+        except Exception:
+            for r in rows:
+                typer.echo(
+                    f"[{r.get('idx')}] hit@5={r.get('hit@5')} mrr={r.get('mrr')} ndcg@10={r.get('ndcg@10')} "
+                    f"ret={r.get('ret_s')}s gen={r.get('gen_s')}s cost=${r.get('cost_usd')} :: {r.get('question')}"
+                )
+        return
 
-            # These are for a summary view, so we pick values from the first benchmark if multiple are aggregated
-            # Or consider showing unique values if multiple configs are in play
-            "Agent LLM Model (Sample)": combined_df["agent_llm_model"].iloc[
-                0] if "agent_llm_model" in combined_df.columns and not combined_df["agent_llm_model"].empty else "N/A",
-            "Agent Embedding Model (Sample)": combined_df["agent_embedding_model"].iloc[
-                0] if "agent_embedding_model" in combined_df.columns and not combined_df[
-                "agent_embedding_model"].empty else "N/A",
-            "Chunking Mode (Sample)": combined_df["chunking_mode"].iloc[
-                0] if "chunking_mode" in combined_df.columns and not combined_df["chunking_mode"].empty else "N/A",
-            "Chunk Size (Sample)": combined_df["chunk_size"].iloc[0] if "chunk_size" in combined_df.columns and not
-            combined_df["chunk_size"].empty else "N/A",
-            "Chunk Overlap (Sample)": combined_df["chunk_overlap"].iloc[
-                0] if "chunk_overlap" in combined_df.columns and not combined_df["chunk_overlap"].empty else "N/A",
-            "Vector Store Type (Sample)": combined_df["vector_store_type"].iloc[
-                0] if "vector_store_type" in combined_df.columns and not combined_df[
-                "vector_store_type"].empty else "N/A",
-            "Retrieval Strategy (Sample)": combined_df["retrieval_strategy"].iloc[
-                0] if "retrieval_strategy" in combined_df.columns and not combined_df[
-                "retrieval_strategy"].empty else "N/A",
-            "BM25 K (Sample)": combined_df["bm25_k"].iloc[0] if "bm25_k" in combined_df.columns and not combined_df[
-                "bm25_k"].empty else "N/A",
-            "Semantic K (Sample)": combined_df["semantic_k"].iloc[0] if "semantic_k" in combined_df.columns and not
-            combined_df["semantic_k"].empty else "N/A",
-            "Rerank Top N (Sample)": combined_df["rerank_top_n"].iloc[
-                0] if "rerank_top_n" in combined_df.columns and not combined_df["rerank_top_n"].empty else "N/A",
-            "Hit Rate K Value (Sample)": combined_df["hit_rate_k_value"].iloc[
-                0] if "hit_rate_k_value" in combined_df.columns and not combined_df[
-                "hit_rate_k_value"].empty else "N/A",
-        }
+    # Summary
+    typer.secho("\n--- Benchmark Summary ---", bold=True, fg=typer.colors.CYAN)
+    typer.secho(f"Agent(s): {agent_name if agent_name else 'All'}", fg=typer.colors.WHITE)
+    typer.secho(f"Number of Benchmarks Included: {len(files)}", fg=typer.colors.WHITE)
+    typer.echo(f"  - Total Test Cases Evaluated: {total_items}")
+    typer.secho(f"  - Avg hit@5: {avg_hit5:.3f}", fg=typer.colors.GREEN)
+    typer.secho(f"  - Avg MRR:   {avg_mrr:.3f}", fg=typer.colors.GREEN)
+    typer.secho(f"  - Avg nDCG@10: {avg_ndcg10:.3f}", fg=typer.colors.GREEN)
 
-        typer.secho("\n--- Benchmark Summary ---", bold=True, fg=typer.colors.CYAN)
-        typer.secho(f"Agent(s): {agent_name if agent_name else 'All'}", fg=typer.colors.WHITE)
-        typer.secho(f"Number of Benchmarks Included: {len(all_benchmark_files)}", fg=typer.colors.WHITE)
+    typer.echo(f"  - Avg Faithfulness: {avg_faith:.3f}")
+    typer.echo(f"  - Avg Relevance:    {avg_relev:.3f}")
+    typer.echo(f"  - Avg Conciseness:  {avg_conci:.3f}")
+    typer.echo(f"  - Avg Coherence:    {avg_coher:.3f}")
 
-        for key, value in overall_summary.items():
-            if "Cost" in key:
-                typer.echo(f"  - {key}: ${value:.6f}")
-            elif "Time" in key:
-                typer.echo(f"  - {key}: {value:.4f}s")
-            elif "Avg" in key or "Recall" in key or "Faithfulness" in key or "Relevance" in key or "F1" in key:
-                typer.echo(f"  - {key}: {value:.2%}")
-            else:
-                typer.echo(f"  - {key}: {value}")
+    typer.secho(f"  - Total Estimated Cost: ${total_cost_usd:.6f}", fg=typer.colors.BLUE)
+    typer.echo(f"  - Total LLM Tokens: {int(total_llm_tokens)}")
+    typer.echo(f"  - Total Embedding Tokens: {int(total_embed_tokens)}")
+    typer.secho(f"  - Avg Retrieval Time: {avg_ret_s:.3f}s", fg=typer.colors.YELLOW)
+    typer.secho(f"  - Avg Generation Time: {avg_gen_s:.3f}s", fg=typer.colors.YELLOW)
 
-    typer.secho("\n--- Benchmark Analysis Complete ---", bold=True)
+    # Sample config values (present in new CSVs)
+    def _sample(col, default="N/A"):
+        return df[col].dropna().iloc[0] if col in df.columns and not df[col].dropna().empty else default
+
+    typer.echo("\nConfig (sample from results):")
+    typer.echo(f"  - Agent LLM Model:      {_sample('agent_llm_model')}")
+    typer.echo(f"  - Agent Embedding Model: {_sample('agent_embedding_model')}")
+    typer.echo(f"  - Chunking Mode:         {_sample('chunking_mode')}")
+    typer.echo(f"  - Chunk Size:            {_sample('chunk_size', 0)}")
+    typer.echo(f"  - Chunk Overlap:         {_sample('chunk_overlap', 0)}")
+
 
 
 @analytics_app.command(name="workflow-runs", help="Displays aggregated workflow run metrics.")
