@@ -18,8 +18,8 @@ You are an expert data creator for evaluating Retrieval Augmented Generation (RA
 Generate exactly a single JSON array of 1–2 question/answer objects based *only* on the context.
 
 Each object must have keys:
-  • question (string)  
-  • answer   (string)  
+  • question (string)
+  • answer   (string)
   • type     (Factoid|Analytical|Out-of-scope)
 
 For Out-of-scope:
@@ -36,17 +36,12 @@ Do **NOT** include any other text.
 
 class DatasetGenerator:
     """
-    Handles the generation of a question-answer dataset from a given agent's configuration.
-    It loads documents, chunks them, and then uses an LLM to generate Q&A pairs
-    from a random sample of those chunks.
+    Generates a question-answer dataset from an agent's configuration.
+    Loads documents, chunks them, and asks an LLM to create QA pairs
+    from a (shuffled) sample of those chunks.
     """
 
     def __init__(self, cfg: AgentConfig):
-        """
-        Initializes the dataset generator.
-        Args:
-            cfg: The agent configuration object.
-        """
         self.cfg = cfg
         self.llm = get_llm_model(cfg.llm_model, temperature=0.2)
         logger.info(f"Generating test set for '{cfg.name}' with LLM={cfg.llm_model}")
@@ -55,30 +50,54 @@ class DatasetGenerator:
         self.parser = JsonOutputParser()
 
     def _qa_for_chunk(self, chunk: LangChainDocument) -> List[Dict[str, Any]]:
-        """
-        Generates a list of question-answer pairs for a single document chunk.
-        This remains synchronous as it calls synchronous LLM inference.
-        """
         chain = self.prompt | self.llm | self.parser
         try:
             qa_list = chain.invoke({"context": chunk.page_content})
             if not isinstance(qa_list, list):
                 return []
+
+            md = chunk.metadata or {}
+            cid = md.get("chunk_id")
+            if cid is None:
+                logger.warning(f"Chunk missing chunk_id; skipping. metadata={md}")
+                return []
+
+            out: List[Dict[str, Any]] = []
             for qa in qa_list:
-                qa["retrieval_ground_truth_chunk_id"] = chunk.id
-                qa["source_text"] = chunk.page_content
-            return qa_list
+                q_text = (qa.get("question") or "").strip()
+                a_text = (qa.get("answer") or "").strip()
+                q_type = (qa.get("type") or "").strip()
+
+                if not q_text:
+                    continue
+
+                # Normalize/guard the type
+                allowed = {"Factoid", "Analytical", "Out-of-scope"}
+                if q_type not in allowed:
+                    q_type = "Out-of-scope" if a_text.startswith("UNANSWERABLE:") else "Factoid"
+
+                out.append({
+                    "question": q_text,
+                    "answer": a_text,
+                    "type": q_type,
+                    "retrieval_ground_truth_chunk_id": str(cid),
+                    "source_doc_name": md.get("doc_name"),
+                    "source_chunk_index": md.get("chunk_index"),
+                    "original_doc_id": md.get("original_doc_id"),
+                    "source_text": chunk.page_content,  # handy when inspecting failures
+                })
+            return out
         except Exception as e:
-            logger.error(f"Chunk {chunk.id} QA generation failed: {e}", exc_info=True)
+            logger.error(f"Chunk {getattr(chunk, 'id', 'unknown')} QA generation failed: {e}", exc_info=True)
             return []
 
     async def generate(self, n: int) -> List[Dict[str, Any]]:
         """
-        Generates the full dataset of n questions asynchronously.
+        Asynchronously generate up to n QA items across chunks.
         """
         docs: List[LangChainDocument] = []
 
-        # --- correctly supply (source, agent_config, reproducible_ids) ---
+        # Load all sources
         for source in self.cfg.sources:
             loaded_docs = await load_documents_from_source(
                 source,
@@ -87,7 +106,7 @@ class DatasetGenerator:
             )
             docs.extend(loaded_docs)
 
-        # sort, chunk, sample, and then run QA on each chunk
+        # Sort, chunk, shuffle, and build QA
         docs.sort(key=lambda d: d.metadata.get("original_doc_id", ""))
         chunks = _get_chunks_from_documents(
             docs,
@@ -97,9 +116,9 @@ class DatasetGenerator:
         )
         logger.info(f"→ {len(docs)} docs → {len(chunks)} chunks")
 
-        selected = random.sample(chunks, min(n, len(chunks))) if chunks else []
+        random.shuffle(chunks)
         all_qa_pairs: List[Dict[str, Any]] = []
-        for chunk in tqdm(selected, desc="QA chunks"):
+        for chunk in tqdm(chunks, desc="QA chunks"):
             if len(all_qa_pairs) >= n:
                 break
             all_qa_pairs.extend(self._qa_for_chunk(chunk))
@@ -107,9 +126,9 @@ class DatasetGenerator:
         return all_qa_pairs[:n]
 
 
-async def generate_test_set(agent_cfg: AgentConfig, num_questions: int) -> List[Dict[str, Any]]:  # MODIFIED: async def
+async def generate_test_set(agent_cfg: AgentConfig, num_questions: int) -> List[Dict[str, Any]]:
     """
-    High-level function to generate a test set for a given agent configuration asynchronously.
+    High-level helper: generate a test set for a given agent configuration.
     """
     generator = DatasetGenerator(agent_cfg)
     return await generator.generate(num_questions)

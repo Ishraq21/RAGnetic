@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session as SyncSession
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from app.db.models import conversation_metrics_table, users_table, roles_table, user_api_keys_table, \
     role_permissions_table, user_organizations_table, organizations_table, document_chunks_table, citations_table, \
-    chat_sessions_table, temporary_documents_table
+    chat_sessions_table, temporary_documents_table, benchmark_runs_table, benchmark_items_table
 from app.schemas.security import UserCreate, UserUpdate, RoleCreate
 from app.db.models import conversation_metrics_table
 
@@ -21,9 +21,20 @@ from uuid import uuid4
 from sqlalchemy import func
 from app.schemas.security import RoleCreate
 from app.db.models import lambda_runs
+from sqlalchemy import literal_column
 
 
 logger = logging.getLogger("ragnetic")
+
+
+def _duration_seconds(expr_start, expr_end, bind) -> Any:
+    """Return a SQLAlchemy expression for (end - start) in seconds across dialects."""
+    dname = bind.dialect.name if bind is not None else "sqlite"
+    if dname == "sqlite":
+        # (days) * 86400
+        return 86400 * (func.julianday(expr_end) - func.julianday(expr_start))
+    # Postgres / others: extract epoch from interval
+    return func.extract('epoch', expr_end - expr_start)
 
 
 # --- Password Hashing Utilities ---
@@ -63,7 +74,7 @@ async def create_user(db: AsyncSession, user_in: UserCreate) -> Optional[Dict[st
             users_table.c.email,
             users_table.c.first_name,
             users_table.c.last_name,
-            users_table.c.hashed_password,  # Ensure hashed_password is returned
+            users_table.c.hashed_password,
             users_table.c.is_active,
             users_table.c.is_superuser,
             users_table.c.created_at,
@@ -119,7 +130,11 @@ async def get_user_by_username(db: AsyncSession, username: str) -> Optional[Dict
     result = await db.execute(stmt)
     user_row = result.mappings().first()
     if user_row:
-        return await _format_user_data_for_pydantic(user_row, db)
+        row_map = dict(user_row)
+        user_dict = await _format_user_data_for_pydantic(row_map, db)
+        # include the scope explicitly
+        user_dict["api_key_scope"] = row_map.get("scope")
+        return user_dict
     return None
 
 
@@ -274,7 +289,7 @@ async def get_role_by_id(db: AsyncSession, role_id: int) -> Optional[Dict[str, A
     role_row = result.mappings().first()
     if role_row:
         role_dict = dict(role_row)
-        role_dict["permissions"] = await get_permissions_for_role(db, role_row.id)
+        role_dict["permissions"] = await get_permissions_for_role(db, role_dict["id"])
         return role_dict
     return None
 
@@ -286,7 +301,7 @@ async def get_all_roles(db: AsyncSession, skip: int = 0, limit: int = 100) -> Li
     roles_data = []
     for row in result.mappings().all():
         role_dict = dict(row)
-        role_dict["permissions"] = await get_permissions_for_role(db, row.id)
+        role_dict["permissions"] = await get_permissions_for_role(db, role_dict["id"])
         roles_data.append(role_dict)
     return roles_data
 
@@ -483,7 +498,6 @@ async def get_user_by_api_key(db: AsyncSession, api_key_str: str) -> Optional[Di
         return await _format_user_data_for_pydantic(user_data, db)
     return None
 
-# --- NEW: update_api_key_usage function ---
 async def update_api_key_usage(db: AsyncSession, api_key_str: str) -> None:
     """Updates the last_used_at timestamp and increments the request_count for a given API key."""
     stmt = update(user_api_keys_table).where(
@@ -509,6 +523,30 @@ def save_conversation_metrics_sync(connection, metrics_data: dict):
     except Exception as e:
         logger.error(f"Failed to save conversation metrics (sync): {e}", exc_info=True)
         connection.rollback() # Rollback on error
+
+
+def create_benchmark_run_sync(connection, run_data: dict) -> None:
+    existing = connection.execute(
+        select(benchmark_runs_table.c.run_id).where(benchmark_runs_table.c.run_id == run_data["run_id"])
+    ).first()
+    if existing:
+        return
+    connection.execute(benchmark_runs_table.insert().values(**run_data))
+
+def update_benchmark_run_sync(connection, run_id: str, **fields) -> None:
+    connection.execute(
+        update(benchmark_runs_table).where(benchmark_runs_table.c.run_id == run_id).values(**fields)
+    )
+
+def increment_benchmark_progress_sync(connection, run_id: str, inc: int = 1) -> None:
+    connection.execute(
+        update(benchmark_runs_table)
+        .where(benchmark_runs_table.c.run_id == run_id)
+        .values(completed_items=benchmark_runs_table.c.completed_items + inc)
+    )
+
+def insert_benchmark_item_sync(connection, item: dict) -> None:
+    connection.execute(benchmark_items_table.insert().values(**item))
 
 # --- Document Chunk Management ---
 
@@ -551,9 +589,7 @@ async def get_document_chunks(db: AsyncSession, chunk_ids: List[int]) -> List[Di
 
     stmt = select(document_chunks_table).where(document_chunks_table.c.id.in_(chunk_ids))
     result = await db.execute(stmt)
-    # The .mappings().all() call returns a list of RowMappings.
-    # We convert each RowMapping to a standard dictionary for consistency.
-    return [row._asdict() for row in result.fetchall()]
+    return [dict(row) for row in result.mappings().all()]
 
 # --- Citation Management ---
 
@@ -574,7 +610,7 @@ async def get_citations_for_message(db: AsyncSession, message_id: int) -> List[D
     """Retrieves all citations for a given message."""
     stmt = select(citations_table).where(citations_table.c.message_id == message_id)
     result = await db.execute(stmt)
-    return result.mappings().all()
+    return [dict(m) for m in result.mappings().all()]
 
 
 async def create_chat_message(

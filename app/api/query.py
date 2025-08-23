@@ -211,18 +211,22 @@ async def query_agent(
         )
         await db.commit()
 
-    serialized = _serialize_for_db(final_state)
+    serialized_for_db = _serialize_for_db(final_state)
+
     await db.execute(
         update(agent_runs)
         .where(agent_runs.c.id == run_db_id)
         .values(
             end_time=datetime.utcnow(),
             status="completed" if not final_state.get("error") else "failed",
-            final_state=serialized,
+            final_state=serialized_for_db,
         )
     )
     await db.commit()
-    logger.info(f"User '{current_user.username}' queried agent '{agent_name}' (Run ID: {request_id}).")
 
-    return QueryResponse(response=ai_response_content_str, run_id=request_id, final_state=serialized,
-                         citations=extracted_citations)
+    return QueryResponse(
+        response=ai_response_content_str,
+        run_id=request_id,
+        final_state=final_state,
+        citations=extracted_citations
+    )

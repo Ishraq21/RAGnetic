@@ -1,4 +1,5 @@
 # app/api/evaluation.py
+import asyncio
 import logging
 import json
 import os
@@ -14,6 +15,8 @@ from app.evaluation.benchmark import run_benchmark
 from app.schemas.agent import AgentConfig
 from app.core.config import get_path_settings
 from app.schemas.security import User # Import User schema
+from app.db import get_sync_db_engine
+import secrets
 
 logger = logging.getLogger("ragnetic")
 
@@ -27,72 +30,72 @@ async def generate_test_set_api(
     agent_name: str = Body(..., embed=True, description="The name of the agent."),
     num_questions: int = Body(50, embed=True, description="Number of questions to generate."),
     output_file: str = Body("test_set.json", embed=True, description="Output file name."),
-    bg_tasks: BackgroundTasks = BackgroundTasks(),
-    # Only users with 'evaluation:generate_test_set' permission can generate test sets
+    bg_tasks: BackgroundTasks = None,
     current_user: User = Depends(PermissionChecker(["evaluation:generate_test_set"])),
 ):
-    """
-    Generates a Q&A test set for a given agent and saves it to a file.
-    Runs in the background to prevent a timeout on large datasets.
-    Requires: 'evaluation:generate_test_set' permission.
-    """
+    if bg_tasks is None:
+        from fastapi import BackgroundTasks as _BT
+        bg_tasks = _BT()
+
     try:
         agent_config = load_agent_config(agent_name)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
 
-    logger.info(f"API: User '{current_user.username}' is generating {num_questions} questions for agent '{agent_name}' in the background...")
+    logger.info(f"API: User '{current_user.username}' is generating {num_questions} questions for '{agent_name}' in the background...")
 
-    async def _generate_and_save():
+    def _generate_and_save_sync():
         try:
-            qa_pairs = await generate_test_set(agent_config, num_questions)
-            # Ensure output_file is safe
+            qa_pairs = asyncio.run(generate_test_set(agent_config, num_questions))
             safe_output_file = os.path.join(_APP_PATHS["BENCHMARK_DIR"], os.path.basename(output_file))
-            os.makedirs(os.path.dirname(safe_output_file), exist_ok=True) # Ensure directory exists
+            os.makedirs(os.path.dirname(safe_output_file), exist_ok=True)
             with open(safe_output_file, 'w', encoding='utf-8') as f:
                 json.dump(qa_pairs, f, indent=2)
-            logger.info(f"Successfully generated and saved {len(qa_pairs)} questions to '{safe_output_file}'.")
+            logger.info(f"Saved {len(qa_pairs)} questions to '{safe_output_file}'.")
         except Exception as e:
             logger.error(f"Background task for test set generation failed for '{agent_name}': {e}", exc_info=True)
 
-    bg_tasks.add_task(_generate_and_save)
+    bg_tasks.add_task(_generate_and_save_sync)
+    return {"status": "Test set generation started.", "agent": agent_name, "output_file": output_file}
 
-    return {"status": "Test set generation started in the background.", "agent": agent_name, "output_file": output_file}
 
 
 @router.post("/benchmark", status_code=status.HTTP_202_ACCEPTED)
 async def run_benchmark_api(
     agent_name: str = Body(..., embed=True, description="The name of the agent."),
     test_set: List[Dict[str, Any]] = Body(..., description="The test set as a JSON array of objects."),
-    bg_tasks: BackgroundTasks = BackgroundTasks(),
-    # Only users with 'evaluation:run_benchmark' permission can run benchmarks
+    bg_tasks: BackgroundTasks = None,
     current_user: User = Depends(PermissionChecker(["evaluation:run_benchmark"])),
 ):
-    """
-    Runs a benchmark on an agent using the provided test set.
-    The task runs in the background to prevent a timeout.
-    Requires: 'evaluation:run_benchmark' permission.
-    """
+    if bg_tasks is None:
+        from fastapi import BackgroundTasks as _BT
+        bg_tasks = _BT()
+
     try:
         agent_config = load_agent_config(agent_name)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
 
-    logger.info(f"API: User '{current_user.username}' is running benchmark for agent '{agent_name}' in the background...")
+    logger.info(f"API: User '{current_user.username}' is running benchmark for '{agent_name}' in the background...")
 
-    async def _run_and_save_benchmark():
+    run_id = f"bench_{secrets.token_hex(6)}"
+
+    def _run_and_save_benchmark_sync():
         try:
-            results_df = run_benchmark(agent_config, test_set)
-            results_filename = f"benchmark_{agent_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            # Use the correct path from centralized settings
-            output_path = os.path.join(_APP_PATHS["BENCHMARK_DIR"], results_filename)
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            results_df.to_csv(output_path, index=False)
-            logger.info(f"Benchmark for '{agent_name}' completed. Results saved to '{output_path}'.")
+            engine = get_sync_db_engine()
+            # run_benchmark is sync; it may use asyncio.run() internally — safe here in a background thread
+            run_benchmark(
+                agent_config,
+                test_set,
+                run_id=run_id,
+                dataset_id=None,
+                sync_engine=engine,
+                export_csv_path=None
+            )
+            logger.info(f"Benchmark for '{agent_name}' completed. run_id={run_id}")
         except Exception as e:
             logger.error(f"Background task for benchmark run failed for '{agent_name}': {e}", exc_info=True)
 
-    bg_tasks.add_task(_run_and_save_benchmark)
-
-    return {"status": "Benchmark run started in the background.", "agent": agent_name}
+    bg_tasks.add_task(_run_and_save_benchmark_sync)
+    return {"status": "Benchmark started.", "agent": agent_name, "run_id": run_id}
 
