@@ -57,10 +57,7 @@ class DatasetGenerator:
                 return []
 
             md = chunk.metadata or {}
-            cid = md.get("chunk_id")
-            if cid is None:
-                logger.warning(f"Chunk missing chunk_id; skipping. metadata={md}")
-                return []
+            cid = md.get("chunk_id")  # may be None
 
             out: List[Dict[str, Any]] = []
             for qa in qa_list:
@@ -76,15 +73,20 @@ class DatasetGenerator:
                 if q_type not in allowed:
                     q_type = "Out-of-scope" if a_text.startswith("UNANSWERABLE:") else "Factoid"
 
+                # Ensure out-of-scope answers are canonical
+                if q_type == "Out-of-scope" and not a_text.startswith("UNANSWERABLE:"):
+                    a_text = "UNANSWERABLE: The answer is not contained in the provided text."
+
                 out.append({
                     "question": q_text,
                     "answer": a_text,
                     "type": q_type,
-                    "retrieval_ground_truth_chunk_id": str(cid),
+                    "retrieval_ground_truth_chunk_id": str(cid) if cid is not None else None,
+                    "source_text": chunk.page_content,
                     "source_doc_name": md.get("doc_name"),
                     "source_chunk_index": md.get("chunk_index"),
                     "original_doc_id": md.get("original_doc_id"),
-                    "source_text": chunk.page_content,  # handy when inspecting failures
+                    "page_number": md.get("page_number"),
                 })
             return out
         except Exception as e:
