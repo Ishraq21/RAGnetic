@@ -2,17 +2,55 @@ import logging
 import os
 import re
 from typing import List, Dict, Any, Optional
-import asyncio, time as _time, math, json, hashlib, uuid
+import asyncio, time as _time, math, json, hashlib, uuid, random
 from datetime import datetime
 from sqlalchemy import select, update
 import pandas as pd
+import concurrent.futures
+import traceback  # <-- for robust failure reporting
 
 from langchain_core.documents import Document
 
 from app.schemas.agent import AgentConfig
 from app.core.config import get_llm_model, get_path_settings
 
-logger = logging.getLogger(__name__)
+# Consistent module-level logger
+logger = logging.getLogger("ragnetic.benchmark")
+
+
+def _token_count_safe(text: str, model_name: Optional[str], fallback_chars_per_token: int = 4) -> int:
+    from app.core.cost_calculator import count_tokens
+    try:
+        return count_tokens(text or "", model_name)
+    except Exception:
+        # crude but safe fallback
+        return max(1, len(text or "") // fallback_chars_per_token)
+
+
+def _truncate_docs_by_tokens(docs: List[Document], model_name: Optional[str], budget_tokens: int) -> List[Document]:
+    """
+    Keep docs (in order) until we hit the token budget. Prevents over-long prompts.
+    """
+    used = 0
+    kept: List[Document] = []
+    for d in docs:
+        t = _token_count_safe(getattr(d, "page_content", "") or "", model_name)
+        if used + t > budget_tokens:
+            break
+        kept.append(d)
+        used += t
+    return kept
+
+
+def _arun(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(1) as ex:
+            fut = ex.submit(asyncio.run, coro)
+            return fut.result()
 
 
 def calculate_document_uniqueness(docs: List[Document]) -> float:
@@ -116,13 +154,18 @@ def run_benchmark(
     from app.tools.retriever_tool import get_retriever_tool
     from app.core.cost_calculator import calculate_cost, count_tokens
 
-    logger = logging.getLogger("ragnetic.benchmark")
+    EVAL_PROMPT = """You are a strict evaluator.
 
-    EVAL_PROMPT = """\
-You are a strict evaluator. Given CONTEXT (retrieved text), QUESTION, and ANSWER, return strict JSON with
-keys: faithfulness, relevance, conciseness, coherence (each in [0,1]), and notes (string).
-Return ONLY a JSON object, no preface.
-"""
+    CONTEXT:
+    {context}
+
+    QUESTION:
+    {question}
+
+    ANSWER:
+    {answer}
+
+    Return ONLY a JSON object with keys: faithfulness, relevance, conciseness, coherence (each in [0,1]), and notes (string)."""
 
     def _sha(obj: Any) -> str:
         return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str).encode("utf-8")).hexdigest()
@@ -157,7 +200,9 @@ Return ONLY a JSON object, no preface.
         "vector_store": getattr(agent_config, "vector_store", None),
         "chunking": getattr(agent_config, "chunking", None),
         "tools": getattr(agent_config, "tools", []),
+        "benchmark": getattr(agent_config, "benchmark", None),
     }
+
     cfg_snapshot = _jsonable(cfg_snapshot_raw)
 
     agent_config_hash = _sha(cfg_snapshot)  # hash the JSON-safe version
@@ -190,9 +235,9 @@ Return ONLY a JSON object, no preface.
     eval_chain = eval_prompt | judge_llm
 
     # Official Tool (sync ctor; async invoke)
-    retriever_tool = asyncio.run(get_retriever_tool(agent_config, user_id=-1, thread_id=run_id))
+    retriever_tool = _arun(get_retriever_tool(agent_config, user_id=-1, thread_id=run_id))
     if asyncio.iscoroutine(retriever_tool):
-        retriever_tool = asyncio.run(retriever_tool)
+        retriever_tool = _arun(retriever_tool)
 
     engine = sync_engine or get_sync_db_engine()
 
@@ -220,21 +265,42 @@ Return ONLY a JSON object, no preface.
         else:
             logger.info(f"Resuming benchmark run_id={run_id} (completed_items={existing['completed_items']})")
 
-    def _retry(call, attempts=3, base_delay=0.6, exc_types=(Exception,)):
+    def _retry(call, attempts=4, base_delay=0.7, max_delay=8.0, exc_types=(Exception,)):
+        """
+        Exponential backoff with jitter. Slightly longer waits on 429s.
+        """
         last = None
         for i in range(attempts):
             try:
                 return call()
             except exc_types as e:
                 last = e
-                delay = base_delay * (2 ** i)
-                logger.warning(f"Retry {i+1}/{attempts} after error: {e}. Sleeping {delay:.1f}s")
+                delay = min(max_delay, base_delay * (2 ** i))
+                # nudge up for rate-limit-ish errors
+                msg = str(getattr(e, "message", "")) or str(e)
+                if "429" in msg or "RateLimit" in msg or "Too Many Requests" in msg:
+                    delay = max(delay, 2.0)
+                # full jitter in [0.8x, 1.2x]
+                delay *= (0.8 + 0.4 * random.random())
+                logger.warning(f"Retry {i + 1}/{attempts} after error: {e}. Sleeping {delay:.2f}s")
                 _time.sleep(delay)
         raise last
 
     records: List[Dict[str, Any]] = []
 
+    # Figure out what we've already done for this run_id
+    with engine.begin() as conn:
+        already = conn.execute(
+            select(benchmark_items_table.c.item_index).where(benchmark_items_table.c.run_id == run_id)
+        ).mappings().all()
+    done_indices = {row["item_index"] for row in already}
+    if done_indices:
+        logger.info(
+            f"[bench] Resuming run_id={run_id}. Will skip {len(done_indices)} already-completed items: {sorted(done_indices)}")
+
     for idx, item in enumerate(test_set):
+        if idx in done_indices:
+            continue
         start = _time.perf_counter()
 
         q = item.get("question") or item.get("query") or item.get("q")
@@ -246,15 +312,54 @@ Return ONLY a JSON object, no preface.
 
         # --- Retrieval ---
         t0 = _time.perf_counter()
-        docs: List[Document] = _retry(lambda: asyncio.run(retriever_tool.ainvoke(q)))
+        docs: List[Document] = _retry(lambda: _arun(retriever_tool.ainvoke(q)))
         retrieval_time = _time.perf_counter() - t0
-        context_docs = docs[:20] if docs else []
 
-        # Compute IDs and context string before logging
-        retrieved_ids = [
-            str((getattr(d, "metadata", {}) or {}).get("chunk_id") or getattr(d, "id", None))
-            for d in context_docs
-        ]
+        bm = getattr(agent_config, "benchmark", None)
+        max_ctx_docs = bm.max_context_docs if bm else 20
+        context_docs = (docs or [])[:max_ctx_docs]
+
+        if docs and len(docs) > max_ctx_docs:
+            logger.info(f"[bench] doc-cap: capped to {max_ctx_docs} of {len(docs)} retrieved docs")
+
+        if bm and bm.enable_doc_truncation:
+            total_ctx = bm.context_window_tokens
+            ratio = bm.context_budget_ratio
+            reserve = bm.answer_reserve_tokens
+
+            scaffolding = "Context:\n{ctx}\n\nQuestion: {q}\nAnswer:"
+            overhead_tokens = (
+                _token_count_safe(scaffolding.replace("{ctx}", ""), getattr(agent_config, "llm_model", None))
+                + _token_count_safe(q, getattr(agent_config, "llm_model", None))
+            )
+            budget = max(0, int(total_ctx * ratio) - reserve - overhead_tokens)
+
+            if budget <= 0 and context_docs:
+                logger.info(
+                    f"[bench] truncation: budget<=0; forcing top-1 "
+                    f"(budget≈{budget}, reserve={reserve}, overhead≈{overhead_tokens})"
+                )
+                context_docs = context_docs[:1]
+            else:
+                before_n = len(context_docs)
+                context_docs = _truncate_docs_by_tokens(
+                    context_docs,
+                    getattr(agent_config, "llm_model", None),
+                    budget
+                )
+                after_n = len(context_docs)
+                logger.info(
+                    f"[bench] truncation: kept {after_n}/{before_n} docs "
+                    f"(budget≈{budget} tokens)"
+                )
+
+        context_uniqueness = calculate_document_uniqueness(context_docs)
+        retrieved_ids: List[str] = []
+        for d in context_docs:
+            md = getattr(d, "metadata", {}) or {}
+            rid = md.get("chunk_id") or getattr(d, "id", None)
+            if rid is not None:
+                retrieved_ids.append(str(rid))
         context_str = "\n\n".join(getattr(d, "page_content", "") for d in context_docs)
 
         # Rank via (chunk_id match) OR (content-hash match), then metrics from that rank
@@ -266,7 +371,6 @@ Return ONLY a JSON object, no preface.
 
         logger.info(f"[bench] idx={idx} GT={gt_id} rank={rank} retrieved_top={retrieved_ids[:10]}")
 
-        # --- Embedding accounting (query only) ---
         emb_model = getattr(agent_config, "embedding_model", None)
         embedding_tokens_query = 0
         embedding_cost_query = 0.0
@@ -277,7 +381,7 @@ Return ONLY a JSON object, no preface.
                 embedding_tokens=embedding_tokens_query
             )
 
-        # --- Generation ---
+
         t1 = _time.perf_counter()
         resp = _retry(lambda: agent_llm.invoke([HumanMessage(content=f"Context:\n{context_str}\n\nQuestion: {q}\nAnswer:")]))
         gen_time = _time.perf_counter() - t1
@@ -346,10 +450,11 @@ Return ONLY a JSON object, no preface.
             "ground_truth_chunk_id": gt_id,
             "retrieved_ids": retrieved_ids,
             "context_size": len(context_docs),
+            "context_uniqueness": context_uniqueness,
             "generated_answer": answer,
             "judge": judge_obj,
-            "retrieval": rmetrics,                # ← main (rank-based) metrics
-            "retrieval_strict": strict_metrics,   # ← optional strict metrics for reference
+            "retrieval": rmetrics,
+            "retrieval_strict": strict_metrics,
             "durations": {
                 "retrieval_s": retrieval_time,
                 "generation_s": gen_time,
@@ -413,31 +518,61 @@ Return ONLY a JSON object, no preface.
                 .values(completed_items=benchmark_runs_table.c.completed_items + 1)
             )
 
-    df = pd.DataFrame.from_records(records)
+
+    status = "completed"
+    error_msg = None
     summary: Dict[str, float] = {}
-    if not df.empty:
-        summary = {
-            "avg_total_cost_usd": float(df["costs"].apply(lambda c: c["total_usd"]).mean()),
-            "avg_retrieval_hit@5": float(df["retrieval"].apply(lambda r: r.get("hit@5", 0.0)).mean()),
-            "avg_mrr": float(df["retrieval"].apply(lambda r: r.get("mrr", 0.0)).mean()),
-            "avg_ndcg@10": float(df["retrieval"].apply(lambda r: r.get("ndcg@10", 0.0)).mean()),
-            "avg_generation_s": float(df["durations"].apply(lambda d: d["generation_s"]).mean()),
-            "avg_retrieval_s": float(df["durations"].apply(lambda d: d["retrieval_s"]).mean()),
-        }
-
-    with engine.begin() as conn:
-        conn.execute(
-            update(benchmark_runs_table)
-            .where(benchmark_runs_table.c.run_id == run_id)
-            .values(status="completed", ended_at=datetime.utcnow(), summary_metrics=summary)
-        )
-
-    # Export CSV artifact
     try:
-        df.to_csv(export_csv_path, index=False)
-        logger.info(f"Benchmark CSV exported to: {export_csv_path}")
-    except Exception as e:
-        logger.warning(f"Failed to export CSV to {export_csv_path}: {e}")
+        df = pd.DataFrame.from_records(records)
+        if not df.empty:
+            def _judgemean(field: str) -> float:
+                try:
+                    return float(df["judge"].apply(lambda j: (j or {}).get(field, 0.0)).mean())
+                except Exception:
+                    return 0.0
 
-    logger.info(f"Benchmark complete: run_id={run_id} items={len(records)}/{len(test_set)}")
-    return df
+            summary = {
+                "avg_total_cost_usd": float(df["costs"].apply(lambda c: c["total_usd"]).mean()),
+                "avg_retrieval_hit@5": float(df["retrieval"].apply(lambda r: r.get("hit@5", 0.0)).mean()),
+                "avg_mrr": float(df["retrieval"].apply(lambda r: r.get("mrr", 0.0)).mean()),
+                "avg_ndcg@10": float(df["retrieval"].apply(lambda r: r.get("ndcg@10", 0.0)).mean()),
+                "avg_generation_s": float(df["durations"].apply(lambda d: d["generation_s"]).mean()),
+                "avg_retrieval_s": float(df["durations"].apply(lambda d: d["retrieval_s"]).mean()),
+                "avg_faithfulness": _judgemean("faithfulness"),
+                "avg_relevance": _judgemean("relevance"),
+                "avg_conciseness": _judgemean("conciseness"),
+                "avg_coherence": _judgemean("coherence"),
+            }
+            if "context_uniqueness" in df.columns:
+                summary["avg_context_uniqueness"] = float(df["context_uniqueness"].mean())
+
+        # Export CSV artifact
+        try:
+            df.to_csv(export_csv_path, index=False)
+            logger.info(f"Benchmark CSV exported to: {export_csv_path}")
+        except Exception as e:
+            logger.warning(f"Failed to export CSV to {export_csv_path}: {e}")
+
+        logger.info(f"Benchmark complete: run_id={run_id} items={len(records)}/{len(test_set)}")
+        return df
+
+    except KeyboardInterrupt:
+        status = "aborted"
+        error_msg = "Aborted by user"
+        raise
+    except Exception:
+        status = "failed"
+        error_msg = traceback.format_exc()
+        raise
+    finally:
+        with engine.begin() as conn:
+            conn.execute(
+                update(benchmark_runs_table)
+                .where(benchmark_runs_table.c.run_id == run_id)
+                .values(
+                    status=status,
+                    ended_at=datetime.utcnow(),
+                    summary_metrics=summary if status == "completed" else None,
+                    error=error_msg,
+                )
+            )

@@ -198,7 +198,13 @@ class SearchEngineToolInput(BaseModel):
         None,
         description="Filter search results by a geographical region (e.g., 'US', 'GB', 'DE')."
     )
-
+class BenchmarkConfig(BaseModel):
+    """Settings that affect only benchmarking/evaluation."""
+    context_window_tokens: int = Field(8000, description="Total model context window used for budgeting.")
+    context_budget_ratio: float = Field(0.70, ge=0.10, le=0.95, description="Fraction of the window allocated to retrieved context.")
+    answer_reserve_tokens: int = Field(1024, description="Tokens reserved for the model's answer during benchmarking.")
+    enable_doc_truncation: bool = Field(True, description="If true, truncate retrieved docs to fit within the budget.")
+    max_context_docs: int = Field(20, description="Hard cap on how many retrieved docs are passed into the prompt.")
 
 
 class AgentConfig(BaseModel):
@@ -266,6 +272,11 @@ class AgentConfig(BaseModel):
     fine_tuned_model_id: Optional[str] = Field(
         None,
         description="The unique ID of a specific fine-tuned model or LoRA adapter to use with this agent's base LLM."
+    )
+
+    benchmark: BenchmarkConfig = Field(
+        default_factory=BenchmarkConfig,
+        description="Benchmark/eval-time overrides (context budget, truncation, etc.)."
     )
 
 # --- Agent Inspection Response Models ---
