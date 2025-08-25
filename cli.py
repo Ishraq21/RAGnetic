@@ -1042,6 +1042,9 @@ def start_server(
     final_host = host or config.get('SERVER', 'host', fallback="127.0.0.1")
     final_port = port or config.getint('SERVER', 'port', fallback=8000)
 
+    paths = get_path_settings()
+    uvicorn_log_cfg_path = paths["PROJECT_ROOT"] / "logging.uvicorn.json"
+
     # --- Warnings ---
     if not get_server_api_keys():
         typer.secho("SECURITY WARNING: Server starting without an API key.", fg=typer.colors.YELLOW, bold=True)
@@ -1091,7 +1094,7 @@ def start_server(
 
     if tokenizers_parallelism is not None:
         celery_env["TOKENIZERS_PARALLELISM"] = str(tokenizers_parallelism).lower()
-        typer.secho(f"Setting TOKENIZERS_PARALLELISM to: {tokenizers_parallelism}", fg=typer.colors.CYAN)
+        # typer.secho(f"Setting TOKENIZERS_PARALLELISM to: {tokenizers_parallelism}", fg=typer.colors.CYAN)
     else:
         pass
 
@@ -1099,12 +1102,17 @@ def start_server(
     final_concurrency = worker_concurrency if worker_concurrency is not None else 4  # Default to 4
 
     # Base Celery worker command arguments
+    worker_loglevel = "info" if reload else "warning"
+
     base_worker_args = [
         "celery", "-A", "app.core.tasks", "worker",
         f"--pool={worker_pool_type}",
-        "--loglevel=info",
+        f"--loglevel={worker_loglevel}",
+        "--without-mingle",
+        "--without-gossip",
+        "--without-heartbeat",
         f"--autoscale={final_concurrency},1",
-        "-Q", "ragnetic_fine_tuning_tasks,celery,ragnetic_cleanup_tasks", # Ensure all queues are listed
+        "-Q", "ragnetic_fine_tuning_tasks,celery,ragnetic_cleanup_tasks",
     ]
 
     # In reload mode, subprocesses are managed directly.
@@ -1114,7 +1122,14 @@ def start_server(
             "Note: Celery Beat does not support auto-reloading. Restart the server to apply schedule changes from YAML files.",
             fg=typer.colors.CYAN)
 
-        uvicorn_cmd = ["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port), "--reload","--no-access-log"]
+        uvicorn_cmd = [
+            "uvicorn", "app.main:app",
+            "--host", final_host,
+            "--port", str(final_port),
+            "--reload",
+            "--no-access-log",
+            "--log-config", str(uvicorn_log_cfg_path),
+        ]
 
         uvicorn_process = subprocess.Popen(uvicorn_cmd)
         # Pass celery_env to worker_process
@@ -1150,16 +1165,26 @@ def start_server(
             worker_process = subprocess.Popen(base_worker_args, env=celery_env)  # Pass env
 
             typer.secho("Starting Celery Beat scheduler...", fg=typer.colors.BLUE, bold=True)
+            beat_loglevel = "info" if reload else "warning"
             beat_cmd = [
                 "celery", "-A", "app.core.tasks", "beat",
                 "-S", "sqlalchemy_celery_beat.schedulers:DatabaseScheduler",
-                "--loglevel=info"
+                f"--loglevel={beat_loglevel}",
             ]
             beat_process = subprocess.Popen(beat_cmd, env=celery_env)
 
             typer.secho(f"Starting Uvicorn server on http://{final_host}:{final_port}...", fg=typer.colors.BLUE,
                         bold=True)
-            subprocess.run(["uvicorn", "app.main:app", "--host", final_host, "--port", str(final_port), "--no-access-log"], check=True)
+            subprocess.run(
+                [
+                    "uvicorn", "app.main:app",
+                    "--host", final_host,
+                    "--port", str(final_port),
+                    "--no-access-log",
+                    "--log-config", str(uvicorn_log_cfg_path),
+                ],
+                check=True
+            )
 
         except KeyboardInterrupt:
             typer.echo("\nShutting down processes...")

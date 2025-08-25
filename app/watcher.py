@@ -9,6 +9,7 @@ from watchdog.events import FileSystemEventHandler
 from multiprocessing import Process
 from pathlib import Path
 import configparser
+import logging.config
 
 # Import core components
 from app.agents.config_manager import get_agent_configs
@@ -23,7 +24,7 @@ _APP_PATHS = get_path_settings()
 _PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
 _CONFIG_FILE = _APP_PATHS["CONFIG_FILE_PATH"]
 _WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
-_DATA_DIR = _APP_PATHS["DATA_DIR"] # Ensure _DATA_DIR is available
+_DATA_DIR = _APP_PATHS["DATA_DIR"]
 
 # Helper function to get file extension safely
 def _get_file_extension(filepath: str) -> str:
@@ -42,7 +43,7 @@ class AgentDataEventHandler(FileSystemEventHandler):
         self.api_key = self._get_api_key()
         self.last_event_time = {} # To debounce events
         self.workflows_dir = _WORKFLOWS_DIR # Ensure _WORKFLOWS_DIR is accessible as an attribute
-        self.uploaded_temp_dir = _DATA_DIR / "uploaded_temp" # Define the temp upload directory
+        self.uploaded_temp_dir = _DATA_DIR / "uploaded_temp"
 
         self._initialize_db_for_watcher()
 
@@ -196,8 +197,12 @@ class AgentDataEventHandler(FileSystemEventHandler):
 
 def start_watcher(directories: list[str]):
     """Starts the file system watcher on the specified directories."""
+    from app.core.structured_logging import get_logging_config
+    logging.config.dictConfig(get_logging_config())
+
     event_handler = AgentDataEventHandler()
     observer = Observer()
+
 
     for directory in directories:
         path_to_monitor = Path(directory)
