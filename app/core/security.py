@@ -19,7 +19,6 @@ from app.schemas.security import User
 logger = logging.getLogger("ragnetic")
 
 
-# --- API Key Authentication (Global & User-Specific) ---
 
 async def get_current_api_key(x_api_key: Optional[str] = Header(None)) -> str:
     """
@@ -203,7 +202,6 @@ class PermissionChecker:
     def __init__(self, required_permissions: List[str]):
         self.required_permissions = set(required_permissions)
         logger.debug(f"PermissionChecker initialized for: {required_permissions}")
-        # --- NEW: Define a mapping for API key scopes to permissions ---
         self.scope_permission_map = {
             "admin": [
                 "lambda:execute",
@@ -264,12 +262,18 @@ class PermissionChecker:
             )
 
         user_permissions = set()
-        for role in current_user.roles:
-            logger.debug(f"  PermissionChecker: Processing role '{role.name}' with permissions: {role.permissions}")
-            if "*" in role.permissions:  # Role has all permissions
+        for role in getattr(current_user, "roles", []):
+            # role may be a pydantic model or a plain dict
+            r_name = getattr(role, "name", None) or (role.get("name") if isinstance(role, dict) else "unknown")
+            r_perms = getattr(role, "permissions", None) or (role.get("permissions") if isinstance(role, dict) else [])
+            logger.debug(f"  PermissionChecker: Processing role '{r_name}' with permissions: {r_perms}")
+
+            if isinstance(r_perms, list) and "*" in r_perms:
                 user_permissions.add("*")
-                break  # No need to check further roles
-            user_permissions.update(role.permissions)
+                break
+
+            if isinstance(r_perms, list):
+                user_permissions.update(r_perms)
 
         # If user has a '*' permission, they can do anything
         if "*" in user_permissions:
