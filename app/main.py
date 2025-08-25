@@ -19,6 +19,8 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 from fastapi import Form
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.db.dao import create_chat_message
 from app.api.lambda_tool import router as lambda_tool_router
@@ -47,7 +49,8 @@ from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 
 # Core Components
 from app.core.config import get_path_settings, get_log_storage_config, \
-    get_memory_storage_config, get_db_connection_config, get_db_connection, get_cors_settings, _get_config_parser
+    get_memory_storage_config, get_db_connection_config, get_db_connection, get_cors_settings, _get_config_parser, \
+    get_allowed_hosts
 from app.db import initialize_db_connections, get_db
 import app.db as db_mod
 from app.core.validation import sanitize_for_path
@@ -114,7 +117,7 @@ _WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
 
 config = _get_config_parser()
 WEBSOCKET_MODE = config.get('SERVER', 'websocket_mode', fallback='memory')
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 allowed_origins = get_cors_settings()
 
 
@@ -166,8 +169,20 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
 
 app = FastAPI(title="RAGnetic API", version="0.1.0")
 app.add_middleware(CorrelationIdMiddleware)
-app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True, allow_methods=["*"],
-                   allow_headers=["*"])
+
+# CORS: wildcard → no credentials; explicit origins → credentials allowed
+cors_kwargs = {"allow_methods": ["*"], "allow_headers": ["*"]}
+if allowed_origins == ["*"]:
+    cors_kwargs.update({"allow_origin_regex": ".*", "allow_credentials": False})
+else:
+    cors_kwargs.update({"allow_origins": allowed_origins, "allow_credentials": True})
+app.add_middleware(CORSMiddleware, **cors_kwargs)
+
+# Hardening + perf
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=get_allowed_hosts())
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -251,7 +266,7 @@ async def startup_event():
         log_listener = QueueListener(log_queue, db_handler)
         log_listener.start()
 
-        db_logger_names = ["ragnetic", "app.workflows", "ragnetic.metrics"]
+        db_logger_names = ["ragnetic", "app"]
         for name in db_logger_names:
             logging.getLogger(name).addHandler(queue_handler)
 

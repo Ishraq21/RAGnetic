@@ -88,7 +88,7 @@ def get_path_settings() -> Dict[str, Path | List[Path]]:
         "FINE_TUNED_MODELS_BASE_DIR": project_root / "models" / "fine_tuned",
         "DATA_PREPARED_DIR": project_root / "data" / "prepared_datasets",  # For prepared datasets
         "DATA_RAW_DIR": project_root / "data" / "raw_data",  # For raw datasets
-        "DATA_PREP_CONFIGS": project_root/ "data_prep_configs",
+        "DATA_PREP_CONFIGS": project_root / "data_prep_configs",
     }
 
     default_allowed_dirs = f"{paths['DATA_DIR']},{paths['AGENTS_DIR']},{paths['TEMP_CLONES_DIR']}"
@@ -129,9 +129,10 @@ def get_server_api_keys() -> List[str]:
 
 def get_db_connection(name: str) -> str:
     """
-    Constructs a database connection string from a structured configuration
-    section in config.ini. It prioritizes reading the password from an
-    environment variable and falls back to a secure interactive prompt.
+    Constructs a database connection string from config.ini.
+    Password resolution:
+      1) ENV var: {NAME}_PASSWORD
+      2) Optional prompt ONLY if ALLOW_DB_PASSWORD_PROMPT=true
     """
     config = _get_config_parser()
     section_name = f"DATABASE_{name}"
@@ -157,15 +158,22 @@ def get_db_connection(name: str) -> str:
     password = os.environ.get(password_env_var)
 
     if not password:
-        logger.warning(f"Environment variable '{password_env_var}' not set for db connection '{name}'.")
-        if "CI" not in os.environ:
-            password = typer.prompt(f"Enter password for database user '{username}' on '{host}'", hide_input=True)
-
-    if not password:
-        raise ValueError(f"Password for database connection '{name}' is required but was not provided via the '{password_env_var}' environment variable or interactive prompt.")
+        allow_prompt = os.environ.get("ALLOW_DB_PASSWORD_PROMPT", "false").lower() == "true"
+        if allow_prompt:
+            logger.warning(
+                f"ENV '{password_env_var}' not set for '{name}'. Prompting (ALLOW_DB_PASSWORD_PROMPT=true)."
+            )
+            password = typer.prompt(
+                f"Enter password for database user '{username}' on '{host}'",
+                hide_input=True
+            )
+        else:
+            raise ValueError(
+                f"Password for DB connection '{name}' missing. "
+                f"Set ENV '{password_env_var}' or enable ALLOW_DB_PASSWORD_PROMPT=true (not recommended in prod)."
+            )
 
     return f"{dialect}://{username}:{password}@{host}:{port}/{database}"
-
 
 def get_db_connection_config() -> Optional[Dict[str, str]]:
     """
@@ -317,15 +325,41 @@ def get_smtp_settings() -> Dict[str, Any]:
 
 
 def get_cors_settings() -> List[str]:
-    """Retrieves CORS origins, prioritizing environment variables."""
+    """
+    Retrieves CORS origins from ENV or config.ini.
+    If returns ["*"], the server will run CORS in wildcard mode WITHOUT credentials.
+    Otherwise, explicit origins allow credentials.
+    """
     origins_str = os.environ.get("CORS_ALLOWED_ORIGINS")
     if origins_str:
-        return [origin.strip() for origin in origins_str.split(',') if origin.strip()]
+        return [o.strip() for o in origins_str.split(",") if o.strip()]
 
     config = _get_config_parser()
     if config.has_option('SERVER', 'cors_allowed_origins'):
         origins_str = config.get('SERVER', 'cors_allowed_origins')
         if origins_str:
-            return [origin.strip() for origin in origins_str.split(',') if origin.strip()]
+            return [o.strip() for o in origins_str.split(",") if o.strip()]
 
-    return ["*"]
+    # dev-friendly defaults if nothing set
+    return ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"]
+
+
+
+def get_allowed_hosts() -> List[str]:
+    """
+    Trusted hosts for Starlette TrustedHostMiddleware.
+    ENV: ALLOWED_HOSTS="ragnetic.example.com,.ragnetic.example.com,localhost,127.0.0.1"
+    Supports wildcard subdomain with leading '.'.
+    """
+    hosts = os.environ.get("ALLOWED_HOSTS")
+    if hosts:
+        return [h.strip() for h in hosts.split(",") if h.strip()]
+
+    config = _get_config_parser()
+    if config.has_option("SERVER", "allowed_hosts"):
+        hosts = config.get("SERVER", "allowed_hosts")
+        if hosts:
+            return [h.strip() for h in hosts.split(",") if h.strip()]
+
+    # Reasonable defaults
+    return ["localhost", "127.0.0.1"]

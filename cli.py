@@ -585,17 +585,49 @@ def configure():
                                    default=config.get('SERVER', 'websocket_mode', fallback='memory'))
         config.set('SERVER', 'websocket_mode', ws_mode)
 
+        # If Redis mode is chosen, let the operator set REDIS_URL (used by server)
+        if ws_mode == "redis":
+            current_redis = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+            redis_url = typer.prompt("Enter Redis URL", default=current_redis)
+            if typer.confirm("Save REDIS_URL to the local .env file (recommended)?", default=True):
+                _update_env_file({"REDIS_URL": redis_url})
+                typer.secho("REDIS_URL saved to .env file.", fg=typer.colors.GREEN)
+            else:
+                if 'SERVER' not in config: config.add_section('SERVER')
+                config.set('SERVER', 'redis_url', redis_url)
+
+        # CORS
         if typer.confirm("Configure CORS allowed origins?", default=False):
-            current_origins = os.environ.get("CORS_ALLOWED_ORIGINS",
-                                             config.get('SERVER', 'cors_allowed_origins', fallback='*'))
+            current_origins = os.environ.get(
+                "CORS_ALLOWED_ORIGINS",
+                config.get(
+                    'SERVER',
+                    'cors_allowed_origins',
+                    fallback="http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173"
+                )
+            )
             origins_str = typer.prompt("Enter comma-separated origins", default=current_origins)
             if typer.confirm("Save CORS settings to the local .env file (recommended)?", default=True):
                 _update_env_file({"CORS_ALLOWED_ORIGINS": origins_str})
-                if config.has_option('SERVER', 'cors_allowed_origins'): config.remove_option('SERVER',
-                                                                                             'cors_allowed_origins')
+                if config.has_option('SERVER', 'cors_allowed_origins'):
+                    config.remove_option('SERVER', 'cors_allowed_origins')
                 typer.secho("CORS settings saved to .env file.", fg=typer.colors.GREEN)
             else:
                 config.set('SERVER', 'cors_allowed_origins', origins_str)
+
+        # NEW: Allowed hosts (TrustedHostMiddleware)
+        if typer.confirm("Configure allowed hosts (host allowlist)?", default=True):
+            current_hosts = os.environ.get("ALLOWED_HOSTS",
+                                           config.get('SERVER', 'allowed_hosts', fallback="localhost,127.0.0.1"))
+            hosts_str = typer.prompt("Enter comma-separated hosts (e.g., app.example.com,.example.com,localhost)",
+                                     default=current_hosts)
+            if typer.confirm("Save ALLOWED_HOSTS to the local .env file (recommended)?", default=True):
+                _update_env_file({"ALLOWED_HOSTS": hosts_str})
+                if config.has_option('SERVER', 'allowed_hosts'):
+                    config.remove_option('SERVER', 'allowed_hosts')
+                typer.secho("ALLOWED_HOSTS saved to .env file.", fg=typer.colors.GREEN)
+            else:
+                config.set('SERVER', 'allowed_hosts', hosts_str)
         typer.secho("Server settings updated.", fg=typer.colors.GREEN)
 
     # --- DATABASE CONNECTIONS ---
@@ -645,6 +677,13 @@ def configure():
                 existing_conns.append(conn_name)
                 config.set('DATABASE_CONNECTIONS', 'names', ','.join(sorted(existing_conns)))
             typer.secho(f"\nConnection '{conn_name}' configured successfully.", fg=typer.colors.GREEN)
+
+        if typer.confirm("\nAllow interactive DB password prompts on server start? (not recommended for production)",
+                         default=False):
+            _update_env_file({"ALLOW_DB_PASSWORD_PROMPT": "true"})
+            typer.secho("Set ALLOW_DB_PASSWORD_PROMPT=true in .env", fg=typer.colors.YELLOW)
+        else:
+            _update_env_file({"ALLOW_DB_PASSWORD_PROMPT": "false"})
 
         if typer.confirm("\nDo you want to clean up unused database connections?", default=True):
             current_conns = [c.strip() for c in config.get('DATABASE_CONNECTIONS', 'names', fallback='').split(',') if
@@ -902,8 +941,8 @@ def init():
         typer.echo(f"  - Configuration file already exists at {_CONFIG_FILE}. Skipping default setup.")
 
     typer.secho("\nProject initialized successfully!", fg=typer.colors.GREEN)
-    typer.secho("\n--- SECURITY NOTICE: CORS ---", fg=typer.colors.YELLOW, bold=True)
-    typer.secho("By default, RAGnetic allows requests from all origins ('*').", fg=typer.colors.YELLOW)
+    typer.secho("\nSECURITY NOTICE: CORS:", fg=typer.colors.YELLOW, bold=True)
+    typer.secho("By default, RAGnetic allows only local dev origins (http://localhost:3000, http://127.0.0.1:3000, http://localhost:5173).", fg=typer.colors.YELLOW)
     typer.secho("For production, you should restrict this to your frontend's domain.", fg=typer.colors.YELLOW)
     typer.echo("You can change this using: " + typer.style("ragnetic configure", bold=True))
     typer.secho("\nNext steps:", bold=True)

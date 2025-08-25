@@ -21,7 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pinecone import Pinecone as PineconeClient
 
-from app.db import get_db
+import app.db as db_mod
+
 from app.core.embed_config import get_embedding_model
 from app.core.config import get_path_settings, get_api_key
 from app.db.dao import get_temp_document_by_user_thread_id
@@ -33,6 +34,14 @@ _APP_PATHS = get_path_settings()
 _VECTORSTORE_DIR = _APP_PATHS["VECTORSTORE_DIR"]
 _TEMP_VECTORSTORE_DIR = _APP_PATHS["VECTORSTORE_DIR"] / "temp_chat_data"
 
+
+def _load_bm25_docs(path: str) -> List[Document]:
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line)
+            out.append(Document(page_content=obj["page_content"], metadata=obj["metadata"]))
+    return out
 
 async def get_retriever_tool(
         agent_config: AgentConfig,
@@ -67,7 +76,7 @@ async def get_retriever_tool(
                     embeddings,
                     allow_dangerous_deserialization=True
                 )
-                logger.info(f"Loaded FAISS permanent vector store for agent '{agent_name}'.")
+                logger.debug(f"Loaded FAISS permanent vector store for agent '{agent_name}'.")
             else:
                 logger.warning(
                     f"FAISS permanent store not found for '{agent_name}'. Agent may not have base knowledge."
@@ -158,14 +167,8 @@ async def get_retriever_tool(
         docs_path_permanent = os.path.join(_VECTORSTORE_DIR, agent_name, "bm25_documents.jsonl")
         if os.path.exists(docs_path_permanent):
             try:
-                with await asyncio.to_thread(open, docs_path_permanent, 'r', encoding='utf-8') as f:
-                    bm25_docs_permanent = [
-                        Document(
-                            page_content=json.loads(line)["page_content"],
-                            metadata=json.loads(line)["metadata"]
-                        )
-                        for line in f
-                    ]
+                # offload all file IO + JSON parsing
+                bm25_docs_permanent = await asyncio.to_thread(_load_bm25_docs, docs_path_permanent)
 
                 if bm25_docs_permanent:
                     bm25_permanent = await asyncio.to_thread(
@@ -223,7 +226,8 @@ async def get_retriever_tool(
 
                 if temp_document_ids:
                     logger.info(f"Attempting to load {len(temp_document_ids)} temporary documents for retrieval.")
-                    async for temp_db in get_db():
+                    async with db_mod.AsyncSessionLocal() as temp_db:
+
 
                         for temp_doc_id in temp_document_ids:
                             # ownership check
@@ -259,7 +263,7 @@ async def get_retriever_tool(
                             # only if we got hits do we add this retriever to the mix
                             logger.info(f"Temp doc {temp_doc_id}: {len(hits)} relevant chunks—adding to retrievers.")
                             current_retrievers.append(temp_retriever)
-                        break
+
                 if not current_retrievers:
                     logger.warning(
                         "No retrievers (permanent or temporary) are available. Returning empty documents."

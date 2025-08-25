@@ -1,21 +1,45 @@
 import json
 import logging
 import logging.config
-import os
-import sqlite3
-import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-from sqlalchemy import create_engine, event, insert, Table
-from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
-from sqlalchemy.pool import NullPool
+from sqlalchemy.orm import Session, sessionmaker
+from app.core.config import get_db_connection
+from sqlalchemy import insert, create_engine
 
-from app.core.config import get_db_connection, get_log_storage_config, get_path_settings
-from app.db.models import ragnetic_logs_table
+
+
 
 LOGGING_QUEUE = None
+
+_ASYNC_TO_SYNC_DRIVERS = {
+    "+asyncpg": "+psycopg2",   # Postgres
+    "+aiomysql": "+pymysql",   # MySQL
+    "+aiosqlite": "",          # SQLite
+}
+
+def _to_sync_url(url: str) -> str:
+    out = url
+    for a, b in _ASYNC_TO_SYNC_DRIVERS.items():
+        if a in out:
+            out = out.replace(a, b)
+    return out
+
+def _build_sync_engine_for_logging(connection_name: str):
+    """
+    Build a SQLAlchemy *sync* engine from our configured DB connection name,
+    converting async drivers to sync ones.
+    """
+    url_async = get_db_connection(connection_name)
+    url_sync = _to_sync_url(url_async)
+
+    engine_kwargs: Dict[str, Any] = {"pool_pre_ping": True, "pool_recycle": 1800}
+    if url_sync.startswith("sqlite:///"):
+        # allow usage from background threads/handlers
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+    return create_engine(url_sync, **engine_kwargs)
 
 
 class JSONFormatter(logging.Formatter):
@@ -40,22 +64,31 @@ class JSONFormatter(logging.Formatter):
 
 
 class DatabaseLogHandler(logging.Handler):
-    """A logging handler that stores logs in the database."""
-
     def __init__(self, connection_name: str, table: Any, **kwargs):
         super().__init__(**kwargs)
-        self.connection_name = connection_name
         self.table = table
-        self.engine = None
-        self._db_session: Optional[Session] = None
+        self.engine = _build_sync_engine_for_logging(connection_name)
+        self.SessionLocal = sessionmaker(bind=self.engine, autocommit=False, autoflush=False)
+
+    RESERVED = {
+        "timestamp", "level", "message", "module", "function", "line",
+        "exc_info", "details"
+
+    }
+
+    @staticmethod
+    def _safe_jsonable(v):
+        try:
+            json.dumps(v)  # quick test
+            return v
+        except Exception:
+            return str(v)
 
     def emit(self, record):
+        db_session = self.SessionLocal()
         try:
-            from app.db import get_sync_db_session
-            db_session = get_sync_db_session(self.connection_name)
-
             log_entry = {
-                "timestamp": datetime.fromtimestamp(record.created),
+                "timestamp": datetime.utcfromtimestamp(record.created),
                 "level": record.levelname,
                 "message": record.getMessage(),
                 "module": record.module,
@@ -63,18 +96,28 @@ class DatabaseLogHandler(logging.Handler):
                 "line": record.lineno,
                 "exc_info": self.format_exception(record.exc_info) if record.exc_info else None,
                 "details": getattr(record, 'details', None),
-                "correlation_id": getattr(record, 'correlation_id', None),
-                "request_id": getattr(record, 'request_id', None),
-                "user_id": getattr(record, 'user_id', None),
+
             }
-            stmt = insert(self.table).values(**log_entry)
-            db_session.execute(stmt)
+
+            extra = getattr(record, "extra_data", None)
+            if isinstance(extra, dict):
+
+                details = log_entry.get("details")
+                if not isinstance(details, dict):
+                    details = {}
+                for k, v in extra.items():
+                    if k not in self.RESERVED:
+                        details[k] = self._safe_jsonable(v)
+                log_entry["details"] = details
+
+            db_session.execute(insert(self.table).values(**log_entry))
             db_session.commit()
-            db_session.close()
         except Exception:
-            import sys
-            import traceback
+            db_session.rollback()
+            import sys, traceback
             traceback.print_exc(file=sys.stderr)
+        finally:
+            db_session.close()
 
     def format_exception(self, exc_info):
         import traceback
@@ -84,59 +127,34 @@ class DatabaseLogHandler(logging.Handler):
 
 
 def get_logging_config(json_logs: bool = False, log_level: str = "INFO"):
-    """
-    Returns a logging configuration dictionary.
-    Includes a custom handler for database logging.
-    """
     log_config = {
-        'version': 1,
-        'disable_existing_loggers': False,
-        'formatters': {
-            'standard': {
-                'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            },
-            'json': {
-                '()': 'pythonjsonlogger.jsonlogger.JsonFormatter',
-                'format': '%(asctime)s %(levelname)s %(name)s %(funcName)s %(lineno)d %(message)s'
-            },
-            'structured': {
-                'format': '%(asctime)s %(levelname)s %(name)s [%(correlation_id)s] %(message)s'
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "standard": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"},
+            "json": {"()": "app.core.structured_logging.JSONFormatter"},
+            "structured": {"format": "%(asctime)s %(levelname)s %(name)s [%(correlation_id)s] %(message)s"},
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "formatter": "standard",
+                "level": log_level,
             }
+            # NOTE: no "db_handler" here. We wire it up in startup_event() via QueueListener.
         },
-        'handlers': {
-            'console': {
-                'class': 'logging.StreamHandler',
-                'formatter': 'standard',
-                'level': log_level,
-            },
-            'db_handler': {
-                'class': 'app.core.structured_logging.DatabaseLogHandler',
-                'formatter': 'structured',
-                'level': 'INFO',
-                'connection_name': os.environ.get("LOG_DB_CONNECTION_NAME") or "ragnetic_db",
-                'table': ragnetic_logs_table
-            }
+        "loggers": {
+            "ragnetic": {"handlers": ["console"], "level": log_level, "propagate": False},
+            "uvicorn": {"handlers": ["console"], "level": "INFO", "propagate": False},
+            "uvicorn.access": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+            "sqlalchemy": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+            "celery": {"handlers": ["console"], "level": "INFO", "propagate": False},
+            "httpx": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+            "faiss": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+            "app": {"handlers": ["console"], "level": log_level, "propagate": False},
         },
-        'loggers': {
-            'ragnetic': {
-                'handlers': ['console'],
-                'level': log_level,
-                'propagate': False
-            },
-            # --- NEW: Quiet third-party loggers ---
-            'uvicorn': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
-            'uvicorn.access': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
-            'sqlalchemy': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
-            'celery': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
-            'httpx': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
-            'faiss': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
-        },
-        'root': {
-            'handlers': ['console'],
-            'level': log_level
-        }
+        "root": {"handlers": ["console"], "level": log_level},
     }
-
     if json_logs:
-        log_config['handlers']['console']['formatter'] = 'json'
+        log_config["handlers"]["console"]["formatter"] = "json"
     return log_config
