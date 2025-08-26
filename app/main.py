@@ -102,7 +102,7 @@ from app.api import workflows
 from app.api import webhooks
 
 from app.services.temporary_document_service import TemporaryDocumentService, TemporaryDocumentUploadResult
-from app.core.citation_parser import extract_citations_from_text
+from app.core.config import get_debug_mode
 
 # Get the main application logger after configuration is applied
 load_dotenv()
@@ -119,6 +119,13 @@ config = _get_config_parser()
 WEBSOCKET_MODE = config.get('SERVER', 'websocket_mode', fallback='memory')
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 allowed_origins = get_cors_settings()
+
+
+debug_on = get_debug_mode()
+paths = get_path_settings()
+uvicorn_log_cfg_path = paths["PROJECT_ROOT"] / (
+    "logging.uvicorn.debug.json" if debug_on else "logging.uvicorn.json"
+)
 
 
 def _infer_server_url(websocket: WebSocket) -> str:

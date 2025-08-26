@@ -40,7 +40,7 @@ import app.db as db
 from app.agents.config_manager import load_agent_config, load_agent_from_yaml_file
 # Import core components from the application
 from app.core.config import get_path_settings, get_api_key, get_server_api_keys, get_log_storage_config, \
-    get_memory_storage_config, get_db_connection, get_cors_settings
+    get_memory_storage_config, get_db_connection, get_cors_settings, get_debug_mode
 from app.core.embed_config import get_embedding_model
 from app.core.tasks import get_beat_db_uri
 from app.core.validation import is_valid_agent_name_cli
@@ -1016,26 +1016,24 @@ def auth_gdrive():
         typer.secho(f"An error occurred: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-
 @app.command(help="Starts the RAGnetic server, worker, and scheduler.")
 def start_server(
-        host: str = typer.Option(None, help="Server host. Overrides config."),
-        port: int = typer.Option(None, help="Server port. Overrides config."),
-        reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
-        worker_device_type: Optional[str] = typer.Option(None, "--worker-device",
-                                                        help="Target device for the main worker (auto, cpu, gpu, mps). Overrides auto-detection."),
-        gpu_visible_devices: Optional[str] = typer.Option(None, "--gpu-devices",
-                                                         help="Comma-separated list of GPU device IDs (e.g., '0' or '0,1'). Only for NVIDIA GPUs."),
-        worker_concurrency: Optional[int] = typer.Option(None, "--worker-concurrency",
-                                                          help="Number of concurrent worker processes/threads (for --autoscale)."),
-        worker_pool_type: str = typer.Option("solo", "--worker-pool",
-                                             help="Celery worker pool type (fork, solo, prefork, spawn, gevent, eventlet). 'solo' or 'spawn' recommended for macOS."),
-        tokenizers_parallelism: bool = typer.Option(True, "--tokenizers-parallelism/--no-tokenizers-parallelism",
-                                                    help="Enable Hugging Face tokenizers parallelism. Set to False (--no-tokenizers-parallelism) to avoid 'fork' warnings on macOS.")
+    host: str = typer.Option(None, help="Server host. Overrides config."),
+    port: int = typer.Option(None, help="Server port. Overrides config."),
+    reload: bool = typer.Option(False, "--reload", help="Enable auto-reloading for development."),
+    worker_device_type: Optional[str] = typer.Option(None, "--worker-device",
+        help="Target device for the main worker (auto, cpu, gpu, mps). Overrides auto-detection."),
+    gpu_visible_devices: Optional[str] = typer.Option(None, "--gpu-devices",
+        help="Comma-separated list of GPU device IDs (e.g., '0' or '0,1'). Only for NVIDIA GPUs."),
+    worker_concurrency: Optional[int] = typer.Option(None, "--worker-concurrency",
+        help="Number of concurrent worker processes/threads (for --autoscale)."),
+    worker_pool_type: str = typer.Option("solo", "--worker-pool",
+        help="Celery worker pool type (fork, solo, prefork, spawn, gevent, eventlet). 'solo' or 'spawn' recommended for macOS."),
+    tokenizers_parallelism: bool = typer.Option(True, "--tokenizers-parallelism/--no-tokenizers-parallelism",
+        help="Enable Hugging Face tokenizers parallelism. Set to False (--no-tokenizers-parallelism) to avoid 'fork' warnings on macOS.")
 ):
     """
     Starts the RAGnetic server (Uvicorn), the Celery worker(s), and the Celery Beat scheduler.
-    This consolidates all background task management under one command.
     """
     config = configparser.ConfigParser()
     config.read(_CONFIG_FILE)
@@ -1043,29 +1041,34 @@ def start_server(
     final_port = port or config.getint('SERVER', 'port', fallback=8000)
 
     paths = get_path_settings()
-    uvicorn_log_cfg_path = paths["PROJECT_ROOT"] / "logging.uvicorn.json"
+
+    # --- Respect debug mode set via `ragnetic set-debug` ---
+    debug_on = get_debug_mode()
+    uvicorn_log_cfg_path = paths["PROJECT_ROOT"] / (
+        "logging.uvicorn.debug.json" if debug_on else "logging.uvicorn.json"
+    )
+    worker_loglevel = "debug" if debug_on else ("info" if reload else "warning")
+    beat_loglevel   = "debug" if debug_on else ("info" if reload else "warning")
+    typer.secho(f"Debug mode: {'ON' if debug_on else 'OFF'}",
+                fg=typer.colors.YELLOW if debug_on else typer.colors.BLUE, bold=True)
 
     # --- Warnings ---
     if not get_server_api_keys():
         typer.secho("SECURITY WARNING: Server starting without an API key.", fg=typer.colors.YELLOW, bold=True)
     if get_cors_settings() == ["*"]:
-        typer.secho("SECURITY WARNING: Server is allowing requests from all origins ('*').", fg=typer.colors.YELLOW,
-                    bold=True)
+        typer.secho("SECURITY WARNING: Server is allowing requests from all origins ('*').", fg=typer.colors.YELLOW, bold=True)
 
     redis_process = None
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     try:
-        # Try to connect to an existing Redis instance
         r = redis.from_url(redis_url)
         r.ping()
         typer.secho("Redis is already running.", fg=typer.colors.GREEN)
     except redis.exceptions.ConnectionError:
         typer.secho("Redis not found. Attempting to start Redis server...", fg=typer.colors.YELLOW)
         try:
-            # If connection fails, try to start a local Redis server
             redis_process = subprocess.Popen(["redis-server"])
             typer.secho("Redis server started successfully.", fg=typer.colors.GREEN)
-            # Give Redis a moment to initialize
             time.sleep(2)
         except FileNotFoundError:
             typer.secho("ERROR: 'redis-server' command not found.", fg=typer.colors.RED, bold=True)
@@ -1074,35 +1077,24 @@ def start_server(
 
     beat_db_uri = get_beat_db_uri()
 
-    # Prepare a custom environment for Celery worker and beat processes
-    celery_env = os.environ.copy() # Start with current environment variables
+    # Env for Celery processes
+    celery_env = os.environ.copy()
     celery_env["CELERY_BEAT_DBURI"] = beat_db_uri
+    if tokenizers_parallelism is not None:
+        celery_env["TOKENIZERS_PARALLELISM"] = str(tokenizers_parallelism).lower()
 
-    # Apply GPU/device visibility settings
+    # GPU visibility
     if gpu_visible_devices:
         if worker_device_type and worker_device_type.lower() not in ["gpu", "cuda"]:
-            typer.secho("Warning: --gpu-devices specified but --worker-device is not 'gpu' or 'cuda'. "
-                        "This might lead to unexpected behavior.", fg=typer.colors.YELLOW)
+            typer.secho("Warning: --gpu-devices specified but --worker-device is not 'gpu' or 'cuda'.", fg=typer.colors.YELLOW)
         celery_env["CUDA_VISIBLE_DEVICES"] = gpu_visible_devices
         typer.secho(f"Setting CUDA_VISIBLE_DEVICES to: {gpu_visible_devices}", fg=typer.colors.CYAN)
     elif worker_device_type and worker_device_type.lower() == "gpu":
-        typer.secho("Info: User requested 'gpu' worker but no specific --gpu-devices. "
-                    "Celery worker will attempt to use default/all available NVIDIA GPUs.", fg=typer.colors.CYAN)
+        typer.secho("Info: GPU worker requested; using default/all visible GPUs.", fg=typer.colors.CYAN)
     elif worker_device_type and worker_device_type.lower() == "mps":
-        typer.secho("Info: User requested 'mps' worker. Ensure PyTorch is installed with MPS support.",
-                    fg=typer.colors.CYAN)
+        typer.secho("Info: MPS worker requested (Apple Silicon).", fg=typer.colors.CYAN)
 
-    if tokenizers_parallelism is not None:
-        celery_env["TOKENIZERS_PARALLELISM"] = str(tokenizers_parallelism).lower()
-        # typer.secho(f"Setting TOKENIZERS_PARALLELISM to: {tokenizers_parallelism}", fg=typer.colors.CYAN)
-    else:
-        pass
-
-    # Determine concurrency for Celery worker
-    final_concurrency = worker_concurrency if worker_concurrency is not None else 4  # Default to 4
-
-    # Base Celery worker command arguments
-    worker_loglevel = "info" if reload else "warning"
+    final_concurrency = worker_concurrency if worker_concurrency is not None else 4
 
     base_worker_args = [
         "celery", "-A", "app.core.tasks", "worker",
@@ -1115,12 +1107,9 @@ def start_server(
         "-Q", "ragnetic_fine_tuning_tasks,celery,ragnetic_cleanup_tasks",
     ]
 
-    # In reload mode, subprocesses are managed directly.
     if reload:
         typer.secho("Starting server and worker in --reload mode...", fg=typer.colors.YELLOW, bold=True)
-        typer.secho(
-            "Note: Celery Beat does not support auto-reloading. Restart the server to apply schedule changes from YAML files.",
-            fg=typer.colors.CYAN)
+        typer.secho("Note: Celery Beat does not auto-reload. Restart to apply schedule changes.", fg=typer.colors.CYAN)
 
         uvicorn_cmd = [
             "uvicorn", "app.main:app",
@@ -1132,13 +1121,12 @@ def start_server(
         ]
 
         uvicorn_process = subprocess.Popen(uvicorn_cmd)
-        # Pass celery_env to worker_process
-        worker_process = subprocess.Popen(base_worker_args, env=celery_env)  # Pass env
+        worker_process = subprocess.Popen(base_worker_args, env=celery_env)
         beat_process = subprocess.Popen([
             "celery", "-A", "app.core.tasks", "beat",
             "-S", "sqlalchemy_celery_beat.schedulers:DatabaseScheduler",
-            "--loglevel=info"
-        ], env=celery_env)  # Pass env
+            f"--loglevel={beat_loglevel}",
+        ], env=celery_env)
 
         try:
             uvicorn_process.wait()
@@ -1146,26 +1134,20 @@ def start_server(
             typer.echo("\nShutting down processes...")
         finally:
             if beat_process and beat_process.poll() is None:
-                beat_process.terminate()
-                beat_process.wait()
+                beat_process.terminate(); beat_process.wait()
             if worker_process and worker_process.poll() is None:
-                worker_process.terminate()
-                worker_process.wait()
+                worker_process.terminate(); worker_process.wait()
             if redis_process and redis_process.poll() is None:
-                redis_process.terminate()
-                redis_process.wait()
+                redis_process.terminate(); redis_process.wait()
 
-    # For production (non-reload) mode
     else:
         worker_process = None
         beat_process = None
         try:
             typer.secho("Starting Celery worker...", fg=typer.colors.BLUE, bold=True)
-            # Pass celery_env to worker_process
-            worker_process = subprocess.Popen(base_worker_args, env=celery_env)  # Pass env
+            worker_process = subprocess.Popen(base_worker_args, env=celery_env)
 
             typer.secho("Starting Celery Beat scheduler...", fg=typer.colors.BLUE, bold=True)
-            beat_loglevel = "info" if reload else "warning"
             beat_cmd = [
                 "celery", "-A", "app.core.tasks", "beat",
                 "-S", "sqlalchemy_celery_beat.schedulers:DatabaseScheduler",
@@ -1173,8 +1155,7 @@ def start_server(
             ]
             beat_process = subprocess.Popen(beat_cmd, env=celery_env)
 
-            typer.secho(f"Starting Uvicorn server on http://{final_host}:{final_port}...", fg=typer.colors.BLUE,
-                        bold=True)
+            typer.secho(f"Starting Uvicorn server on http://{final_host}:{final_port}...", fg=typer.colors.BLUE, bold=True)
             subprocess.run(
                 [
                     "uvicorn", "app.main:app",
@@ -1185,23 +1166,18 @@ def start_server(
                 ],
                 check=True
             )
-
         except KeyboardInterrupt:
             typer.echo("\nShutting down processes...")
         except Exception as e:
             typer.secho(f"An error occurred during server startup: {e}", fg=typer.colors.RED)
         finally:
             if beat_process and beat_process.poll() is None:
-                beat_process.terminate()
-                beat_process.wait()
+                beat_process.terminate(); beat_process.wait()
             if worker_process and worker_process.poll() is None:
-                worker_process.terminate()
-                worker_process.wait()
+                worker_process.terminate(); worker_process.wait()
             if redis_process and redis_process.poll() is None:
                 typer.secho("Stopping Redis server...", fg=typer.colors.YELLOW)
-                redis_process.terminate()
-                redis_process.wait()
-
+                redis_process.terminate(); redis_process.wait()
 
 @app.command(help="Lists all configured agents.")
 def list_agents():
@@ -3889,6 +3865,36 @@ def inspect_lambda_run(
     except Exception as e:
         typer.secho(f"An unexpected error occurred while inspecting the run: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+@app.command(name="set-debug", help="Enable or disable system-wide debug logging.")
+def set_debug_mode():
+    """
+    Sets the application's logging level to DEBUG or INFO.
+    """
+    typer.secho("Debug Mode Configuration: ", bold=True)
+    config = configparser.ConfigParser()
+    config.read(_CONFIG_FILE)
+
+    if 'SERVER' not in config:
+        config.add_section('SERVER')
+
+    current_status = config.getboolean('SERVER', 'debug_mode', fallback=False)
+    typer.echo(f"Current debug mode is: {'ON' if current_status else 'OFF'}")
+
+    enable_debug = typer.confirm("Do you want to enable debug mode? (This will generate a lot of logs)", default=not current_status)
+
+    config.set('SERVER', 'debug_mode', str(enable_debug))
+
+    with open(_CONFIG_FILE, 'w') as configfile:
+        config.write(configfile)
+
+    if enable_debug:
+        typer.secho("\nDebug mode has been ENABLED. The application will now produce detailed logs.", fg=typer.colors.GREEN)
+    else:
+        typer.secho("\nDebug mode has been DISABLED. The application will now run with standard INFO logs.", fg=typer.colors.GREEN)
+
+    typer.echo("You may need to restart the server for the changes to take full effect.")
+
 
 if __name__ == "__main__":
     setup_cli_logging()

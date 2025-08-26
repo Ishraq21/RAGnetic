@@ -5,11 +5,8 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from sqlalchemy.orm import Session, sessionmaker
-from app.core.config import get_db_connection
+from app.core.config import get_db_connection, get_debug_mode
 from sqlalchemy import insert, create_engine
-
-
-
 
 LOGGING_QUEUE = None
 
@@ -73,13 +70,12 @@ class DatabaseLogHandler(logging.Handler):
     RESERVED = {
         "timestamp", "level", "message", "module", "function", "line",
         "exc_info", "details"
-
     }
 
     @staticmethod
     def _safe_jsonable(v):
         try:
-            json.dumps(v)  # quick test
+            json.dumps(v)
             return v
         except Exception:
             return str(v)
@@ -96,12 +92,10 @@ class DatabaseLogHandler(logging.Handler):
                 "line": record.lineno,
                 "exc_info": self.format_exception(record.exc_info) if record.exc_info else None,
                 "details": getattr(record, 'details', None),
-
             }
 
             extra = getattr(record, "extra_data", None)
             if isinstance(extra, dict):
-
                 details = log_entry.get("details")
                 if not isinstance(details, dict):
                     details = {}
@@ -126,7 +120,16 @@ class DatabaseLogHandler(logging.Handler):
         return None
 
 
-def get_logging_config(json_logs: bool = False, log_level: str = "INFO"):
+def get_logging_config(json_logs: bool = False, log_level: Optional[str] = None):
+    """
+    Build logging config. If log_level is provided, use it.
+    Otherwise derive from config.ini via get_debug_mode().
+    """
+    if log_level is None:
+        log_level = "DEBUG" if get_debug_mode() else "INFO"
+    else:
+        log_level = str(log_level).upper()
+
     log_config = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -141,16 +144,17 @@ def get_logging_config(json_logs: bool = False, log_level: str = "INFO"):
                 "formatter": "standard",
                 "level": log_level,
             }
-            # NOTE: no "db_handler" here. We wire it up in startup_event() via QueueListener.
         },
         "loggers": {
             "ragnetic": {"handlers": ["console"], "level": log_level, "propagate": False},
-            "uvicorn": {"handlers": ["console"], "level": "INFO", "propagate": False},
-            "uvicorn.access": {"handlers": ["console"], "level": "WARNING", "propagate": False},
-            "sqlalchemy": {"handlers": ["console"], "level": "WARNING", "propagate": False},
-            "celery": {"handlers": ["console"], "level": "INFO", "propagate": False},
-            "httpx": {"handlers": ["console"], "level": "WARNING", "propagate": False},
-            "faiss": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+            "uvicorn": {"handlers": ["console"], "level": log_level, "propagate": False},
+            "uvicorn.error": {"handlers": ["console"], "level": log_level, "propagate": False},
+            # keep access quieter unless debug is on
+            "uvicorn.access": {"handlers": ["console"], "level": ("DEBUG" if log_level == "DEBUG" else "WARNING"), "propagate": False},
+            "sqlalchemy": {"handlers": ["console"], "level": ("INFO" if log_level == "DEBUG" else "WARNING"), "propagate": False},
+            "celery": {"handlers": ["console"], "level": log_level, "propagate": False},
+            "httpx": {"handlers": ["console"], "level": ("INFO" if log_level == "DEBUG" else "WARNING"), "propagate": False},
+            "faiss": {"handlers": ["console"], "level": ("INFO" if log_level == "DEBUG" else "WARNING"), "propagate": False},
             "app": {"handlers": ["console"], "level": log_level, "propagate": False},
         },
         "root": {"handlers": ["console"], "level": log_level},
@@ -158,3 +162,4 @@ def get_logging_config(json_logs: bool = False, log_level: str = "INFO"):
     if json_logs:
         log_config["handlers"]["console"]["formatter"] = "json"
     return log_config
+
