@@ -122,6 +122,7 @@
     let confirmCallback = null;
     let isGenerating = false;
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+    const WS_URL = `${protocol}://${location.host}/ws`;
 
     const svgs = {
         copy: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M7.5 3a.75.75 0 00-.75.75v13.5a.75.75 0 00.75.75h9a.75.75 0 00.75-.75V3.75A.75.75 0 0016.5 3h-9zM8.25 4.5h7.5v12h-7.5V4.5z" /><path d="M6 1.5a.75.75 0 00-.75.75V16.5a.75.75 0 00.75.75h.008a.75.75 0 00.75-.75V2.25A.75.75 0 006.008 1.5H6z" /></svg>`,
