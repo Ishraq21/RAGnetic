@@ -870,7 +870,7 @@ def check_health():
                     fg=typer.colors.RED)
         has_failure = True
 
-    typer.secho("\n--- Check Complete ---", bold=True)
+    typer.secho("\nCheck Complete.", bold=True)
     if has_failure:
         raise typer.Exit(code=1)
 
@@ -1116,7 +1116,6 @@ def start_server(
             "--host", final_host,
             "--port", str(final_port),
             "--reload",
-            "--no-access-log",
             "--log-config", str(uvicorn_log_cfg_path),
         ]
 
@@ -1161,7 +1160,6 @@ def start_server(
                     "uvicorn", "app.main:app",
                     "--host", final_host,
                     "--port", str(final_port),
-                    "--no-access-log",
                     "--log-config", str(uvicorn_log_cfg_path),
                 ],
                 check=True
