@@ -126,6 +126,13 @@ def get_server_api_keys() -> List[str]:
             return [key.strip() for key in keys_str.split(",") if key.strip()]
     return []
 
+def get_debug_mode() -> bool:
+    """
+    Checks if debug mode is enabled in the config file.
+    Defaults to False if not set.
+    """
+    config = _get_config_parser()
+    return config.getboolean('SERVER', 'debug_mode', fallback=False)
 
 def get_db_connection(name: str) -> str:
     """
