@@ -10,7 +10,7 @@
   "loggers": {
     "uvicorn":       { "handlers": ["console"], "level": "INFO",    "propagate": false },
     "uvicorn.error": { "handlers": ["console"], "level": "INFO",    "propagate": false },
-    "uvicorn.access":{ "handlers": ["console"], "level": "WARNING", "propagate": false }
+    "uvicorn.access":{ "handlers": ["console"], "level": "INFO",    "propagate": false }
   },
   "root": { "handlers": ["console"], "level": "INFO" }
 }

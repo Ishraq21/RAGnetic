@@ -146,20 +146,32 @@ def get_logging_config(json_logs: bool = False, log_level: Optional[str] = None)
             }
         },
         "loggers": {
+            # your app
             "ragnetic": {"handlers": ["console"], "level": log_level, "propagate": False},
-            "uvicorn": {"handlers": ["console"], "level": log_level, "propagate": False},
-            "uvicorn.error": {"handlers": ["console"], "level": log_level, "propagate": False},
-            # keep access quieter unless debug is on
-            "uvicorn.access": {"handlers": ["console"], "level": ("DEBUG" if log_level == "DEBUG" else "WARNING"), "propagate": False},
-            "sqlalchemy": {"handlers": ["console"], "level": ("INFO" if log_level == "DEBUG" else "WARNING"), "propagate": False},
-            "celery": {"handlers": ["console"], "level": log_level, "propagate": False},
-            "httpx": {"handlers": ["console"], "level": ("INFO" if log_level == "DEBUG" else "WARNING"), "propagate": False},
-            "faiss": {"handlers": ["console"], "level": ("INFO" if log_level == "DEBUG" else "WARNING"), "propagate": False},
-            "app": {"handlers": ["console"], "level": log_level, "propagate": False},
+            "app":      {"handlers": ["console"], "level": log_level, "propagate": False},
+
+            # uvicorn (enable access logs only if you DON'T pass --no-access-log)
+            "uvicorn":        {"handlers": ["console"], "level": log_level, "propagate": False},
+            "uvicorn.error":  {"handlers": ["console"], "level": ("DEBUG" if log_level == "DEBUG" else "INFO"), "propagate": False},
+            "uvicorn.access": {"handlers": ["console"], "level": ("DEBUG" if log_level == "DEBUG" else "INFO"), "propagate": False},
+
+            # tone down chatty libs unless debugging
+            "sqlalchemy.engine":        {"handlers": ["console"], "level": "WARNING", "propagate": False},
+            "alembic.runtime.migration":{"handlers": ["console"], "level": "WARNING", "propagate": False},
+            "httpx":                    {"handlers": ["console"], "level": ("INFO" if log_level == "DEBUG" else "WARNING"), "propagate": False},
+            "faiss":                    {"handlers": ["console"], "level": ("INFO" if log_level == "DEBUG" else "WARNING"), "propagate": False},
+
+            # celery (banner/config dumps go to WARNING unless debug)
+            "celery":        {"handlers": ["console"], "level": (log_level if log_level == "DEBUG" else "WARNING"), "propagate": False},
+            "celery.beat":   {"handlers": ["console"], "level": (log_level if log_level == "DEBUG" else "WARNING"), "propagate": False},
+            "celery.worker": {"handlers": ["console"], "level": (log_level if log_level == "DEBUG" else "WARNING"), "propagate": False},
         },
         "root": {"handlers": ["console"], "level": log_level},
     }
+
     if json_logs:
         log_config["handlers"]["console"]["formatter"] = "json"
+
     return log_config
+
 
