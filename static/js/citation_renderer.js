@@ -19,7 +19,8 @@ window.citationRenderer = (function() {
       popup.addEventListener('click', e => e.stopPropagation());
     }
 
-    const title   = citation.doc_name     || 'Document';
+    const title   = citation.doc_name || citation.document_name || 'Document';
+
     const hasPage = citation.page_number != null;
     const page    = hasPage ? ` • Page ${citation.page_number}` : '';
     const chunk   = ` • Chunk ${citation.chunk_id}`;
@@ -128,22 +129,64 @@ window.citationRenderer = (function() {
     }
   }
 
-  function renderCitations(msgEl, citations) {
+    function renderCitations(msgEl, citations) {
     if (!citations?.length) return;
     const content = msgEl.querySelector('.content');
     if (!content) return;
 
-    const lookup = new Map(citations.map(c => [c.marker_text, c]));
-    content.innerHTML = content.innerHTML.replace(/\[(\d+)\]/g, match => {
-      const c = lookup.get(match);
-      if (!c) return match;
-      return `<span class="${CITATION_CLASS}"
-                    data-chunk-id="${c.chunk_id}"
-                    data-marker-text="${c.marker_text}"
-                    data-doc-name="${c.doc_name||''}"
-                    data-page-number="${c.page_number||''}"
-              >${match}</span>`;
-    });
+    const queues = new Map();
+    for (const c of citations) {
+    const k = c.marker_text;
+    if (!queues.has(k)) queues.set(k, []);
+    queues.get(k).push(c);
+ }
+
+    function replaceMarkersInTextNode(node, queues) {
+      const rx = /\[(\d+)\]/g;
+      const frag = document.createDocumentFragment();
+      let last = 0, m;
+      while ((m = rx.exec(node.textContent)) !== null) {
+        const match = m[0];
+         const q = queues.get(match);
+         const c = q && q.length ? q.shift() : null;
+        if (!c) continue;
+
+        if (m.index > last) {
+          frag.appendChild(document.createTextNode(node.textContent.slice(last, m.index)));
+        }
+
+        const span = document.createElement('span');
+        span.className = CITATION_CLASS;
+        span.dataset.chunkId = c.chunk_id;
+        span.dataset.markerText = c.marker_text;
+        span.dataset.docName = c.doc_name || '';
+        if (c.page_number != null) span.dataset.pageNumber = c.page_number;
+        span.textContent = match;
+        frag.appendChild(span);
+
+        last = m.index + match.length;
+      }
+      if (last === 0) return null;
+      frag.appendChild(document.createTextNode(node.textContent.slice(last)));
+      return frag;
+    }
+
+    function walkAndReplace(root, queues) {
+      const SKIP = new Set(['CODE','PRE','A']);
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+      const toProcess = [];
+      while (walker.nextNode()) {
+        const parent = walker.currentNode.parentElement;
+        if (parent && SKIP.has(parent.tagName)) continue;
+        toProcess.push(walker.currentNode);
+      }
+      for (const textNode of toProcess) {
+        const frag = replaceMarkersInTextNode(textNode, queues);
+        if (frag) textNode.parentNode.replaceChild(frag, textNode);
+      }
+    }
+
+    walkAndReplace(content, queues);
 
     content.querySelectorAll(`.${CITATION_CLASS}`).forEach(span => {
       const cd = {
@@ -155,11 +198,11 @@ window.citationRenderer = (function() {
       span.onclick = async e => {
         e.stopPropagation();
         const data = cd.chunk_id === -1
-          ? { snippet: null, page_number: null }
+          ? { snippet: null, page_number: null, document_name: null }
           : await fetchSnippet(cd.chunk_id);
         const snippet = data?.snippet ?? null;
         showCitationPopup(
-          { ...cd, page_number: data?.page_number ?? cd.page_number },
+          { ...cd, page_number: data?.page_number ?? cd.page_number, document_name: data?.document_name },
           snippet,
           span
         );
@@ -167,5 +210,28 @@ window.citationRenderer = (function() {
     });
   }
 
-  return { renderCitations };
+  async function prefetch(citations) {
+    const ids = [...new Set(citations.map(c => c.chunk_id).filter(id => id > 0))];
+    if (!ids.length) return;
+    const token = localStorage.getItem('ragnetic_user_token');
+    if (!token) return;
+
+    const url = new URL(`${API_BASE}/chat/citation-snippets`);
+    ids.forEach(id => url.searchParams.append('chunk_ids', id));
+
+    try {
+      const res = await fetch(url, { headers: { 'X-API-Key': token } });
+      if (!res.ok) return;
+      const list = await res.json();
+      list.forEach(item => {
+        snippetCache[item.id] = {
+          snippet: item.snippet,
+          page_number: item.page_number,
+          document_name: item.document_name
+        };
+      });
+    } catch (_) { /* best-effort prefetch */ }
+  }
+
+  return { renderCitations, prefetch };
 })();

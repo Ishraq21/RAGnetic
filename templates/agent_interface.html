@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <title>RAGnetic Chat</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono&display=swap" rel="stylesheet" />
@@ -19,9 +20,9 @@
   </script>
   <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="stylesheet" href="{{ url_for('static', path='css/style.css') }}">
-    <script src="{{ url_for('static', path='js/ingestion_modal_logic.js') }}"></script>
-    <script src="{{ url_for('static', path='js/chat_quick_upload.js') }}"></script>
-    <script src="{{ url_for('static', path='js/citation_renderer.js') }}"></script>
+    <script src="{{ url_for('static', path='js/ingestion_modal_logic.js') }}" defer></script>
+    <script src="{{ url_for('static', path='js/chat_quick_upload.js') }}" defer></script>
+    <script src="{{ url_for('static', path='js/citation_renderer.js') }}" defer></script>
 </head>
 <body>
     <div id="toast-notification"></div>
@@ -60,7 +61,7 @@
     <div id="chat-container">
         <div id="messages"></div>
 
-        <div id="citation-popup" class="citation-popup" style="display: none;"></div>
+        <div id="citation-popup" class="citation-popup"></div>
 
         <div id="quickUploadFileList" class="attachment-list"></div>
         <div id="input-form-container">
@@ -85,7 +86,6 @@
 <script>
     // These are global variables used by ingestion_modal_logic.js and other modules
     const API_BASE_URL = window.location.origin + '/api/v1';
-    const WS_URL = 'ws://' + window.location.host + '/ws';
     let loggedInUserToken = localStorage.getItem('ragnetic_user_token');
     let loggedInDbUserId = localStorage.getItem('ragnetic_db_user_id');
 
@@ -126,25 +126,25 @@
     const svgs = {
         copy: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M7.5 3a.75.75 0 00-.75.75v13.5a.75.75 0 00.75.75h9a.75.75 0 00.75-.75V3.75A.75.75 0 0016.5 3h-9zM8.25 4.5h7.5v12h-7.5V4.5z" /><path d="M6 1.5a.75.75 0 00-.75.75V16.5a.75.75 0 00.75.75h.008a.75.75 0 00.75-.75V2.25A.75.75 0 006.008 1.5H6z" /></svg>`,
         copied: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z" clip-rule="evenodd" /></svg>`,
-        copyCode: `<svg xmlns="http://www.w3.org="2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/></svg>`,
+        copyCode: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/></svg>`,
         copiedCode: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 010-1.06.733.733 0 011.047 0l3.052 3.093 5.4-6.425a.247.247 0 01.02-.022z"/></svg>`
     };
     function renderMath(element) { if (window.MathJax) { window.MathJax.typesetPromise(element ? [element] : []).catch((err) => console.error('MathJax typesetting error:', err)); } }
     function showToast(message, isError = false) { toastNotification.textContent = message; toastNotification.className = isError ? 'error' : 'success'; toastNotification.style.display = 'block'; setTimeout(() => { toastNotification.style.display = 'none'; }, 4000); }
     function scrollToBottom() { window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }); }
 
-    function setGeneratingState(generating) {
-        isGenerating = generating;
-        sendIcon.style.display = generating ? 'none' : 'inline';
-        stopIcon.style.display = generating ? 'inline' : 'none';
-        inputField.disabled = generating;
-        sendStopButton.classList.toggle('stop-active', generating);
-        quickUploadBtn.disabled = generating;
-        if (!generating) {
-            typingIndicator.style.display = 'none';
-            inputField.focus();
+        function setGeneratingState(generating) {
+            isGenerating = generating;
+            sendIcon.style.display = generating ? 'none' : 'inline';
+            stopIcon.style.display = generating ? 'inline' : 'none';
+            inputField.disabled = generating;
+            sendStopButton.classList.toggle('stop-active', generating);
+            quickUploadBtn.disabled = generating;
+            if (!generating) {
+                typingIndicator.style.display = 'none';
+                inputField.focus();
+            }
         }
-    }
     function renderEmptyState() { messagesDiv.innerHTML = `<div id="empty-state"><h1>RAG<span>netic</span></h1><p>Your on-premise AI assistant. Select an agent and ask a question to begin.</p></div>`; }
 
     function setupChatEnvironment() {
@@ -163,6 +163,58 @@
         fetchChatSessions(agent);
         openWebSocket();
     }
+
+
+function normalizeMD(s) {
+  return (s || '').replace(/\r\n/g, '\n').trim();
+}
+
+function hydrateCitationsForBubble(bubble, citations) {
+  if (!bubble || bubble.dataset.citationsHydrated === 'true') return;
+  if (!Array.isArray(citations) || citations.length === 0) return;
+  if (!window.citationRenderer?.renderCitations) return;
+  window.citationRenderer.renderCitations(bubble, citations);
+  window.citationRenderer?.prefetch?.(citations);
+  bubble.dataset.citationsHydrated = 'true';
+}
+
+async function backfillCitationsForBubbles(bubbles) {
+  try {
+    // Ensure renderer is ready (in case script is still loading)
+    if (!window.citationRenderer?.renderCitations) {
+      await new Promise(r => setTimeout(r, 30));
+      if (!window.citationRenderer?.renderCitations) return;
+    }
+
+    const resp = await fetch(`/history/${thread_id}?agent_name=${agent}&user_id=${loggedInDbUserId}`, {
+      headers: { 'X-API-Key': loggedInUserToken }
+    });
+    if (!resp.ok) return;
+
+    const history = await resp.json();
+
+    // Build a lookup: normalized markdown -> citations (prefer latest occurrence)
+    const map = new Map();
+    for (let i = history.length - 1; i >= 0; i--) {
+      const m = history[i];
+      if (m.type === 'ai' && m.content) {
+        const cites = m.meta?.citations || [];
+        if (cites.length && !map.has(normalizeMD(m.content))) {
+          map.set(normalizeMD(m.content), cites);
+        }
+      }
+    }
+
+    bubbles.forEach(b => {
+      if (b.dataset.citationsHydrated === 'true') return;
+      const md = normalizeMD(b.dataset.rawMarkdown || '');
+      const cites = map.get(md);
+      if (cites) hydrateCitationsForBubble(b, cites);
+    });
+  } catch (e) {
+    console.warn('Citation backfill failed:', e);
+  }
+}
 
     function openWebSocket(onOpenCallback) {
         if (socket && socket.readyState !== WebSocket.CLOSED) { socket.close(1000, "Starting new session"); }
@@ -185,39 +237,60 @@
                 }
             }
         };
-        socket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.token) { typingIndicator.style.display = 'none'; appendAgentToken(data.token); }
-        if (data.done) {
-            setGeneratingState(false);
-            if (data.user_id && data.user_id !== loggedInDbUserId) {
-                loggedInDbUserId = data.user_id;
-                localStorage.setItem('ragnetic_db_user_id', loggedInDbUserId);
-            }
-            thread_id = data.thread_id;
-            localStorage.setItem('ragnetic_thread_id', thread_id);
-            localStorage.setItem('ragnetic_agent', agent);
-            fetchChatSessions(agent);
-            const lastMessage = messagesDiv.lastElementChild;
+socket.onmessage = async (event) => {
 
-                     if (lastMessage) {
-                    lastMessage.dataset.streaming = 'false';
-                    lastMessage.classList.remove('streaming-agent-message');
-                    renderCodeblocks(lastMessage);
-                    renderMath(lastMessage);
+  const data = JSON.parse(event.data);
 
-                    // CORRECTED: Use the new citation renderer directly
-                    if (data.citations && data.citations.length > 0) {
-                        if (window.citationRenderer && typeof window.citationRenderer.renderCitations === 'function') {
-                            window.citationRenderer.renderCitations(lastMessage, data.citations);
-                        }
-                    }
-                } else {
-                console.warn("Could not find streaming agent message to finalize.");
-            }
+  if (data.token) {
+    typingIndicator.style.display = 'none';
+    appendAgentToken(data.token);
+  }
+
+  if (data.done) {
+    setGeneratingState(false);
+
+    if (data.user_id && data.user_id !== loggedInDbUserId) {
+      loggedInDbUserId = data.user_id;
+      localStorage.setItem('ragnetic_db_user_id', loggedInDbUserId);
+    }
+    thread_id = data.thread_id;
+    localStorage.setItem('ragnetic_thread_id', thread_id);
+    localStorage.setItem('ragnetic_agent', agent);
+    fetchChatSessions(agent);
+
+    const lastMessage = messagesDiv.lastElementChild;
+    if (!lastMessage) {
+      console.warn("Could not find streaming agent message to finalize.");
+      return;
+    }
+
+        lastMessage.dataset.streaming = 'false';
+        lastMessage.classList.remove('streaming-agent-message');
+
+        const contentDiv = lastMessage.querySelector('.content');
+        contentDiv.innerHTML = DOMPurify.sanitize(marked.parse(lastMessage.dataset.rawMarkdown));
+
+        // 1) Code blocks
+        renderCodeblocks(lastMessage);
+
+        // 2) Hydrate citations once per bubble (avoid double rendering)
+        if (!lastMessage.dataset.citationsHydrated) {
+          if (Array.isArray(data.citations) && data.citations.length) {
+            hydrateCitationsForBubble(lastMessage, data.citations);
+          } else {
+            await backfillCitationsForBubbles([lastMessage]); // match by content
+          }
         }
+
+        // 3) Math after citations
+        renderMath(lastMessage);
+
+        // (nice-to-have) keep the view pinned
+        scrollToBottom();
+
+              }
     };
-}
+   }
     function handleFormSubmit(event) {
         if (event) event.preventDefault();
         if (isGenerating) {
@@ -369,7 +442,10 @@
         scopeElement.querySelectorAll('pre > code').forEach((codeBlock) => {
             const pre = codeBlock.parentElement;
             if (pre.querySelector('.code-header')) return;
-            const lang = codeBlock.className.split('-')[1] || 'text';
+            const lang =
+          [...(codeBlock.classList || [])]
+            .find(c => c.startsWith('language-'))
+            ?.slice('language-'.length) || 'text';
             const header = document.createElement('div');
             header.className = 'code-header';
             const langSpan = document.createElement('span');
@@ -390,90 +466,101 @@
             pre.insertBefore(header, codeBlock);
         });
     }
-    function appendAgentToken(token) {
-        let lastMessage = messagesDiv.lastElementChild;
-        if (!lastMessage || !lastMessage.classList.contains('agent') || lastMessage.dataset.streaming === 'false') {
+        let rafScheduled = false;
+
+        function appendAgentToken(token) {
+          let lastMessage = messagesDiv.lastElementChild;
+          if (lastMessage?.dataset?.streaming === 'false') return;
+
+          if (!lastMessage || !lastMessage.classList.contains('agent')) {
             typingIndicator.style.display = 'none';
             lastMessage = createAgentMessageBubble();
             lastMessage.dataset.streaming = 'true';
             lastMessage.classList.add('streaming-agent-message');
-        }
-        lastMessage.dataset.rawMarkdown += token;
-        const contentDiv = lastMessage.querySelector('.content');
-        if (contentDiv) {
-            contentDiv.innerHTML = marked.parse(lastMessage.dataset.rawMarkdown);
-            renderCodeblocks(contentDiv);
-        }
-        scrollToBottom();
-    }
-    async function loadHistory(agentName, threadId, userId) {
-        if (!loggedInUserToken || !loggedInDbUserId) {
-            showToast("Cannot load history: Not logged in.", true);
-            return;
-        }
-        try {
-            const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${loggedInDbUserId}`, {
-                method: 'GET',
-                headers: {
-                    'X-API-Key': loggedInUserToken
-                }
+          }
+
+          lastMessage.dataset.rawMarkdown += token;
+          const contentDiv = lastMessage.querySelector('.content');
+
+          if (!rafScheduled && contentDiv) {
+            rafScheduled = true;
+            requestAnimationFrame(() => {
+              const rawHtml = marked.parse(lastMessage.dataset.rawMarkdown);
+              contentDiv.innerHTML = DOMPurify.sanitize(rawHtml);
+              renderCodeblocks(contentDiv);
+              scrollToBottom();
+              rafScheduled = false;
             });
-             if (!response.ok) {
-                  if (response.status === 404) {
-                    console.warn(
-                      `History for thread ${threadId} not found or unauthorized.`
-                    );
-                    startNewSession(false);
-                    return;
-                  }
-                  showToast(`Could not load session (status: ${response.status}).`, true);
-                  return;
-                }
+          }
+        }
+    async function loadHistory(agentName, threadId, userId) {
+  if (!loggedInUserToken || !loggedInDbUserId) {
+    showToast("Cannot load history: Not logged in.", true);
+    return;
+  }
+  try {
+    const response = await fetch(`/history/${threadId}?agent_name=${agentName}&user_id=${loggedInDbUserId}`, {
+      method: 'GET',
+      headers: { 'X-API-Key': loggedInUserToken }
+    });
 
-                const history = await response.json();
-                messagesDiv.innerHTML = '';
+    if (!response.ok) {
+      if (response.status === 404) {
+        console.warn(`History for thread ${threadId} not found or unauthorized.`);
+        startNewSession(false);
+        return;
+      }
+      showToast(`Could not load session (status: ${response.status}).`, true);
+      return;
+    }
 
-                history.forEach((msg) => {
-                  if (msg.type === 'human') {
-                    appendUserMessage(msg.content);
+    const history = await response.json();
+    messagesDiv.innerHTML = '';
 
-                    if (msg.meta?.quick_uploaded_files?.length) {
-                      appendAttachedFilesToUserMessage(msg.meta.quick_uploaded_files);
-                    }
-                  } else if (msg.type === 'ai') {
-                    const bubble = createAgentMessageBubble();
-                    bubble.dataset.rawMarkdown = msg.content;
-                    bubble.dataset.streaming = 'false';
+    const bubblesNeedingCites = [];
 
-                    const contentDiv = bubble.querySelector('.content');
-                    contentDiv.innerHTML = marked.parse(msg.content);
+    history.forEach((msg) => {
+      if (msg.type === 'human') {
+        appendUserMessage(msg.content);
+        if (msg.meta?.quick_uploaded_files?.length) {
+          appendAttachedFilesToUserMessage(msg.meta.quick_uploaded_files);
+        }
+        return;
+      }
 
-                    renderCodeblocks(contentDiv);
-                    renderMath(contentDiv);
+      // AI message
+      const bubble = createAgentMessageBubble();
+      bubble.dataset.rawMarkdown = msg.content;
+      bubble.dataset.streaming = 'false';
 
-                    if (msg.meta?.citations && msg.meta.citations.length > 0) {
-                        if (window.citationRenderer && typeof window.citationRenderer.renderCitations === 'function') {
-                            window.citationRenderer.renderCitations(bubble, msg.meta.citations);
-                        }
-                    }
-                }
-                });
+      const contentDiv = bubble.querySelector('.content');
+      contentDiv.innerHTML = DOMPurify.sanitize(marked.parse(msg.content));
 
-                // REMOVED: sources panel event listener
+      // 1) Code blocks first
+      renderCodeblocks(contentDiv);
 
-                setTimeout(
-                  () => window.scrollTo(0, document.body.scrollHeight),
-                  100
-                );
+      // 2) Citations: attach if present, otherwise mark for backfill
+      if (Array.isArray(msg.meta?.citations) && msg.meta.citations.length) {
+        hydrateCitationsForBubble(bubble, msg.meta.citations);
+      } else {
+        bubblesNeedingCites.push(bubble);
+      }
 
-              } catch (error) {
-                console.error("Failed to fetch history:", error);
-                showToast(
-                  "Could not connect to server to load session.",
-                  true
-                );
-              }
-            }
+      // 3) Math after citations are in the DOM
+      renderMath(bubble);
+    });
+
+    // One backfill call for any AI bubbles that shipped without citations
+    if (bubblesNeedingCites.length) {
+      await backfillCitationsForBubbles(bubblesNeedingCites);
+    }
+
+    setTimeout(() => window.scrollTo(0, document.body.scrollHeight), 100);
+  } catch (error) {
+    console.error("Failed to fetch history:", error);
+    showToast("Could not connect to server to load session.", true);
+  }
+}
     async function fetchChatSessions(agentName) {
         if (!loggedInUserToken || !loggedInDbUserId) {
             historyList.innerHTML = '';

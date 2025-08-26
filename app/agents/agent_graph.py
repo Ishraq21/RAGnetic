@@ -42,7 +42,6 @@ from app.training.model_manager import FineTunedModelManager
 from app.core.citation_parser import extract_citations_from_text
 from app.db.dao import create_citation, create_chat_message
 
-logger = logging.getLogger(__name__)
 logger = logging.getLogger("ragnetic")
 metrics_logger = logging.getLogger("ragnetic.metrics")
 
