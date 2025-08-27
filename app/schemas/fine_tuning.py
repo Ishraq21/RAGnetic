@@ -1,5 +1,5 @@
 # app/schemas/fine_tuning.py
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, ConfigDict
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 from enum import Enum
@@ -36,23 +36,32 @@ class HyperparametersConfig(BaseModel):
 
 # Pydantic model representing the structure of a fine-tuning job YAML configuration file
 class FineTuningJobConfig(BaseModel):
-    job_name: str = Field(..., description="A user-defined, unique name for this specific fine-tuning job configuration.")
-    base_model_name: str = Field(..., description="The name of the foundational open-source LLM to fine-tune (e.g., 'ollama/llama2', 'mistral', 'meta-llama/Llama-2-7b-hf').")
-    dataset_path: str = Field(..., description="Absolute or relative path to the prepared training dataset file (e.g., 'data/prepared_qa.jsonl').")
-    output_base_dir: str = Field("models/fine_tuned", description="Base directory where the fine-tuned model/adapter will be saved. A unique sub-directory will be created for each training run.")
+    # When API creates a PENDING DB row it will pass this through
+    adapter_id: Optional[str] = Field(
+        None, description="System-generated UUID for this run. Provided by API when job is created."
+    )
+
+    job_name: str = Field(..., description="Unique name for this fine-tuning job.")
+    base_model_name: str = Field(..., description="Base HF model id, e.g. 'meta-llama/Llama-2-7b-hf'.")
+    dataset_path: str = Field(..., description="Path to training .jsonl dataset.")
+    eval_dataset_path: Optional[str] = Field(
+        None, description="Optional path to evaluation .jsonl dataset."
+    )
+    output_base_dir: str = Field("models/fine_tuned", description="Base dir for saved adapters/models.")
+
     hyperparameters: HyperparametersConfig = Field(
-        default_factory=HyperparametersConfig,  # Provides default values if not specified in YAML
+        default_factory=HyperparametersConfig,
         description="Detailed configuration for fine-tuning hyperparameters."
     )
-    gpu_type_preference: Optional[str] = Field(None,
-                                               description="Optional: Preferred GPU type for training (e.g., 'A100', 'V100'). Useful in multi-GPU environments.")
-    notification_emails: Optional[List[str]] = Field(None,
-                                                     description="Optional: List of email addresses to notify about job status changes (e.g., completion, failure).")
-
+    gpu_type_preference: Optional[str] = Field(None, description="Preferred GPU type (optional).")
+    notification_emails: Optional[List[str]] = Field(None, description="Emails to notify about status changes.")
     device: Optional[Literal['cpu', 'cuda', 'mps']] = Field(
-        None,
-        description="Explicitly specify the device for training: 'cpu', 'cuda' (for NVIDIA GPUs), or 'mps' (for Apple Silicon GPUs). If None, the system will auto-detect."
+        None, description="Force device if set; otherwise auto-detect."
     )
+
+    # Optional: ignore unknown keys to avoid Celery failures on forward-compat JSON
+    model_config = ConfigDict(extra="ignore")
+
 class FineTunedModel(BaseModel):
     id: int = Field(..., description="Primary key from the database for this fine-tuned model entry.")
     adapter_id: str = Field(..., description="Unique system-generated identifier (UUID) for this specific fine-tuned model or LoRA adapter instance.")
@@ -70,6 +79,4 @@ class FineTunedModel(BaseModel):
     created_by_user_id: int = Field(..., description="The ID of the user who initiated this fine-tuning job.")
     created_at: datetime = Field(..., description="Timestamp when this fine-tuning job record was created.")
     updated_at: datetime = Field(..., description="Timestamp when this fine-tuned model entry was last updated.")
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True, extra="ignore")

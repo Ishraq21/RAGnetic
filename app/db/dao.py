@@ -271,15 +271,16 @@ async def create_role(db: AsyncSession, role_in: RoleCreate) -> Dict[str, Any]:
 
 
 async def get_role_by_name(db: AsyncSession, role_name: str) -> Optional[Dict[str, Any]]:
-    """Retrieves a role by its name, including its permissions."""
+
     stmt = select(roles_table).where(roles_table.c.name == role_name)
     result = await db.execute(stmt)
     role_row = result.mappings().first()
     if role_row:
         role_dict = dict(role_row)
-        role_dict["permissions"] = await get_permissions_for_role(db, role_row.id)
+        role_dict["permissions"] = await get_permissions_for_role(db, role_dict["id"])  # <-- fix
         return role_dict
     return None
+
 
 
 async def get_role_by_id(db: AsyncSession, role_id: int) -> Optional[Dict[str, Any]]:
@@ -848,14 +849,17 @@ async def create_default_roles_and_permissions(db: AsyncSession) -> None:
             "read:agents", "create:agents", "update:agents", "delete:agents",
             "read:users", "create:users", "update:users", "delete:users",
             "read:roles", "create:roles", "update:roles", "delete:roles",
-            "read:api_keys", "create:api_keys", "revoke:api_keys"
+            "read:api_keys", "create:api_keys", "revoke:api_keys",
+            "fine_tune:initiate", "fine_tune:read_status", "fine_tune:list_models",
         ],
         "editor": [
             "read:workflows", "create:workflows", "update:workflows",
-            "read:agents", "create:agents", "update:agents"
+            "read:agents", "create:agents", "update:agents",
+            "fine_tune:initiate", "fine_tune:read_status", "fine_tune:list_models",
         ],
         "viewer": [
-            "read:workflows", "read:agents"
+            "read:workflows", "read:agents",
+            "fine_tune:read_status", "fine_tune:list_models",
         ]
     }
 

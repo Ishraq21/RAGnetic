@@ -44,7 +44,6 @@ async def apply_fine_tuning_job_config(
         # We just need to trigger the Celery task with the job_config and user_id.
 
         # Celery tasks usually take dictionaries for arguments
-        fine_tune_llm_task.delay(job_config.model_dump(), current_user.id)
 
         # For immediate API response, we return a placeholder representation of the job.
         # In a real system, you might retrieve the immediately created PENDING record
@@ -90,13 +89,12 @@ async def apply_fine_tuning_job_config(
         created_job_row = result.mappings().first()
         await db.commit()
 
-        # 3. Pass the generated adapter_id *and* job_config to the Celery task.
-        # The trainer will update this existing record.
         job_config_dict_with_adapter_id = job_config.model_dump()
-        job_config_dict_with_adapter_id['adapter_id'] = generated_adapter_id # Pass the generated ID
+        job_config_dict_with_adapter_id["adapter_id"] = generated_adapter_id
         fine_tune_llm_task.delay(job_config_dict_with_adapter_id, current_user.id)
 
-        logger.info(f"API: Fine-tuning job '{job_config.job_name}' with ID '{generated_adapter_id}' dispatched successfully.")
+        logger.info(
+            f"API: Fine-tuning job '{job_config.job_name}' with ID '{generated_adapter_id}' dispatched successfully.")
         return FineTunedModel.model_validate(created_job_row)
 
     except Exception as e:
