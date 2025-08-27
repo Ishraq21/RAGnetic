@@ -1,5 +1,5 @@
 # app/training/trainer.py
-import logging
+from inspect import signature
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -9,6 +9,8 @@ import torch
 import os
 
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, Trainer
+
+
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import Dataset
 from trl import SFTTrainer
@@ -21,6 +23,16 @@ from app.db.models import fine_tuned_models_table # The new fine_tuned_models_ta
 from app.training.data_prep.jsonl_instruction_loader import JsonlInstructionLoader
 from app.training.data_prep.conversational_jsonl_loader import ConversationalJsonlLoader
 from app.schemas.data_prep import DatasetPreparationConfig
+
+import logging
+from transformers import logging as hf_logging
+from datasets.utils.logging import disable_progress_bar as ds_disable_pb
+
+logging.getLogger("transformers.trainer").setLevel(logging.ERROR)
+hf_logging.set_verbosity_error()
+
+ds_disable_pb()
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +83,7 @@ class LLMFineTuner:
         Returns the initial database record of the fine-tuned model.
         """
         # Generate a unique adapter_id for this specific training run
-        adapter_id = str(uuid.uuid4())
+        adapter_id = job_config.adapter_id or str(uuid.uuid4())
         job_name = job_config.job_name
         base_model_name = job_config.base_model_name
         dataset_path_str = job_config.dataset_path
@@ -86,121 +98,134 @@ class LLMFineTuner:
         logger.info(f"Dataset: {dataset_path_str}, Model Output Path: {adapter_path}")
         logger.info(f"Configured Hyperparameters: {hyperparameters}")
 
-        # 1. Record the job as PENDING in the database immediately.
-        new_job_record_data = {
-            "adapter_id": adapter_id,
-            "job_name": job_name,
-            "base_model_name": base_model_name,
-            "adapter_path": adapter_path,
-            "training_dataset_id": dataset_path_str,
-            "training_status": FineTuningStatus.PENDING.value,
-            "training_logs_path": training_logs_path,
-            "hyperparameters": hyperparameters,
-            "created_by_user_id": user_id,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
-        }
-        try:
-            with self.db_engine.connect() as connection:
+        # If API already inserted a row for this adapter_id, update it; otherwise create it.
+        created_record_row = None
+        with self.db_engine.connect() as connection:
+            existing = connection.execute(
+                fine_tuned_models_table.select().where(fine_tuned_models_table.c.adapter_id == adapter_id)
+            ).mappings().first()
+
+            if existing:
+                connection.execute(
+                    fine_tuned_models_table.update()
+                    .where(fine_tuned_models_table.c.adapter_id == adapter_id)
+                    .values(
+                        job_name=job_name,
+                        base_model_name=base_model_name,
+                        adapter_path=adapter_path,
+                        training_dataset_id=dataset_path_str,
+                        training_logs_path=training_logs_path,
+                        hyperparameters=hyperparameters,
+                        updated_at=datetime.utcnow(),
+                    )
+                )
+                connection.commit()
+                created_record_row = existing
+                logger.info(f"Using existing DB record for adapter_id={adapter_id}.")
+            else:
+                new_job_record_data = {
+                    "adapter_id": adapter_id,
+                    "job_name": job_name,
+                    "base_model_name": base_model_name,
+                    "adapter_path": adapter_path,
+                    "training_dataset_id": dataset_path_str,
+                    "training_status": FineTuningStatus.PENDING.value,
+                    "training_logs_path": training_logs_path,
+                    "hyperparameters": hyperparameters,
+                    "created_by_user_id": user_id,
+                    "created_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow(),
+                }
                 result = connection.execute(
                     fine_tuned_models_table.insert().values(**new_job_record_data).returning(fine_tuned_models_table)
                 )
                 created_record_row = result.mappings().first()
                 connection.commit()
-            initial_db_record = FineTunedModel.model_validate(created_record_row)
-            logger.info(f"Fine-tuning job '{job_name}' record created in DB with ID: {adapter_id}.")
-        except Exception as e:
-            logger.error(f"Failed to record new fine-tuning job in DB: {e}", exc_info=True)
-            raise RuntimeError("Failed to create initial fine-tuning job record in database.")
+                logger.info(f"Created DB record for adapter_id={adapter_id}.")
 
-        # 2. Update the job status to RUNNING.
+        initial_db_record = FineTunedModel.model_validate(created_record_row)
         self._update_fine_tune_job_record(adapter_id, FineTuningStatus.RUNNING)
 
+        # ensure we can reference this in finally even if attach fails early
+        file_handler: Optional[logging.FileHandler] = None
+
         try:
-            # Determine device: Prioritize user-specified device, then auto-detect
-            actual_device = "cpu"  # Default to CPU
-            if job_config.device:  # User specified a device
-                requested_device = job_config.device.lower()
-                if requested_device == "cuda":
-                    if torch.cuda.is_available():
-                        actual_device = "cuda"
-                        logger.info(f"Using NVIDIA GPU (CUDA) as requested: {torch.cuda.get_device_name(0)}")
-                    else:
-                        logger.warning("User requested 'cuda' but CUDA is not available. Falling back to CPU.")
-                elif requested_device == "mps":
-                    if torch.backends.mps.is_available():
-                        actual_device = "mps"
-                        logger.info("Using Apple Metal Performance Shaders (MPS) as requested.")
-                    else:
-                        logger.warning("User requested 'mps' but MPS is not available. Falling back to CPU.")
-                elif requested_device == "cpu":
-                    actual_device = "cpu"
-                    logger.info("Using CPU as requested by user.")
-                else:
-                    logger.warning(f"Invalid device '{requested_device}' specified. Falling back to auto-detection.")
+            # Attach a file logger for this run
+            file_handler = logging.FileHandler(training_logs_path, encoding="utf-8")
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+            logger.addHandler(file_handler)
 
-            # Auto-detection if no device was specified by user or if requested device was unavailable/invalid
-            if actual_device == "cpu":  # If still on CPU after user request, try auto-detect
-                if torch.backends.mps.is_available():
-                    actual_device = "mps"
-                    logger.info("Auto-detect: Using Apple Metal Performance Shaders (MPS) for GPU acceleration.")
-                elif torch.cuda.is_available():
-                    actual_device = "cuda"
-                    logger.info(f"Auto-detect: Using NVIDIA GPU (CUDA): {torch.cuda.get_device_name(0)}")
-                else:
-                    logger.warning("Auto-detect: No GPU (CUDA or MPS) found. Training will proceed on CPU.")
-
-            # --- Load and prepare the dataset ---
+            # --- Load and prepare the dataset (NEEDED before trainer) ---
             logger.info(f"Loading training data from: {dataset_path_str}")
-
-            with open(dataset_path_str, 'r', encoding='utf-8') as f:
+            with open(dataset_path_str, "r", encoding="utf-8") as f:
                 first_line = f.readline()
+
             if "instruction" in first_line and "output" in first_line:
                 dataset_format = "jsonl-instruction"
+                training_data = JsonlInstructionLoader(dataset_path_str).load()
             elif "messages" in first_line and "role" in first_line and "content" in first_line:
                 dataset_format = "conversational-jsonl"
+                training_data = ConversationalJsonlLoader(dataset_path_str).load()
             else:
                 raise ValueError(
-                    "Could not infer dataset format. Ensure it's 'jsonl-instruction' or 'conversational-jsonl'.")
-
-            if dataset_format == "jsonl-instruction":
-                loader = JsonlInstructionLoader(dataset_path_str)
-                training_data = loader.load()
-            elif dataset_format == "conversational-jsonl":
-                loader = ConversationalJsonlLoader(dataset_path_str)
-                training_data = loader.load()
-            else:
-                raise ValueError(f"Unsupported dataset format detected: {dataset_format}")
+                    "Could not infer dataset format. Expected 'jsonl-instruction' or 'conversational-jsonl'."
+                )
 
             if not training_data:
-                raise ValueError(
-                    "Training dataset is empty or could not be loaded. Please check the dataset_path and its content.")
+                raise ValueError("Training dataset is empty. Check dataset_path and file contents.")
+
             hf_dataset = Dataset.from_list(training_data)
-            logger.info(f"Successfully loaded {len(hf_dataset)} samples for fine-tuning in '{dataset_format}' format.")
+            logger.info(f"Loaded {len(hf_dataset)} samples in '{dataset_format}' format for fine-tuning.")
 
-            # --- Actual fine-tuning logic using Hugging Face libraries ---
-            logger.info(f"Loading base model and tokenizer: {base_model_name}")
-
+            # --- Tokenizer (needed for training + saving) ---
             tokenizer = AutoTokenizer.from_pretrained(base_model_name)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
                 logger.info(f"Tokenizer pad_token set to eos_token: {tokenizer.pad_token}")
 
-            # Define common model loading kwargs
+            # Decide device/dtype
+            actual_device = "cpu"
+            if job_config.device:
+                req = job_config.device.lower()
+                if req == "cuda" and torch.cuda.is_available():
+                    actual_device = "cuda"
+                elif req == "mps" and torch.backends.mps.is_available():
+                    actual_device = "mps"
+                elif req == "cpu":
+                    actual_device = "cpu"
+            else:
+                if torch.cuda.is_available():
+                    actual_device = "cuda"
+                elif torch.backends.mps.is_available():
+                    actual_device = "mps"
+
+
+            logger.info(f"Training device resolved to: {actual_device}")
+
+            # dtype preference
+            dtype = torch.float32
+            if hyperparameters.get('mixed_precision_dtype') == 'fp16' and actual_device == "cuda":
+                dtype = torch.float16
+            elif hyperparameters.get('mixed_precision_dtype') == 'bf16' and (
+                (actual_device == "cuda" and hasattr(torch, 'bfloat16')) or
+                (actual_device == "mps" and torch.backends.mps.is_available())
+            ):
+                dtype = torch.bfloat16
+
             model_load_kwargs = {
-                "torch_dtype": torch.bfloat16 if (actual_device == "mps" and torch.backends.mps.is_built()) or \
-                                                 (actual_device == "cuda" and hasattr(torch,
-                                                                                      'bfloat16')) else torch.float32,
-                "device_map": "auto" if actual_device == "cuda" else actual_device,
-                # Use "auto" for multi-GPU CUDA, else specific device
+                "torch_dtype": dtype,
+                "low_cpu_mem_usage": True,
             }
 
-            # Handle bitsandbytes imports and config conditionally for CUDA
             if actual_device == "cuda":
-                # Ensure bitsandbytes is imported and used only for CUDA here
+                model_load_kwargs["device_map"] = "auto"
+
+            # Optional: 4-bit quantization on CUDA
+            if actual_device == "cuda":
                 try:
-                    import bitsandbytes as bnb  # LOCAL IMPORT to avoid warning on MPS/CPU
-                    quantization_config = bnb.BitsAndBytesConfig(
+                    from transformers import BitsAndBytesConfig
+                    quantization_config = BitsAndBytesConfig(
                         load_in_4bit=True,
                         bnb_4bit_quant_type="nf4",
                         bnb_4bit_compute_dtype=torch.bfloat16,
@@ -208,23 +233,30 @@ class LLMFineTuner:
                     )
                     model_load_kwargs["quantization_config"] = quantization_config
                     logger.info("Using bitsandbytes 4-bit quantization for CUDA device.")
-                except ImportError:
-                    logger.warning(
-                        "bitsandbytes not found or not compiled for CUDA. Loading model in full precision on CUDA.")
                 except Exception as e:
-                    logger.warning(f"Error with bitsandbytes on CUDA: {e}. Loading model in full precision.")
+                    logger.info(f"bitsandbytes unavailable; running without 4-bit: {e}")
 
             model = AutoModelForCausalLM.from_pretrained(
                 base_model_name,
                 **model_load_kwargs
             )
 
+            if hasattr(model, "config") and hasattr(model.config, "use_cache"):
+                model.config.use_cache = False
+
+            # For MPS/CPU, move the model explicitly (device_map is not used)
+            if actual_device in ("mps", "cpu"):
+                try:
+                    model.to(actual_device)
+                except Exception as e:
+                    logger.warning(f"Could not move model to {actual_device}: {e}")
+
+
             # Prepare model for PEFT training
             model.gradient_checkpointing_enable()  # Saves memory during training
             # `prepare_model_for_kbit_training` is specifically for bitsandbytes k-bit,
             # so only call it if bitsandbytes was successfully applied.
             if actual_device == "cuda" and "quantization_config" in model_load_kwargs:
-                from peft import prepare_model_for_kbit_training  # Local import to avoid issues
                 model = prepare_model_for_kbit_training(model)
                 logger.info("Model prepared for k-bit training on CUDA.")
             else:
@@ -276,6 +308,9 @@ class LLMFineTuner:
                 optim="paged_adamw_8bit" if actual_device == "cuda" and "quantization_config" in model_load_kwargs else "adamw_torch",
                 # Use paged_adamw_8bit only if bitsandbytes is active on CUDA
                 load_best_model_at_end=False,
+                dataloader_pin_memory=False,
+                disable_tqdm=True,
+                log_level="warning",
             )
 
             # Prepare evaluation dataset if specified
@@ -294,28 +329,37 @@ class LLMFineTuner:
                 eval_dataset = Dataset.from_list(eval_data)
                 logger.info(f"Successfully loaded {len(eval_dataset)} evaluation samples.")
 
-            # Determine the 'formatting_func' for SFTTrainer based on dataset_format
-            def instruction_formatting_function(example):
-                return example["instruction"] + "\n" + example.get("input", "") + "\n" + example["output"]
 
-            def conversational_formatting_function(example):
-                text = ""
-                for message in example["messages"]:
-                    if message["role"] == "user":
-                        text += f"### Human: {message['content']}\n"
-                    elif message["role"] == "assistant":
-                        text += f"### Assistant: {message['content']}\n"
-                return text.strip()
+            # --- Build a single-text field and wire up SFTTrainer ---
+            def _format_instruction(example):
+                instr = example.get("instruction", "")
+                inp = example.get("input", "")
+                out = example.get("output", "")
+                return (f"### Instruction:\n{instr}\n"
+                        f"### Input:\n{inp}\n"
+                        f"### Response:\n{out}").strip()
 
-            formatting_func = instruction_formatting_function if dataset_format == "jsonl-instruction" else conversational_formatting_function
+            def _format_conversation(example):
+                lines = []
+                for msg in example["messages"]:
+                    if msg["role"] == "user":
+                        lines.append(f"### Human: {msg['content']}")
+                    elif msg["role"] == "assistant":
+                        lines.append(f"### Assistant: {msg['content']}")
+                return "\n".join(lines).strip()
+
+            formatting_func = _format_instruction if dataset_format == "jsonl-instruction" else _format_conversation
 
             trainer = SFTTrainer(
                 model=peft_model,
                 args=training_args,
                 train_dataset=hf_dataset,
-                eval_dataset=eval_dataset,
+                eval_dataset=eval_dataset,  # ok if None
                 formatting_func=formatting_func,
+                processing_class=tokenizer,
             )
+            if hasattr(trainer, "label_names"):
+                trainer.label_names = ["labels"]
 
             logger.info("Starting actual fine-tuning process...")
             trainer.train()
@@ -349,5 +393,16 @@ class LLMFineTuner:
             logger.error(f"Fine-tuning job '{job_name}' (ID: {adapter_id}) failed: {e}", exc_info=True)
             self._update_fine_tune_job_record(adapter_id, FineTuningStatus.FAILED)
             raise
+        finally:
+            # Detach the per-run file handler
+            if file_handler:
+                try:
+                    logger.removeHandler(file_handler)
+                except Exception:
+                    pass
+                try:
+                    file_handler.close()
+                except Exception:
+                    pass
 
         return initial_db_record

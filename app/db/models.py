@@ -156,6 +156,13 @@ conversation_metrics_table = Table(
     Column("timestamp", DateTime, default=utc_timestamp, nullable=False),
     Column("fine_tuned_model_id", String(255), nullable=True, index=True),
     UniqueConstraint("session_id", "request_id", name="uq_session_request"),
+    ForeignKeyConstraint(
+        ["fine_tuned_model_id"],
+        ["fine_tuned_models.adapter_id"],
+        name="fk_conv_metrics_finetuned_adapter",
+        ondelete="SET NULL",
+    ),
+
 )
 
 user_api_keys_table = Table(
@@ -290,24 +297,44 @@ fine_tuning_status_enum = Enum("pending", "running", "completed", "failed", "pau
 fine_tuned_models_table = Table(
     "fine_tuned_models", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("adapter_id", String(255), nullable=False, unique=True), # System-generated UUID for the adapter
-    Column("job_name", String(255), nullable=False, index=True), # User-defined name from YAML for tracking
-    Column("base_model_name", String(255), nullable=False),      # e.g., 'ollama/llama2', 'mistral'
-    Column("adapter_path", String(512), nullable=False),         # Absolute file path to saved weights
-    Column("training_dataset_id", String(512), nullable=True),   # Path or identifier of the dataset used
+    Column("adapter_id", String(255), nullable=False, unique=True),
+    Column("job_name", String(255), nullable=False, index=True),
+    Column("base_model_name", String(255), nullable=False),
+    Column("adapter_path", String(512), nullable=False),
+    Column("training_dataset_id", String(512), nullable=True),
     Column("training_status", fine_tuning_status_enum, nullable=False, default="pending"),
     Column("training_logs_path", String(512), nullable=True),
-    Column("hyperparameters", JSON, nullable=True),              # JSON representation of hyperparameters used
+    Column("hyperparameters", JSON, nullable=True),
     Column("final_loss", Float, nullable=True),
     Column("validation_loss", Float, nullable=True),
+
+    Column("worker_host", String(255), nullable=True),
+    Column("worker_pid", Integer, nullable=True),
+    Column("device", String(32), nullable=True),
+    Column("gpu_name", String(255), nullable=True),
+    Column("mixed_precision", String(16), nullable=True),   # 'no'|'fp16'|'bf16'
+    Column("bitsandbytes_4bit", Boolean, nullable=True),
+    Column("seed", Integer, nullable=True),
+
+    Column("current_step", Integer, nullable=True),
+    Column("max_steps", Integer, nullable=True),
+    Column("eta_seconds", Float, nullable=True),
+
+    Column("eval_dataset_id", String(512), nullable=True),
+    Column("eval_metrics", JSON, nullable=True),
+    Column("best_checkpoint_path", String(512), nullable=True),
+
     Column("gpu_hours_consumed", Float, nullable=True),
     Column("estimated_training_cost_usd", Float, nullable=True),
     Column("created_by_user_id", Integer, ForeignKey("users.id"), nullable=False, index=True),
     Column("created_at", DateTime, default=datetime.utcnow, nullable=False),
     Column("updated_at", DateTime, onupdate=datetime.utcnow, default=datetime.utcnow, nullable=False),
+
     Index("fine_tuned_models_status_idx", "training_status"),
     Index("fine_tuned_models_base_model_idx", "base_model_name"),
+    Index("fine_tuned_models_created_at_idx", "created_at"),  # NEW index
 )
+
 
 temporary_documents_table = Table(
     "temporary_documents", metadata,

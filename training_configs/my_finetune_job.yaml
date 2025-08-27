@@ -1,6 +1,6 @@
 job_name: "my-custom-llama2-finetune"
-base_model_name: "ollama/llama2" # Or "ollama/mistral", "meta-llama/Llama-2-7b-hf" etc.
-dataset_path: "data/prepared/my_conversations_prepared.jsonl"
+base_model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+dataset_path: "data/prepared_datasets/my_conversations_prepared.jsonl"
 # eval_dataset_path: "data/prepared/my_conversations_eval.jsonl"
 output_base_dir: "models/fine_tuned" # Where the fine-tuned model will be saved
 hyperparameters:

@@ -98,7 +98,7 @@ cpu = [
 
 gpu = [
   "torch==2.7.1+cu121",
-  "bitsandbytes==0.43.1",
+ #"bitsandbytes==0.43.1",
   "faiss-gpu"
 ]
 

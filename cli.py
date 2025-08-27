@@ -58,6 +58,13 @@ from app.schemas.orchestrator import OrchestratorConfig
 from app.training.data_prep.conversational_jsonl_loader import ConversationalJsonlLoader
 from app.training.data_prep.jsonl_instruction_loader import JsonlInstructionLoader
 
+
+try:
+    import pandas as pd
+    HAVE_PANDAS = True
+except Exception:
+    HAVE_PANDAS = False
+
 # --- Centralized Path Configuration ---
 _APP_PATHS = get_path_settings()
 _PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
@@ -1927,7 +1934,7 @@ def run_workflow_cli(
     response = None  # Initialize response
     try:
         typer.secho(f"Attempting to trigger workflow '{workflow_name}' via API...", fg=typer.colors.CYAN)
-        response = requests.post(url, headers=headers, json=initial_input, timeout=10)
+        response = requests.post(url, headers=headers, json=initial_input, timeout=30)
         response.raise_for_status()
 
         # Check for accepted status
@@ -3512,7 +3519,8 @@ def training_list_models_command(
             "estimated_training_cost_usd", "created_at", "adapter_path"
         ]
         # Filter to only columns that exist in the DataFrame
-        df_display = df[[col for col in display_cols if col in df.columns]]
+        df_display = df[[col for col in display_cols if col in df.columns]].copy()
+
 
         # Format numerical columns for better readability
         if "estimated_training_cost_usd" in df_display.columns:
