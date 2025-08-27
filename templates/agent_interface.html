@@ -18,7 +18,7 @@
       svg: { fontCache: 'global' }
     };
   </script>
-  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-svg.js"></script>
     <link rel="stylesheet" href="{{ url_for('static', path='css/style.css') }}">
     <script src="{{ url_for('static', path='js/ingestion_modal_logic.js') }}" defer></script>
     <script src="{{ url_for('static', path='js/chat_quick_upload.js') }}" defer></script>
@@ -65,12 +65,13 @@
 
         <div id="quickUploadFileList" class="attachment-list"></div>
         <div id="input-form-container">
-            <div id="typing-indicator" style="opacity: 0; display:none;">
+            <div id="typing-indicator" role="status" aria-live="polite" style="opacity: 0; display:none;">
                 <div class="pulsing-dot"></div>
                 <span>RAGnetic is thinking...</span>
             </div>
             <form id="input-form" onsubmit="handleFormSubmit(event)">
-                <button type="button" id="quickUploadBtn" title="Attach file">
+                <button type="button" id="quickUploadBtn" title="Attach file" aria-label="Attach file">
+
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
                 </button>
                 <input type="file" id="quickUploadFileInput" multiple style="display: none;">
@@ -240,7 +241,8 @@ async function backfillCitationsForBubbles(bubbles) {
         };
 socket.onmessage = async (event) => {
 
-  const data = JSON.parse(event.data);
+  let data; try { data = JSON.parse(event.data); } catch { return; }
+
 
   if (data.token) {
     typingIndicator.style.display = 'none';
@@ -318,7 +320,7 @@ socket.onmessage = async (event) => {
         scrollToBottom();
         const uploadedFileInfos = [];
         if (attachedFiles.length > 0) {
-            appendUserMessage("Uploading files...");
+            appendUserMessage("Please wait. Uploading files.");
             try {
                 if (!thread_id) {
                     const sessionCreationPayload = {
@@ -348,7 +350,7 @@ socket.onmessage = async (event) => {
                 );
                 const results = await Promise.all(uploadPromises);
                 uploadedFileInfos.push(...results);
-                appendUserMessage("Files uploaded successfully. Processing query...");
+                appendUserMessage("Files uploaded.");
             } catch (error) {
                 setGeneratingState(false);
                 showToast(`File upload pre-processing failed: ${error.message}`, true);
@@ -376,7 +378,7 @@ socket.onmessage = async (event) => {
             window.quickUploads.clearAttachedFiles();
         };
         if (!socket || socket.readyState !== WebSocket.OPEN) {
-            showToast("Connecting... Please try again shortly.");
+            showToast("Connecting.");
             openWebSocket(doSend);
         } else {
             doSend();
