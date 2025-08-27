@@ -210,7 +210,7 @@ async def get_retriever_tool(
                 arbitrary_types_allowed = True
 
             async def _arun(self, query: str, temp_document_ids: Optional[List[str]] = None) -> List[Document]:
-                logger.info(
+                logger.debug(
                     f"Retriever tool running with query: '{query}' "
                     f"for thread '{self.thread_id}' (user {self.user_id}). "
                     f"Temp doc IDs: {temp_document_ids}"
