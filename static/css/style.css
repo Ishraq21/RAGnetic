@@ -11,6 +11,9 @@
     --error-color: #dc3545;
     --sidebar-hover-bg: #2a2a2a;
     --futuristic-glow: 0 0 8px -2px var(--accent-color);
+    --link-color: #8AB4F8;
+    --link-hover-color: #A8C7FA;
+    --link-visited-color: #9AB0FF;
 }
 
 * {
@@ -1336,4 +1339,37 @@ body:not(.login-body) {
 }
 .citation-popup .toggle-snippet:hover {
   text-decoration: none;
+}
+
+/* INK STYLES (global + inside chat bubbles) */
+a,
+.message a,
+.message.agent .content a,
+.message.user a {
+  color: var(--link-color);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1.5px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+a:hover,
+a:focus-visible,
+.message a:hover,
+.message a:focus-visible {
+  color: var(--link-hover-color);
+  outline: none;
+  filter: drop-shadow(0 0 0.25rem rgba(138,180,248,0.30));
+}
+
+a:visited {
+  color: var(--link-visited-color);
+}
+
+
+.message pre a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
