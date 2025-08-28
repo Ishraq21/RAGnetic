@@ -5,20 +5,20 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import uuid
 import random
-import torch
 import os
+import json
+import hashlib
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, Trainer
-
+import numpy as np
+import torch
 
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import Dataset
 from trl import SFTTrainer
 
 from app.schemas.fine_tuning import FineTuningJobConfig, FineTuningStatus, FineTunedModel
-from app.db import get_sync_db_engine # Function to get a synchronous SQLAlchemy engine
-from app.db.models import fine_tuned_models_table # The new fine_tuned_models_table definition
-
+from app.db import get_sync_db_engine
+from app.db.models import fine_tuned_models_table
 
 from app.training.data_prep.jsonl_instruction_loader import JsonlInstructionLoader
 from app.training.data_prep.conversational_jsonl_loader import ConversationalJsonlLoader
@@ -27,6 +27,9 @@ from app.schemas.data_prep import DatasetPreparationConfig
 import logging
 from transformers import logging as hf_logging
 from datasets.utils.logging import disable_progress_bar as ds_disable_pb
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, Trainer
+from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
+
 
 logging.getLogger("transformers.trainer").setLevel(logging.ERROR)
 hf_logging.set_verbosity_error()
@@ -35,6 +38,38 @@ ds_disable_pb()
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 logger = logging.getLogger(__name__)
+
+
+
+class DbProgressCallback(TrainerCallback):
+    """
+    Periodically persists progress (current_step/eta) and heartbeat updated_at.
+    Uses a synchronous engine to avoid event loop entanglement in Trainer thread.
+    """
+    def __init__(self, db_engine, adapter_id: str, log_every_steps: int = 10):
+        self.db_engine = db_engine
+        self.adapter_id = adapter_id
+        self.log_every_steps = max(1, log_every_steps)
+
+    def on_log(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+        # state.global_step increments; log every N steps to reduce DB writes
+        if state.global_step is None:
+            return
+        if state.global_step % self.log_every_steps != 0:
+            return
+
+        with self.db_engine.begin() as conn:
+            conn.execute(
+                fine_tuned_models_table.update()
+                .where(fine_tuned_models_table.c.adapter_id == self.adapter_id)
+                .values(
+                    current_step=int(state.global_step),
+                    max_steps=int(state.max_steps) if state.max_steps else None,
+                    eta_seconds=float(state.epoch) if isinstance(state.epoch, (float, int)) else None,  # epoch used as coarse progress if ETA unknown
+                    updated_at=datetime.utcnow(),
+                )
+            )
+
 
 class LLMFineTuner:
     """
@@ -75,14 +110,19 @@ class LLMFineTuner:
     def fine_tune_llm(
             self,
             job_config: FineTuningJobConfig,
-            user_id: int,  # The ID of the user who initiated this training job
+            user_id: int,
     ) -> FineTunedModel:
-        """
-        Orchestrates the LLM fine-tuning process using the parameters from a FineTuningJobConfig.
-        This method uses Hugging Face training pipeline.
-        Returns the initial database record of the fine-tuned model.
-        """
-        # Generate a unique adapter_id for this specific training run
+        # --- Reproducibility seed ---
+        seed = int(os.getenv("RAGNETIC_SEED", "0")) or random.randint(1, 2_000_000_000)
+        random.seed(seed)
+        np.random.seed(seed % (2 ** 32 - 1))
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+            # Determinism trade-offs; safer defaults:
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cudnn.deterministic = True
+
         adapter_id = job_config.adapter_id or str(uuid.uuid4())
         job_name = job_config.job_name
         base_model_name = job_config.base_model_name
@@ -97,8 +137,9 @@ class LLMFineTuner:
         logger.info(f"Initiating fine-tuning job '{job_name}' (ID: {adapter_id}) for base model '{base_model_name}'.")
         logger.info(f"Dataset: {dataset_path_str}, Model Output Path: {adapter_path}")
         logger.info(f"Configured Hyperparameters: {hyperparameters}")
+        logger.info(f"Seed fixed to: {seed}")
 
-        # If API already inserted a row for this adapter_id, update it; otherwise create it.
+        # Create/ensure DB record + persist seed (if row exists from API, we update ‘seed’ here)
         created_record_row = None
         with self.db_engine.connect() as connection:
             existing = connection.execute(
@@ -116,12 +157,13 @@ class LLMFineTuner:
                         training_dataset_id=dataset_path_str,
                         training_logs_path=training_logs_path,
                         hyperparameters=hyperparameters,
+                        seed=seed,
                         updated_at=datetime.utcnow(),
                     )
                 )
                 connection.commit()
                 created_record_row = existing
-                logger.info(f"Using existing DB record for adapter_id={adapter_id}.")
+                logger.info(f"Using existing DB record for adapter_id={adapter_id}. Seed persisted.")
             else:
                 new_job_record_data = {
                     "adapter_id": adapter_id,
@@ -135,16 +177,46 @@ class LLMFineTuner:
                     "created_by_user_id": user_id,
                     "created_at": datetime.utcnow(),
                     "updated_at": datetime.utcnow(),
+                    "seed": seed,
                 }
                 result = connection.execute(
                     fine_tuned_models_table.insert().values(**new_job_record_data).returning(fine_tuned_models_table)
                 )
                 created_record_row = result.mappings().first()
                 connection.commit()
-                logger.info(f"Created DB record for adapter_id={adapter_id}.")
+                logger.info(f"Created DB record for adapter_id={adapter_id} with seed {seed}.")
 
         initial_db_record = FineTunedModel.model_validate(created_record_row)
-        self._update_fine_tune_job_record(adapter_id, FineTuningStatus.RUNNING)
+
+        # ---- helpers ----
+        def _validate_instruction_rows(rows):
+            bad = 0
+            for r in rows:
+                if "instruction" not in r or "output" not in r:
+                    bad += 1
+                elif not str(r["instruction"]).strip() or not str(r["output"]).strip():
+                    bad += 1
+            return bad
+
+        def _validate_conversation_rows(rows):
+            bad = 0
+            for r in rows:
+                msgs = r.get("messages")
+                if not isinstance(msgs, list) or not msgs:
+                    bad += 1;
+                    continue
+                # basic structure: alternating roles, text non-empty
+                for m in msgs:
+                    if "role" not in m or "content" not in m:
+                        bad += 1;
+                        break
+                    if m["role"] not in ("user", "assistant"):
+                        bad += 1;
+                        break
+                    if not str(m["content"]).strip():
+                        bad += 1;
+                        break
+            return bad
 
         # ensure we can reference this in finally even if attach fails early
         file_handler: Optional[logging.FileHandler] = None
@@ -164,16 +236,24 @@ class LLMFineTuner:
             if "instruction" in first_line and "output" in first_line:
                 dataset_format = "jsonl-instruction"
                 training_data = JsonlInstructionLoader(dataset_path_str).load()
+                bad = _validate_instruction_rows(training_data)
             elif "messages" in first_line and "role" in first_line and "content" in first_line:
                 dataset_format = "conversational-jsonl"
                 training_data = ConversationalJsonlLoader(dataset_path_str).load()
+                bad = _validate_conversation_rows(training_data)
             else:
                 raise ValueError(
-                    "Could not infer dataset format. Expected 'jsonl-instruction' or 'conversational-jsonl'."
-                )
+                    "Could not infer dataset format. Expected 'jsonl-instruction' or 'conversational-jsonl'.")
 
             if not training_data:
                 raise ValueError("Training dataset is empty. Check dataset_path and file contents.")
+
+            total = len(training_data)
+            if bad > 0:
+                logger.warning(
+                    f"Dataset validation: {bad}/{total} rows flagged invalid; they will still be included but may truncate.")
+            if total < 10:
+                logger.warning(f"Very small dataset ({total} samples). OK for smoke-test, risky for production.")
 
             hf_dataset = Dataset.from_list(training_data)
             logger.info(f"Loaded {len(hf_dataset)} samples in '{dataset_format}' format for fine-tuning.")
@@ -310,7 +390,7 @@ class LLMFineTuner:
                 load_best_model_at_end=False,
                 dataloader_pin_memory=False,
                 disable_tqdm=True,
-                log_level="warning",
+                log_level="info",
             )
 
             # Prepare evaluation dataset if specified
@@ -354,20 +434,89 @@ class LLMFineTuner:
                 model=peft_model,
                 args=training_args,
                 train_dataset=hf_dataset,
-                eval_dataset=eval_dataset,  # ok if None
+                eval_dataset=eval_dataset,
                 formatting_func=formatting_func,
                 processing_class=tokenizer,
             )
+
+            # Label names quiets Hugging Face warning for PEFT models
             if hasattr(trainer, "label_names"):
                 trainer.label_names = ["labels"]
 
-            logger.info("Starting actual fine-tuning process...")
-            trainer.train()
+            # Progress heartbeat
+            trainer.add_callback(DbProgressCallback(self.db_engine, adapter_id,
+                                                    log_every_steps=max(1, hyperparameters.get("logging_steps", 10))))
 
+            logger.info("Starting actual fine-tuning process...")
+
+            def _try_train_with_args(_args: TrainingArguments, retries_left: int = 1):
+                nonlocal trainer
+                try:
+                    trainer.args = _args  # update in place
+                    return trainer.train()
+                except torch.cuda.OutOfMemoryError as oom:
+                    if _args.per_device_train_batch_size <= 1 or retries_left <= 0:
+                        logger.error("CUDA OOM and cannot reduce batch size further.", exc_info=True)
+                        raise
+                    torch.cuda.empty_cache()
+                    new_bs = max(1, _args.per_device_train_batch_size // 2)
+                    logger.warning(
+                        f"OOM caught. Reducing per_device_train_batch_size from {_args.per_device_train_batch_size} to {new_bs} and retrying once.")
+                    new_args = TrainingArguments(**{**_args.to_dict(), "per_device_train_batch_size": new_bs})
+                    return _try_train_with_args(new_args, retries_left - 1)
+
+            train_output = _try_train_with_args(training_args, retries_left=1)
+
+            # Save adapter + tokenizer
             trainer.save_model(adapter_path)
             tokenizer.save_pretrained(adapter_path)
             logger.info(f"Fine-tuned adapter saved to {adapter_path}")
 
+            # Build manifest with file checksums
+            def _sha256_file(p: Path) -> str:
+                h = hashlib.sha256()
+                with p.open("rb") as f:
+                    for chunk in iter(lambda: f.read(8192), b""):
+                        h.update(chunk)
+                return h.hexdigest()
+
+            files = {}
+            for p in Path(adapter_path).glob("*"):
+                if p.is_file():
+                    files[p.name] = {"sha256": _sha256_file(p), "size": p.stat().st_size}
+
+            manifest = {
+                "adapter_id": adapter_id,
+                "job_name": job_name,
+                "base_model_name": base_model_name,
+                "seed": seed,
+                "hyperparameters": hyperparameters,
+                "device": "cuda" if torch.cuda.is_available() else (
+                    "mps" if torch.backends.mps.is_available() else "cpu"),
+                "created_at": datetime.utcnow().isoformat() + "Z",
+                "files": files,
+                "tokenizer_folder": adapter_path,
+            }
+            (Path(adapter_path) / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            logger.info("Wrote artifact manifest.json")
+
+            # Quick smoke-generation (uses in-memory fine-tuned model)
+            try:
+                peft_model.eval()
+                prompt = "### Human: Say hello in one short sentence.\n### Assistant:"
+                inputs = tokenizer(prompt, return_tensors="pt")
+                device_for_gen = "cuda" if torch.cuda.is_available() else (
+                    "mps" if torch.backends.mps.is_available() else "cpu")
+                inputs = {k: v.to(device_for_gen) for k, v in inputs.items()}
+                with torch.no_grad():
+                    out_ids = peft_model.generate(**inputs, max_new_tokens=32, do_sample=False)
+                text = tokenizer.decode(out_ids[0], skip_special_tokens=True)
+                (Path(adapter_path) / "post_train_smoke.txt").write_text(text, encoding="utf-8")
+                logger.info("Post-train smoke generation complete.")
+            except Exception as gen_e:
+                logger.warning(f"Post-train smoke generation failed (non-fatal): {gen_e}")
+
+            # Metrics and accounting
             final_metrics = trainer.state.log_history[-1] if trainer.state.log_history else {}
             actual_final_loss = final_metrics.get("train_loss", None)
             actual_validation_loss = final_metrics.get("eval_loss", None)
@@ -377,6 +526,15 @@ class LLMFineTuner:
             duration_seconds = (end_time - start_time_record).total_seconds()
             estimated_gpu_hours = duration_seconds / 3600
             estimated_cost = estimated_gpu_hours * hyperparameters.get("cost_per_gpu_hour", 0.5)
+
+            self._update_fine_tune_job_record(
+                adapter_id,
+                FineTuningStatus.COMPLETED,
+                final_loss=actual_final_loss,
+                validation_loss=actual_validation_loss,
+                gpu_hours_consumed=estimated_gpu_hours,
+                estimated_training_cost_usd=estimated_cost,
+            )
 
             self._update_fine_tune_job_record(
                 adapter_id,
