@@ -55,7 +55,7 @@ celerybeat-schedule
 
 
 # Ignore generated models (too large, can be regenerated)
-/models/fine_tuned/
+/models
 
 # Ignore prepared datasets (often large, can be regenerated from raw data + prep configs)
 /data/prepared_datasets/
