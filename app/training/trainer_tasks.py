@@ -1,6 +1,7 @@
 # app/training/trainer_tasks.py
 import logging
 import os
+from datetime import datetime
 from typing import Dict, Any
 from pathlib import Path # New: Import Path for file operations
 import shutil # New: Import shutil for directory operations
@@ -34,21 +35,70 @@ def get_beat_db_uri():
 @celery_app.task(name="app.training.trainer_tasks.fine_tune_llm_task")
 def fine_tune_llm_task(job_config_dict: Dict[str, Any], user_id: int):
     """
-    Celery task that receives a fine-tuning job configuration (as a dictionary),
-    validates it, and then initiates the LLM fine-tuning process via LLMFineTuner.
+    Enforce idempotency: we atomically flip PENDING/PAUSED -> RUNNING.
+    If the row isn't in a startable state, we no-op (a duplicate enqueue).
+    Also persist worker/device metadata up front.
     """
+    import socket
+    import torch
+
     job_config = None
     try:
         job_config = FineTuningJobConfig(**job_config_dict)
-        logger.info(f"Received fine-tuning task for job '{job_config.job_name}' (user: {user_id}).")
+        adapter_id = job_config.adapter_id
+        logger.info(f"Received fine-tuning task for job '{job_config.job_name}' (user: {user_id}, adapter_id={adapter_id}).")
 
         db_engine = get_sync_db_engine()
-        fine_tuner = LLMFineTuner(db_engine)
 
+        # Detect device + GPU name once (for metadata)
+        if torch.cuda.is_available():
+            device = "cuda"
+            try:
+                gpu_name = torch.cuda.get_device_name(0)
+            except Exception:
+                gpu_name = "cuda:unknown"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+            gpu_name = "apple-mps"
+        else:
+            device = "cpu"
+            gpu_name = "cpu"
+
+        mixed_precision = job_config.hyperparameters.mixed_precision_dtype
+        # Only potentially true; trainer will decide final activation of 4bit
+        bnb_possible = bool(torch.cuda.is_available())
+
+        # Only start if row is PENDING or PAUSED
+        with db_engine.begin() as conn:
+            upd = (
+                update(fine_tuned_models_table)
+                .where(fine_tuned_models_table.c.adapter_id == adapter_id)
+                .where(fine_tuned_models_table.c.training_status.in_(["pending", "paused"]))
+                .values(
+                    training_status="running",
+                    worker_host=socket.gethostname(),
+                    worker_pid=os.getpid(),
+                    device=device,
+                    gpu_name=gpu_name,
+                    mixed_precision=mixed_precision,
+                    bitsandbytes_4bit=bnb_possible,
+                    updated_at=datetime.utcnow(),
+                )
+            )
+            res = conn.execute(upd)
+            if res.rowcount == 0:
+                logger.warning(
+                    f"Not starting job '{job_config.job_name}' (adapter_id={adapter_id}): "
+                    f"row not in startable state (maybe duplicate or already running/finished)."
+                )
+                return  # no-op duplicate
+
+        # Proceed with training
+        fine_tuner = LLMFineTuner(db_engine)
         fine_tuner.fine_tune_llm(job_config, user_id)
         logger.info(f"Fine-tuning task '{job_config.job_name}' completed successfully.")
 
     except Exception as e:
         job_name_for_logging = job_config.job_name if job_config else job_config_dict.get('job_name', 'Unknown Job')
         logger.error(f"Fine-tuning task failed for job '{job_name_for_logging}': {e}", exc_info=True)
-        raise  # Re-raise the exception to allow Celery's backend to mark the task as failed
+        raise

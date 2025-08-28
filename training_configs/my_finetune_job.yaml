@@ -1,18 +1,16 @@
-job_name: "my-custom-llama2-finetune"
+job_name: "alpaca-llama2-finetune"
 base_model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-dataset_path: "data/prepared_datasets/my_conversations_prepared.jsonl"
-# eval_dataset_path: "data/prepared/my_conversations_eval.jsonl"
-output_base_dir: "models/fine_tuned" # Where the fine-tuned model will be saved
+dataset_path: "data/prepared_datasets/alpaca_train.jsonl"
+eval_dataset_path: "data/prepared_datasets/alpaca_eval.jsonl"
+output_base_dir: "models/fine_tuned"
 hyperparameters:
-  lora_rank: 8          # LoRA rank (dimension). Higher = more expressive, more parameters.
-  learning_rate: 0.0002 # Learning rate for the optimizer.
-  epochs: 3             # Number of training epochs.
-  batch_size: 4         # Training batch size per device.
-  lora_alpha: 16        # LoRA alpha parameter (scaling factor).
-  # target_modules: ["q_proj", "v_proj"] # Optional: Specific modules to apply LoRA to. If None, PEFT will try to auto-detect.
-  lora_dropout: 0.05    # Dropout for LoRA layers.
-  gradient_accumulation_steps: 1 # Accumulate gradients over N steps to simulate larger batch size
-  logging_steps: 10     # How often to log training progress
-  save_steps: 500       # How often to save model checkpoints
-  save_total_limit: 1   # Keep only the last checkpoint
-  cost_per_gpu_hour: 0.5 # Estimated cost in USD per GPU hour for metrics tracking
+  lora_rank: 8
+  learning_rate: 0.0002
+  epochs: 3
+  batch_size: 4
+  lora_alpha: 16
+  lora_dropout: 0.05
+  gradient_accumulation_steps: 1
+  logging_steps: 10
+  save_steps: 500
+  save_total_limit: 1
