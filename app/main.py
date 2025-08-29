@@ -16,7 +16,7 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 from multiprocessing import Process
 from pathlib import Path
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from fastapi import Form
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -622,10 +622,10 @@ async def websocket_chat(ws: WebSocket,
         payload_raw = message_data["payload"]
         try:
             payload = ChatMessagePayloadWithFiles(**payload_raw)
-        except Exception as e:
+        except ValidationError as e:
             logger.error("ws_invalid_payload",
                          extra={"extra_data": {"error": str(e)}})
-            await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason=f"Invalid payload format: {e}")
+            await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Invalid payload format.")
             return
 
         agent_name = payload.agent
@@ -804,22 +804,55 @@ async def websocket_chat(ws: WebSocket,
 
     except WebSocketDisconnect:
         logger.info("ws_client_disconnected", extra={"extra_data": {"thread_id": canonical_thread_id}})
-    except Exception as e:
-        logger.error("ws_unhandled_error", exc_info=True, extra={"extra_data": {"thread_id": canonical_thread_id}})
+    except (ValidationError, json.JSONDecodeError) as e:
+        logger.warning("ws_bad_payload",
+                       extra={"extra_data": {"thread_id": canonical_thread_id, "error": str(e)}})
         try:
             await ws.send_text(json.dumps({
                 "done": True,
                 "error": True,
-                "errorMessage": f"An unexpected server error occurred: {e}. Please try again.",
+                "errorMessage": "Invalid payload format.",
                 "user_id": user_db_id if 'user_db_id' in locals() else None,
                 "thread_id": canonical_thread_id,
             }))
-        except Exception as send_error:
-            logger.error("ws_send_error", extra={"extra_data": {"thread_id": canonical_thread_id, "error": str(send_error)}})
+        finally:
+            await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Invalid payload format.")
+    except SQLAlchemyError as e:
+        logger.error("ws_db_error", exc_info=True,
+                     extra={"extra_data": {"thread_id": canonical_thread_id}})
+        try:
+            await ws.send_text(json.dumps({
+                "done": True,
+                "error": True,
+                "errorMessage": "A database error occurred.",
+                "user_id": user_db_id if 'user_db_id' in locals() else None,
+                "thread_id": canonical_thread_id,
+            }))
+        finally:
+            await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="Database error.")
+    except asyncio.CancelledError:
+        logger.info("ws_task_cancelled", extra={"extra_data": {"thread_id": canonical_thread_id}})
+        raise
+
+    except Exception as e:
+        logger.error("ws_unhandled_error", exc_info=True,
+                     extra={"extra_data": {"thread_id": canonical_thread_id}})
+        try:
+            await ws.send_text(json.dumps({
+                "done": True,
+                "error": True,
+                "errorMessage": "An unexpected server error occurred. Please try again.",
+                "user_id": user_db_id if 'user_db_id' in locals() else None,
+                "thread_id": canonical_thread_id,
+            }))
+        finally:
+            await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="Unhandled error.")
     finally:
         if pubsub_task and not pubsub_task.done():
             pubsub_task.cancel()
         manager.disconnect(ws, channel)
+
+
 
 async def redis_listen(ws: WebSocket, channel: str):
     if not isinstance(manager, RedisConnectionManager):
@@ -857,7 +890,14 @@ async def redis_listen(ws: WebSocket, channel: str):
     finally:
         # Crucially, ensure the dedicated connection for this task is always closed.
         logger.info(f"Closing Redis listener connection for channel {channel}.")
-        await listener_client.close()
+        try:
+            try:
+                await pubsub.unsubscribe(channel)
+            except Exception:
+                pass
+            await pubsub.close()
+        finally:
+            await listener_client.close()
 
 
 
@@ -972,37 +1012,26 @@ async def login_page(request: Request):
 
 
 @app.get("/health", tags=["System"])
-async def health_check():
+async def health_check(db: AsyncSession = Depends(get_db)):
     health_status = {"status": "ok", "checks": {}}
     has_critical_failure = False
 
-    # 1. Database Check
+    # 1. Database Check (async, non-blocking)
     db_status = {"status": "ok"}
     try:
         if is_db_configured_sync():
-            # --- CORRECTED LOGIC TO FIND CONNECTION NAME ---
-            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get(
-                "connection_name")
-            if not conn_name:
-                raise RuntimeError("DB connection name not found in memory or log config.")
-            # --- END OF CORRECTED LOGIC ---
-
-            sync_conn_str = get_db_connection(conn_name).replace("+aiosqlite", "").replace("+asyncpg", "")
-            engine = create_sync_engine(sync_conn_str)
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-            engine.dispose()
+            await db.execute(text("SELECT 1"))
             db_status["status"] = "connected"
         else:
             db_status["status"] = "skipped (no database configured)"
-    except Exception as e:
-        logger.error(f"Health check failed to connect to database: {e}", exc_info=True)
+    except SQLAlchemyError as e:
+        logger.error(f"Health check DB error: {e}", exc_info=True)
         db_status["status"] = "failed"
         db_status["error"] = str(e)
         has_critical_failure = True
     health_status["checks"]["database"] = db_status
 
-    # 2. Redis/Queue Check
+    # 2. Redis/Queue Check (unchanged)
     redis_status = {"status": "ok"}
     if WEBSOCKET_MODE == 'redis':
         try:
@@ -1018,7 +1047,7 @@ async def health_check():
         redis_status["status"] = "skipped (in-memory mode)"
     health_status["checks"]["redis"] = redis_status
 
-    # 3. Vector Store Check
+    # 3. Vector Store Check (unchanged)
     vs_status = {"status": "ok"}
     vs_dir = _APP_PATHS["VECTORSTORE_DIR"]
     if not os.path.exists(vs_dir):
@@ -1027,7 +1056,7 @@ async def health_check():
         has_critical_failure = True
     health_status["checks"]["vector_store_dir"] = vs_status
 
-    # 4. Provider Credentials Check
+    # 4. Provider Credentials Check (unchanged)
     provider_status = {"status": "ok", "providers": {}}
     providers_to_check = {
         "openai": "OPENAI_API_KEY",
@@ -1037,10 +1066,7 @@ async def health_check():
         "qdrant": "QDRANT_API_KEY"
     }
     for provider, env_key in providers_to_check.items():
-        if os.environ.get(env_key):
-            provider_status["providers"][provider] = "ok"
-        else:
-            provider_status["providers"][provider] = "missing"
+        provider_status["providers"][provider] = "ok" if os.environ.get(env_key) else "missing"
     health_status["checks"]["api_keys"] = provider_status
 
     if has_critical_failure:
@@ -1048,6 +1074,7 @@ async def health_check():
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=health_status)
 
     return JSONResponse(health_status)
+
 
 # Corrected endpoint for get_history
 @app.get("/history/{thread_id}", tags=["Memory"])
@@ -1185,6 +1212,3 @@ async def delete_session(
         logger.error(f"An unexpected error occurred during session deletion for {safe_thread_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500,
                             detail="An unexpected error occurred during session deletion. Please check server logs for details.")
-
-
-#22

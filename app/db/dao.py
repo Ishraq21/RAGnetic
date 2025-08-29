@@ -146,26 +146,53 @@ async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[Dict[str, A
 
 
 async def get_user_roles_data(db: AsyncSession, user_id: int) -> List[Dict[str, Any]]:
-    """Helper to fetch roles and their permissions for a given user ID."""
-
-    stmt = select(
-        roles_table.c.id,
-        roles_table.c.name,
-        roles_table.c.description
-    ).select_from(
-        user_organizations_table.join(
-            roles_table,
-            user_organizations_table.c.role_id == roles_table.c.id
+    """
+    Fetch roles for a user and all their permissions in ONE round trip (no N+1).
+    """
+    # 1) roles for the user
+    role_rows = (await db.execute(
+        select(
+            roles_table.c.id,
+            roles_table.c.name,
+            roles_table.c.description,
         )
-    ).where(user_organizations_table.c.user_id == user_id)
+        .select_from(
+            user_organizations_table.join(
+                roles_table,
+                user_organizations_table.c.role_id == roles_table.c.id,
+            )
+        )
+        .where(user_organizations_table.c.user_id == user_id)
+    )).mappings().all()
 
-    result = await db.execute(stmt)
-    roles = []
-    for row in result.mappings().all():
-        role_dict = dict(row)
-        role_dict["permissions"] = await get_permissions_for_role(db, role_dict["id"])
-        roles.append(role_dict)
+    if not role_rows:
+        return []
+
+    role_ids = [r["id"] for r in role_rows]
+
+    # 2) all permissions for those roles (batched)
+    perm_rows = (await db.execute(
+        select(
+            role_permissions_table.c.role_id,
+            role_permissions_table.c.permission,
+        ).where(role_permissions_table.c.role_id.in_(role_ids))
+    )).mappings().all()
+
+    perms_by_role: Dict[int, List[str]] = {rid: [] for rid in role_ids}
+    for pr in perm_rows:
+        perms_by_role[pr["role_id"]].append(pr["permission"])
+
+    # 3) stitch
+    roles: List[Dict[str, Any]] = []
+    for r in role_rows:
+        roles.append({
+            "id": r["id"],
+            "name": r["name"],
+            "description": r["description"],
+            "permissions": perms_by_role.get(r["id"], []),
+        })
     return roles
+
 
 
 
@@ -298,15 +325,45 @@ async def get_role_by_id(db: AsyncSession, role_id: int) -> Optional[Dict[str, A
 
 
 async def get_all_roles(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
-    """Retrieves a paginated list of all roles, including their permissions."""
-    stmt = select(roles_table).offset(skip).limit(limit)
-    result = await db.execute(stmt)
-    roles_data = []
-    for row in result.mappings().all():
-        role_dict = dict(row)
-        role_dict["permissions"] = await get_permissions_for_role(db, role_dict["id"])
-        roles_data.append(role_dict)
+    """
+    List roles with permissions without N+1 queries.
+    """
+    role_rows = (await db.execute(
+        select(
+            roles_table.c.id,
+            roles_table.c.name,
+            roles_table.c.description,
+        )
+        .offset(skip)
+        .limit(limit)
+    )).mappings().all()
+
+    if not role_rows:
+        return []
+
+    role_ids = [r["id"] for r in role_rows]
+
+    perm_rows = (await db.execute(
+        select(
+            role_permissions_table.c.role_id,
+            role_permissions_table.c.permission,
+        ).where(role_permissions_table.c.role_id.in_(role_ids))
+    )).mappings().all()
+
+    perms_by_role: Dict[int, List[str]] = {rid: [] for rid in role_ids}
+    for pr in perm_rows:
+        perms_by_role[pr["role_id"]].append(pr["permission"])
+
+    roles_data: List[Dict[str, Any]] = []
+    for r in role_rows:
+        roles_data.append({
+            "id": r["id"],
+            "name": r["name"],
+            "description": r["description"],
+            "permissions": perms_by_role.get(r["id"], []),
+        })
     return roles_data
+
 
 
 async def delete_role(db: AsyncSession, role_id: int) -> bool:

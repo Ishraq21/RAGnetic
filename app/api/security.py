@@ -20,49 +20,70 @@ logger = logging.getLogger("ragnetic")
 
 router = APIRouter(prefix="/api/v1/security", tags=["Security API"])
 
+
+def _derive_scope_from_user(user_data: Dict[str, Any]) -> str:
+    """
+    Map user -> api key scope. Simple, deterministic:
+    - superuser OR 'admin' role => 'admin'
+    - any create/update/delete-like permission => 'editor'
+    - else => 'viewer'
+    """
+    if user_data.get("is_superuser"):
+        return "admin"
+
+    # roles may be dicts already (from DAO)
+    role_names = { (r.get("name") if isinstance(r, dict) else getattr(r, "name", "")) for r in user_data.get("roles", []) }
+    if "admin" in role_names:
+        return "admin"
+
+    perms = set()
+    for r in user_data.get("roles", []):
+        rp = r.get("permissions") if isinstance(r, dict) else getattr(r, "permissions", None)
+        if isinstance(rp, list):
+            perms.update(rp)
+
+    if any(p.startswith(("create:", "update:", "delete:")) for p in perms):
+        return "editor"
+
+    return "viewer"
+
+
 @router.post("/login", response_model=Token, dependencies=[Depends(rate_limiter("login", 5, 60))])
 async def login_for_access_token(
     request: LoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Authenticates a user with username and password and returns a user-specific API key.
-    This API key can then be used for subsequent requests.
-    """
     user_data = await db_dao.get_user_by_username(db, request.username)
-    if not user_data:
+    if not user_data or not db_dao.verify_password(request.password, user_data.get("hashed_password", "")):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password.")
-
-    # Verify password
-    if not db_dao.verify_password(request.password, user_data.get("hashed_password", "")):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password.")
-
     if not user_data.get("is_active"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is inactive.")
 
+    # Viewer-only policy for web login
     try:
-        active_key_stmt = select(user_api_keys_table.c.api_key).where(
-            user_api_keys_table.c.user_id == user_data["id"],
-            user_api_keys_table.c.revoked == False
-        ).order_by(user_api_keys_table.c.created_at.desc()).limit(1)
-
+        active_key_stmt = (
+            select(user_api_keys_table.c.api_key)
+            .where(
+                user_api_keys_table.c.user_id == user_data["id"],
+                user_api_keys_table.c.revoked == False,
+                user_api_keys_table.c.scope == "viewer",
+            )
+            .order_by(user_api_keys_table.c.created_at.desc())
+            .limit(1)
+        )
         existing_key = (await db.execute(active_key_stmt)).scalar_one_or_none()
 
         if existing_key:
-            api_key_str = existing_key
-            logger.info(f"User '{request.username}' logged in, reusing existing API key.")
-        else:
+            logger.info(f"User '{request.username}' logged in, reusing existing viewer API key.")
+            return Token(access_token=existing_key, token_type="api_key")
 
-            # When creating a new key, a default scope must be provided.
-            # Here we default to 'viewer' which is a safe, minimal permission scope.
-            api_key_str = await db_dao.create_user_api_key(db, user_data["id"], scope="viewer")
-            logger.info(f"User '{request.username}' logged in, new API key generated.")
-
+        api_key_str = await db_dao.create_user_api_key(db, user_data["id"], scope="viewer")
+        logger.info(f"User '{request.username}' logged in, new viewer API key generated.")
         return Token(access_token=api_key_str, token_type="api_key")
+
     except Exception as e:
-        logger.error(f"Failed to generate/retrieve API key for user {request.username}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="Failed to generate access token.")
+        logger.error(f"Failed to generate/retrieve viewer API key for user {request.username}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to generate access token.")
 
 @router.get("/me", response_model=UserPublic)
 async def read_current_user(
