@@ -4,25 +4,26 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError, NoResultFound
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field  # Import Field for LoginRequest
 from sqlalchemy import select
+from app.core.rate_limit import rate_limiter
 
 from app.db import get_db
 from app.db import dao as db_dao  # Alias to avoid name collision with security.py in future
 from app.db.models import user_api_keys_table
 from app.schemas.security import UserCreate, UserUpdate, User, RoleCreate, Role, Token, TokenData, \
-    LoginRequest
+    LoginRequest, UserPublic
 from app.core.security import PermissionChecker, get_http_api_key, get_current_user_from_api_key
 
 logger = logging.getLogger("ragnetic")
 
 router = APIRouter(prefix="/api/v1/security", tags=["Security API"])
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=Token, dependencies=[Depends(rate_limiter("login", 5, 60))])
 async def login_for_access_token(
-        request: LoginRequest,
-        db: AsyncSession = Depends(get_db)
+    request: LoginRequest,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Authenticates a user with username and password and returns a user-specific API key.
@@ -57,27 +58,22 @@ async def login_for_access_token(
             api_key_str = await db_dao.create_user_api_key(db, user_data["id"], scope="viewer")
             logger.info(f"User '{request.username}' logged in, new API key generated.")
 
-        return Token(access_token=api_key_str, token_type="bearer")
+        return Token(access_token=api_key_str, token_type="api_key")
     except Exception as e:
         logger.error(f"Failed to generate/retrieve API key for user {request.username}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="Failed to generate access token.")
 
-@router.get("/me", response_model=User)
+@router.get("/me", response_model=UserPublic)
 async def read_current_user(
         current_user: User = Depends(get_current_user_from_api_key)
 ):
-    """
-    Retrieves the details of the currently authenticated user.
-    Requires: Any valid API Key (master or user-specific).
-    """
-    logger.info(f"User '{current_user.username}' (ID: {current_user.id}) requested their own details.")
-    return current_user
+    return UserPublic(**current_user.model_dump())
 
 
 # --- User Management Endpoints ---
 
-@router.post("/users", response_model=User, status_code=status.HTTP_201_CREATED)
+@router.post("/users", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
 async def create_user(
         user_in: UserCreate,
         db: AsyncSession = Depends(get_db),
@@ -93,7 +89,8 @@ async def create_user(
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create user.")
         logger.info(
             f"User '{current_user.username}' created new user '{new_user_data['username']}' (ID: {new_user_data['id']}).")
-        return User(**new_user_data)
+        return UserPublic(**new_user_data)
+
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except Exception as e:
@@ -102,7 +99,8 @@ async def create_user(
                             detail="An unexpected error occurred while creating the user.")
 
 
-@router.get("/users", response_model=List[User])
+@router.get("/users", response_model=List[UserPublic])
+
 async def get_all_users(
         skip: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=100),
@@ -116,14 +114,16 @@ async def get_all_users(
     try:
         users_data = await db_dao.get_all_users(db, skip=skip, limit=limit)
         logger.info(f"User '{current_user.username}' listed all users.")
-        return [User(**user_data) for user_data in users_data]
+        return [UserPublic(**user_data) for user_data in users_data]
+
     except Exception as e:
         logger.error(f"Failed to retrieve all users: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="An unexpected error occurred while retrieving users.")
 
 
-@router.get("/users/{user_id}", response_model=User)
+@router.get("/users/{user_id}", response_model=UserPublic)
+
 async def get_user_by_id(
         user_id: int,
         db: AsyncSession = Depends(get_db),
@@ -138,14 +138,16 @@ async def get_user_by_id(
         if not user_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
         logger.info(f"User '{current_user.username}' retrieved details for user ID: {user_id}.")
-        return User(**user_data)
+        return UserPublic(**user_data)
+
     except Exception as e:
         logger.error(f"Failed to retrieve user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="An unexpected error occurred while retrieving the user.")
 
 
-@router.put("/users/{user_id}", response_model=User)
+@router.put("/users/{user_id}", response_model=UserPublic)
+
 async def update_user(
         user_id: int,
         user_update: UserUpdate,
@@ -161,7 +163,8 @@ async def update_user(
         if not updated_user_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
         logger.info(f"User '{current_user.username}' updated user ID: {user_id}.")
-        return User(**updated_user_data)
+        return UserPublic(**updated_user_data)
+
     except ValueError as e:  # Catching specific ValueErrors from DAO for duplicates/not found
         if "not found" in str(e).lower():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -285,11 +288,19 @@ async def delete_role(
                             detail="An unexpected error occurred while deleting the role.")
 
 class APIKeyCreate(BaseModel):
-    scope: str = "viewer"
+    scope: Literal["admin", "editor", "viewer"] = "viewer"
+
+class APIKeyRevoke(BaseModel):
+    api_key: str
 
 # --- User API Key Endpoints ---
 
-@router.post("/users/{user_id}/api-keys", response_model=Token, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/users/{user_id}/api-keys",
+    response_model=Token,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limiter("apikey_create", 10, 60))]
+)
 async def create_user_api_key(
         user_id: int,
         key_create: APIKeyCreate = Body(...),
@@ -309,7 +320,8 @@ async def create_user_api_key(
         # Pass the scope from the request body to the DAO function
         new_api_key = await db_dao.create_user_api_key(db, user_id, scope=key_create.scope)
         logger.info(f"User '{current_user.username}' generated API key for user ID: {user_id}.")
-        return Token(access_token=new_api_key, token_type="bearer")
+        return Token(access_token=new_api_key, token_type="api_key")
+
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except Exception as e:
@@ -318,9 +330,13 @@ async def create_user_api_key(
                             detail="An unexpected error occurred while creating the API key.")
 
 
-@router.delete("/api-keys/{api_key_str}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/api-keys",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(rate_limiter("apikey_revoke", 20, 60))]
+)
 async def revoke_user_api_key(
-        api_key_str: str,
+        payload: APIKeyRevoke,
         db: AsyncSession = Depends(get_db),
         current_user: User = Depends(PermissionChecker(["security:manage_api_keys"]))  # Requires specific permission
 ):
@@ -329,16 +345,15 @@ async def revoke_user_api_key(
     Requires: 'security:manage_api_keys' permission.
     """
     try:
-        revoked = await db_dao.revoke_user_api_key(db, api_key_str)
+        revoked = await db_dao.revoke_user_api_key(db, payload.api_key)
         if not revoked:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found or already revoked.")
-        logger.info(f"User '{current_user.username}' revoked API key: {api_key_str[:8]}...")
+        logger.info(f"User '{current_user.username}' revoked API key: {payload.api_key[:8]}...")
         return  # 204 No Content
     except Exception as e:
-        logger.error(f"Failed to revoke API key {api_key_str}: {e}", exc_info=True)
+        logger.error(f"Failed to revoke API key {payload.api_key[:8]}...: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="An unexpected error occurred while revoking the API key.")
-
 
 # --- User-Role Assignment Endpoints ---
 

@@ -1,9 +1,10 @@
 # app/schemas/security.py
 
 from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional
+from typing import List, Optional, Literal
 from datetime import datetime
 
+# ---------- Roles ----------
 
 class RoleBase(BaseModel):
     """Base schema for a role."""
@@ -20,7 +21,19 @@ class Role(RoleBase):
     permissions: List[str] = Field([], description="List of permissions assigned to this role.")
 
     class Config:
-        from_attributes = True # Enable ORM mode for Pydantic v2
+        from_attributes = True  # Pydantic v2 ORM mode
+
+# Public representation for responses
+class RolePublic(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    permissions: List[str] = []
+
+    class Config:
+        from_attributes = True
+
+# ---------- Users ----------
 
 class UserBase(BaseModel):
     """Base schema for a user."""
@@ -45,20 +58,42 @@ class UserUpdate(UserBase):
     roles: Optional[List[str]] = Field(None, description="List of role names to update for the user.")
 
 class User(UserBase):
-    """Schema for a user as retrieved from the database, including ID and creation timestamp."""
+    """
+    Internal schema used inside the app (includes hashed_password).
+    NEVER return this from API endpoints.
+    """
     id: int = Field(..., description="Unique database ID of the user.")
     hashed_password: str = Field(..., description="Hashed password of the user.")
     created_at: datetime = Field(..., description="Timestamp when the user was created.")
     updated_at: datetime = Field(..., description="Timestamp when the user was last updated.")
     roles: List[Role] = Field([], description="List of roles assigned to the user.")
+    # API key scope propagated to aid PermissionChecker
+    scope: Optional[str] = Field(default="viewer", description="API key scope for this request, if applicable.")
 
     class Config:
-        from_attributes = True # Enable ORM mode for Pydantic v2
+        from_attributes = True  # Pydantic v2 ORM mode
+
+# Public-safe version for responses (no hashed_password)
+class UserPublic(BaseModel):
+    id: int
+    username: str
+    email: Optional[EmailStr] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    is_active: bool
+    is_superuser: bool
+    created_at: datetime
+    updated_at: datetime
+    roles: List[RolePublic] = []
+
+    class Config:
+        from_attributes = True
+
 
 class Token(BaseModel):
-    """Schema for an authentication token."""
     access_token: str
-    token_type: str = "bearer"
+    token_type: Literal["api_key"] = "api_key"
+
 
 class TokenData(BaseModel):
     """Schema for data contained in a JWT token (e.g., username, user ID, roles)."""
