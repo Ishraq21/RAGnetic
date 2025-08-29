@@ -22,6 +22,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from app.core.rate_limit import rate_limiter
 from app.db.dao import create_chat_message
 from app.api.lambda_tool import router as lambda_tool_router
 from app.db.dao import create_lambda_run, get_lambda_run
@@ -174,6 +175,29 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        resp = await call_next(request)
+        # HSTS (enable only when served over HTTPS)
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        # CSP (allow inline because pages use inline scripts; tighten with nonces later if desired)
+        resp.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "img-src 'self' data: blob:; "
+            "connect-src 'self' ws: wss:; "
+            "frame-ancestors 'none';"
+        )
+        return resp
+
 app = FastAPI(title="RAGnetic API", version="0.1.0")
 app.add_middleware(CorrelationIdMiddleware)
 
@@ -188,6 +212,7 @@ app.add_middleware(CORSMiddleware, **cors_kwargs)
 # Hardening + perf
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=get_allowed_hosts())
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 templates = Jinja2Templates(directory="templates")
@@ -438,13 +463,18 @@ async def create_new_session(
     return {"thread_id": thread_id, "session_id": session_id, "topic_name": topic_name}
 
 
-@app.post("/api/v1/chat/upload-temp-document", response_model=QuickUploadFileItem, status_code=status.HTTP_200_OK,
-          tags=["Chat"])
+@app.post(
+    "/api/v1/chat/upload-temp-document",
+    response_model=QuickUploadFileItem,
+    status_code=status.HTTP_200_OK,
+    tags=["Chat"],
+    dependencies=[Depends(rate_limiter("upload", 20, 60))]  # <-- add
+)
 async def upload_temp_document(
-        file: UploadFile = File(...),
-        thread_id: str = Form(...),
-        current_user: User = Depends(PermissionChecker(["document:upload"])),
-        db: AsyncSession = Depends(get_db) #
+    file: UploadFile = File(...),
+    thread_id: str = Form(...),
+    current_user: User = Depends(PermissionChecker(["document:upload"])),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Uploads a temporary document for use within a specific chat session.

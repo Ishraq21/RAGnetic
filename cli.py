@@ -2335,29 +2335,28 @@ def revoke_user_api_key(
         api_key_str: str = typer.Argument(..., help="The API key string to revoke."),
         force: bool = typer.Option(False, "--force", "-f", help="Bypass confirmation prompt."),
 ):
-    """Revokes a user's API key via the API."""
+    """Revokes a user's API key via the API (body-based DELETE)."""
     if not force:
-        typer.secho(f"DANGER: This will permanently revoke the API key.", fg=typer.colors.RED)
+        typer.secho("DANGER: This will permanently revoke the API key.", fg=typer.colors.RED)
         typer.confirm("Are you sure you want to proceed?", abort=True)
 
-    server_url = _get_server_url()
+    server_url = _get_server_url()  # returns ".../api/v1"
     master_api_key = _get_api_key_for_cli()
-    headers = {"X-API-Key": master_api_key}
-    url = f"{server_url}/security/api-keys/{api_key_str}"  # Note: /api-keys/{api_key_str}
-    response = None  # Initialize response
+    headers = {"X-API-Key": master_api_key, "Content-Type": "application/json"}
+    url = f"{server_url}/security/api-keys"  # body-based revoke
+    response = None
 
     try:
         typer.secho(f"Attempting to revoke API key '{api_key_str[:8]}...'...", fg=typer.colors.CYAN)
-        response = requests.delete(url, headers=headers, timeout=10)
+        response = requests.delete(url, headers=headers, json={"api_key": api_key_str}, timeout=10)
         response.raise_for_status()
-
         typer.secho(f"API key '{api_key_str[:8]}...' revoked successfully.", fg=typer.colors.GREEN)
-
     except requests.exceptions.RequestException as e:
         typer.secho(f"Error revoking API key: {e}", fg=typer.colors.RED)
         if response is not None and response.text:
             typer.echo(f"API Response: {response.text}")
         raise typer.Exit(code=1)
+
 
 
 # --- Role Management Commands ---

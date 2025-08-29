@@ -125,15 +125,12 @@ async def _format_user_data_for_pydantic(db_row: Any, db: AsyncSession) -> Dict[
 
 
 async def get_user_by_username(db: AsyncSession, username: str) -> Optional[Dict[str, Any]]:
-    """Retrieves a user by their username, including roles and permissions."""
     stmt = select(users_table).where(users_table.c.user_id == username)
     result = await db.execute(stmt)
     user_row = result.mappings().first()
     if user_row:
         row_map = dict(user_row)
         user_dict = await _format_user_data_for_pydantic(row_map, db)
-        # include the scope explicitly
-        user_dict["api_key_scope"] = row_map.get("scope")
         return user_dict
     return None
 
@@ -156,17 +153,20 @@ async def get_user_roles_data(db: AsyncSession, user_id: int) -> List[Dict[str, 
         roles_table.c.name,
         roles_table.c.description
     ).select_from(
-        user_organizations_table.join(roles_table)
+        user_organizations_table.join(
+            roles_table,
+            user_organizations_table.c.role_id == roles_table.c.id
+        )
     ).where(user_organizations_table.c.user_id == user_id)
 
     result = await db.execute(stmt)
     roles = []
     for row in result.mappings().all():
         role_dict = dict(row)
-        # Fetch permissions for each role
         role_dict["permissions"] = await get_permissions_for_role(db, role_dict["id"])
         roles.append(role_dict)
     return roles
+
 
 
 async def update_user(db: AsyncSession, user_id: int, user_update: UserUpdate) -> Optional[Dict[str, Any]]:
@@ -197,14 +197,16 @@ async def update_user(db: AsyncSession, user_id: int, user_update: UserUpdate) -
         if roles_to_assign_or_remove is not None:
             # Get current roles for the user
             current_role_names_stmt = select(roles_table.c.name).select_from(
-                user_organizations_table.join(roles_table)
+                user_organizations_table.join(
+                    roles_table,
+                    user_organizations_table.c.role_id == roles_table.c.id
+                )
             ).where(user_organizations_table.c.user_id == user_id)
 
             current_role_names = [r[0] for r in (await db.execute(current_role_names_stmt)).fetchall()]
 
             roles_to_add = set(roles_to_assign_or_remove) - set(current_role_names)
-            roles_to_remove = set(current_role_names) - set(
-                user_update.roles)
+            roles_to_remove = set(current_role_names) - set(roles_to_assign_or_remove)
 
             for role_name in roles_to_add:
                 try:
@@ -484,20 +486,30 @@ async def revoke_user_api_key(db: AsyncSession, api_key_str: str) -> bool:
 
 
 async def get_user_by_api_key(db: AsyncSession, api_key_str: str) -> Optional[Dict[str, Any]]:
-    """Retrieves a user associated with a non-revoked API key, including roles and permissions, and the key's scope."""
-    stmt = select(
-        users_table,
-        user_api_keys_table.c.scope,
-    ).join(user_api_keys_table).where(
-        user_api_keys_table.c.api_key == api_key_str,
-        user_api_keys_table.c.revoked == False
+    stmt = (
+        select(users_table, user_api_keys_table.c.scope)
+        .select_from(
+            users_table.join(
+                user_api_keys_table,
+                user_api_keys_table.c.user_id == users_table.c.id
+            )
+        )
+        .where(
+            user_api_keys_table.c.api_key == api_key_str,
+            user_api_keys_table.c.revoked == False
+        )
     )
+
     result = await db.execute(stmt)
-    user_row = result.mappings().first()
-    if user_row:
-        user_data = dict(user_row)
-        return await _format_user_data_for_pydantic(user_data, db)
-    return None
+    row = result.mappings().first()
+    if not row:
+        return None
+
+    raw = dict(row)
+    user_dict = await _format_user_data_for_pydantic(raw, db)
+    user_dict["scope"] = raw.get("scope", "viewer")  # ensure scope is present
+    return user_dict
+
 
 async def update_api_key_usage(db: AsyncSession, api_key_str: str) -> None:
     """Updates the last_used_at timestamp and increments the request_count for a given API key."""
@@ -851,6 +863,9 @@ async def create_default_roles_and_permissions(db: AsyncSession) -> None:
             "read:roles", "create:roles", "update:roles", "delete:roles",
             "read:api_keys", "create:api_keys", "revoke:api_keys",
             "fine_tune:initiate", "fine_tune:read_status", "fine_tune:list_models",
+            "security:create_user", "security:read_users", "security:update_users", "security:delete_users",
+            "security:create_role", "security:read_roles", "security:delete_roles",
+            "security:manage_api_keys", "security:manage_user_roles", "security:manage_role_permissions",
         ],
         "editor": [
             "read:workflows", "create:workflows", "update:workflows",
