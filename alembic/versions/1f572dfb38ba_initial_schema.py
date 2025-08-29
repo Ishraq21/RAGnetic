@@ -1,8 +1,8 @@
 """Initial Schema
 
-Revision ID: 0ce2d617aba4
+Revision ID: 1f572dfb38ba
 Revises: 
-Create Date: 2025-08-09 10:51:05.759581
+Create Date: 2025-08-28 05:38:14.836762
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '0ce2d617aba4'
+revision: str = '1f572dfb38ba'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -32,6 +32,29 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id', name=op.f('pk_agents')),
     sa.UniqueConstraint('name', name=op.f('uq_agents_name'))
     )
+    op.create_table('benchmark_runs',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('run_id', sa.String(length=255), nullable=False),
+    sa.Column('agent_name', sa.String(length=255), nullable=False),
+    sa.Column('dataset_id', sa.String(length=255), nullable=True),
+    sa.Column('prompt_hash', sa.String(length=64), nullable=True),
+    sa.Column('agent_config_hash', sa.String(length=64), nullable=True),
+    sa.Column('judge_model', sa.String(length=255), nullable=True),
+    sa.Column('config_snapshot', sa.JSON(), nullable=True),
+    sa.Column('total_items', sa.Integer(), nullable=True),
+    sa.Column('completed_items', sa.Integer(), nullable=True),
+    sa.Column('started_at', sa.DateTime(), nullable=False),
+    sa.Column('ended_at', sa.DateTime(), nullable=True),
+    sa.Column('status', sa.Enum('running', 'completed', 'failed', 'cancelled', name='benchmark_status'), nullable=False),
+    sa.Column('summary_metrics', sa.JSON(), nullable=True),
+    sa.Column('error', sa.Text(), nullable=True),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_benchmark_runs'))
+    )
+    with op.batch_alter_table('benchmark_runs', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_benchmark_runs_agent_name'), ['agent_name'], unique=False)
+        batch_op.create_index(batch_op.f('ix_benchmark_runs_dataset_id'), ['dataset_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_benchmark_runs_run_id'), ['run_id'], unique=True)
+
     op.create_table('crontab_schedule',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('minute', sa.String(length=64), nullable=True),
@@ -118,6 +141,29 @@ def upgrade() -> None:
     with op.batch_alter_table('agent_tools', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_agent_tools_agent_id'), ['agent_id'], unique=False)
 
+    op.create_table('benchmark_items',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('run_id', sa.String(length=255), nullable=False),
+    sa.Column('item_index', sa.Integer(), nullable=False),
+    sa.Column('question', sa.Text(), nullable=False),
+    sa.Column('ground_truth_chunk_id', sa.String(length=255), nullable=True),
+    sa.Column('retrieved_ids', sa.JSON(), nullable=True),
+    sa.Column('retrieval_metrics', sa.JSON(), nullable=True),
+    sa.Column('context_size', sa.Integer(), nullable=True),
+    sa.Column('answer', sa.Text(), nullable=True),
+    sa.Column('judge_scores', sa.JSON(), nullable=True),
+    sa.Column('token_usage', sa.JSON(), nullable=True),
+    sa.Column('costs', sa.JSON(), nullable=True),
+    sa.Column('durations', sa.JSON(), nullable=True),
+    sa.Column('citations', sa.JSON(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['run_id'], ['benchmark_runs.run_id'], name=op.f('fk_benchmark_items_run_id_benchmark_runs'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_benchmark_items')),
+    sa.UniqueConstraint('run_id', 'item_index', name='uq_bench_item_run_idx')
+    )
+    with op.batch_alter_table('benchmark_items', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_benchmark_items_run_id'), ['run_id'], unique=False)
+
     op.create_table('chat_sessions',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('agent_name', sa.String(length=255), nullable=False),
@@ -145,6 +191,19 @@ def upgrade() -> None:
     sa.Column('hyperparameters', sa.JSON(), nullable=True),
     sa.Column('final_loss', sa.Float(), nullable=True),
     sa.Column('validation_loss', sa.Float(), nullable=True),
+    sa.Column('worker_host', sa.String(length=255), nullable=True),
+    sa.Column('worker_pid', sa.Integer(), nullable=True),
+    sa.Column('device', sa.String(length=32), nullable=True),
+    sa.Column('gpu_name', sa.String(length=255), nullable=True),
+    sa.Column('mixed_precision', sa.String(length=16), nullable=True),
+    sa.Column('bitsandbytes_4bit', sa.Boolean(), nullable=True),
+    sa.Column('seed', sa.Integer(), nullable=True),
+    sa.Column('current_step', sa.Integer(), nullable=True),
+    sa.Column('max_steps', sa.Integer(), nullable=True),
+    sa.Column('eta_seconds', sa.Float(), nullable=True),
+    sa.Column('eval_dataset_id', sa.String(length=512), nullable=True),
+    sa.Column('eval_metrics', sa.JSON(), nullable=True),
+    sa.Column('best_checkpoint_path', sa.String(length=512), nullable=True),
     sa.Column('gpu_hours_consumed', sa.Float(), nullable=True),
     sa.Column('estimated_training_cost_usd', sa.Float(), nullable=True),
     sa.Column('created_by_user_id', sa.Integer(), nullable=False),
@@ -156,6 +215,7 @@ def upgrade() -> None:
     )
     with op.batch_alter_table('fine_tuned_models', schema=None) as batch_op:
         batch_op.create_index('fine_tuned_models_base_model_idx', ['base_model_name'], unique=False)
+        batch_op.create_index('fine_tuned_models_created_at_idx', ['created_at'], unique=False)
         batch_op.create_index('fine_tuned_models_status_idx', ['training_status'], unique=False)
         batch_op.create_index(batch_op.f('ix_fine_tuned_models_created_by_user_id'), ['created_by_user_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_fine_tuned_models_job_name'), ['job_name'], unique=False)
@@ -212,7 +272,8 @@ def upgrade() -> None:
     op.create_table('user_api_keys',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
-    sa.Column('api_key', sa.String(length=255), nullable=False),
+    sa.Column('hashed_api_key', sa.String(length=255), nullable=False),
+    sa.Column('api_key_prefix', sa.String(length=16), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.Column('revoked', sa.Boolean(), nullable=False),
@@ -221,8 +282,11 @@ def upgrade() -> None:
     sa.Column('request_count', sa.BigInteger(), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_user_api_keys_user_id_users'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_user_api_keys')),
-    sa.UniqueConstraint('api_key', name=op.f('uq_user_api_keys_api_key'))
+    sa.UniqueConstraint('hashed_api_key', name=op.f('uq_user_api_keys_hashed_api_key'))
     )
+    with op.batch_alter_table('user_api_keys', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_user_api_keys_api_key_prefix'), ['api_key_prefix'], unique=False)
+
     op.create_table('user_organizations',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
@@ -281,6 +345,7 @@ def upgrade() -> None:
     sa.Column('embedding_cost_usd', sa.Float(precision=10), nullable=True),
     sa.Column('timestamp', sa.DateTime(), nullable=False),
     sa.Column('fine_tuned_model_id', sa.String(length=255), nullable=True),
+    sa.ForeignKeyConstraint(['fine_tuned_model_id'], ['fine_tuned_models.adapter_id'], name='fk_conv_metrics_finetuned_adapter', ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['session_id'], ['chat_sessions.id'], name=op.f('fk_conversation_metrics_session_id_chat_sessions'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_conversation_metrics')),
     sa.UniqueConstraint('session_id', 'request_id', name='uq_session_request')
@@ -307,6 +372,27 @@ def upgrade() -> None:
     with op.batch_alter_table('document_chunks', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_document_chunks_document_name'), ['document_name'], unique=False)
         batch_op.create_index(batch_op.f('ix_document_chunks_temp_document_id'), ['temp_document_id'], unique=False)
+
+    op.create_table('lambda_runs',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('run_id', sa.String(length=255), nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('status', sa.String(length=50), nullable=False),
+    sa.Column('initial_request', sa.JSON(), nullable=False),
+    sa.Column('final_state', sa.JSON(), nullable=True),
+    sa.Column('start_time', sa.DateTime(), nullable=False),
+    sa.Column('end_time', sa.DateTime(), nullable=True),
+    sa.Column('error_message', sa.Text(), nullable=True),
+    sa.Column('logs', sa.Text(), nullable=True),
+    sa.Column('thread_id', sa.String(length=255), nullable=True),
+    sa.ForeignKeyConstraint(['thread_id'], ['chat_sessions.thread_id'], name=op.f('fk_lambda_runs_thread_id_chat_sessions'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_lambda_runs_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_lambda_runs')),
+    sa.UniqueConstraint('run_id', name=op.f('uq_lambda_runs_run_id'))
+    )
+    with op.batch_alter_table('lambda_runs', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_lambda_runs_thread_id'), ['thread_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_lambda_runs_user_id'), ['user_id'], unique=False)
 
     op.create_table('memory_entries',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
@@ -420,6 +506,11 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_memory_entries_session_id'))
 
     op.drop_table('memory_entries')
+    with op.batch_alter_table('lambda_runs', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_lambda_runs_user_id'))
+        batch_op.drop_index(batch_op.f('ix_lambda_runs_thread_id'))
+
+    op.drop_table('lambda_runs')
     with op.batch_alter_table('document_chunks', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_document_chunks_temp_document_id'))
         batch_op.drop_index(batch_op.f('ix_document_chunks_document_name'))
@@ -443,6 +534,9 @@ def downgrade() -> None:
 
     op.drop_table('agent_runs')
     op.drop_table('user_organizations')
+    with op.batch_alter_table('user_api_keys', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_user_api_keys_api_key_prefix'))
+
     op.drop_table('user_api_keys')
     with op.batch_alter_table('temporary_documents', schema=None) as batch_op:
         batch_op.drop_index('tmp_docs_exp_idx')
@@ -456,6 +550,7 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_fine_tuned_models_job_name'))
         batch_op.drop_index(batch_op.f('ix_fine_tuned_models_created_by_user_id'))
         batch_op.drop_index('fine_tuned_models_status_idx')
+        batch_op.drop_index('fine_tuned_models_created_at_idx')
         batch_op.drop_index('fine_tuned_models_base_model_idx')
 
     op.drop_table('fine_tuned_models')
@@ -463,6 +558,10 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_chat_sessions_user_id'))
 
     op.drop_table('chat_sessions')
+    with op.batch_alter_table('benchmark_items', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_benchmark_items_run_id'))
+
+    op.drop_table('benchmark_items')
     with op.batch_alter_table('agent_tools', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_agent_tools_agent_id'))
 
@@ -475,5 +574,11 @@ def downgrade() -> None:
     op.drop_table('organizations')
     op.drop_table('interval_schedule')
     op.drop_table('crontab_schedule')
+    with op.batch_alter_table('benchmark_runs', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_benchmark_runs_run_id'))
+        batch_op.drop_index(batch_op.f('ix_benchmark_runs_dataset_id'))
+        batch_op.drop_index(batch_op.f('ix_benchmark_runs_agent_name'))
+
+    op.drop_table('benchmark_runs')
     op.drop_table('agents')
     # ### end Alembic commands ###
