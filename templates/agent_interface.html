@@ -84,6 +84,13 @@
             <p class="disclaimer-text">RAGnetic can make mistakes. Double check your source.</p>
         </div>
     </div>
+    <div id="sources-panel">
+        <div class="sources-panel-header">
+            <span>Sources</span>
+            <button id="sources-panel-close">&times;</button>
+        </div>
+        <ul id="sources-list"></ul>
+    </div>
 <script>
     // These are global variables used by ingestion_modal_logic.js and other modules
     const API_BASE_URL = window.location.origin + '/api/v1';
@@ -117,6 +124,11 @@
     const quickUploadBtn = document.getElementById('quickUploadBtn');
     const quickUploadFileInput = document.getElementById('quickUploadFileInput');
     const quickUploadFileList = document.getElementById('quickUploadFileList');
+
+    // Sources panel elements
+    const sourcesPanel = document.getElementById('sources-panel');
+    const sourcesList = document.getElementById('sources-list');
+    const sourcesPanelClose = document.getElementById('sources-panel-close');
 
 
     let agent, thread_id, socket;
@@ -177,7 +189,13 @@ function hydrateCitationsForBubble(bubble, citations) {
   if (!window.citationRenderer?.renderCitations) return;
   window.citationRenderer.renderCitations(bubble, citations);
   window.citationRenderer?.prefetch?.(citations);
+  bubble.dataset.citations = JSON.stringify(citations);
   bubble.dataset.citationsHydrated = 'true';
+  const btn = bubble.querySelector('.sources-button');
+  if (btn) {
+    btn.classList.remove('hidden');
+    btn.classList.add('visible');
+  }
 }
 
 async function backfillCitationsForBubbles(bubbles) {
@@ -217,6 +235,40 @@ async function backfillCitationsForBubbles(bubbles) {
     console.warn('Citation backfill failed:', e);
   }
 }
+
+async function openSourcesPanelForBubble(bubble) {
+  const citations = JSON.parse(bubble.dataset.citations || '[]');
+  if (!citations.length) return;
+  sourcesList.innerHTML = '';
+  for (const c of citations) {
+    const li = document.createElement('li');
+    const title = document.createElement('span');
+    title.className = 'source-title';
+    title.textContent = c.doc_name || c.document_name || 'Document';
+    const snippet = document.createElement('span');
+    snippet.className = 'source-snippet';
+    snippet.textContent = '';
+    li.appendChild(title);
+    li.appendChild(snippet);
+    sourcesList.appendChild(li);
+    if (c.chunk_id && c.chunk_id !== -1) {
+      try {
+        const res = await fetch(`/api/v1/chat/citation-snippet?chunk_id=${c.chunk_id}`, {
+          headers: { 'X-API-Key': loggedInUserToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          snippet.textContent = data.snippet || '';
+        }
+      } catch (_) {}
+    }
+  }
+  sourcesPanel.classList.add('open');
+}
+
+sourcesPanelClose.addEventListener('click', () => {
+  sourcesPanel.classList.remove('open');
+});
 
     function openWebSocket(onOpenCallback) {
         if (socket && socket.readyState !== WebSocket.CLOSED) { socket.close(1000, "Starting new session"); }
@@ -409,7 +461,6 @@ socket.onmessage = async (event) => {
 
     /**
      * Creates a new message bubble for AI responses.
-     * REMOVED: `sources-button` creation.
      */
     function createAgentMessageBubble() {
         const bubble = document.createElement('div');
@@ -420,6 +471,12 @@ socket.onmessage = async (event) => {
         const contentDiv = document.createElement('div');
         contentDiv.className = 'content';
         bubble.appendChild(contentDiv);
+
+        const sourcesBtn = document.createElement('button');
+        sourcesBtn.className = 'sources-button hidden';
+        sourcesBtn.textContent = 'Sources';
+        sourcesBtn.addEventListener('click', () => openSourcesPanelForBubble(bubble));
+        bubble.appendChild(sourcesBtn);
 
         const copyBtn = document.createElement('button');
         copyBtn.className = 'copy-btn';
@@ -731,6 +788,7 @@ socket.onmessage = async (event) => {
             openWebSocket();
             fetchChatSessions(agent);
             window.quickUploads.clearAttachedFiles();
+            sourcesPanel.classList.remove('open');
         };
 
         if (showConfirmation) {
@@ -759,9 +817,9 @@ socket.onmessage = async (event) => {
         }
         renderEmptyState();
         window.quickUploads.clearAttachedFiles();
+        sourcesPanel.classList.remove('open');
     });
     document.addEventListener('DOMContentLoaded', async () => {
-        // REMOVED: sources-panel logic
         if (loggedInUserToken && loggedInDbUserId) {
             setupChatEnvironment();
             try {
