@@ -521,3 +521,15 @@ Our community `CODE_OF_CONDUCT.md` is being finalized—check back soon for the 
 ## License
 
 This project is licensed under the Apache 2.0 License - see the LICENSE file for details.
+
+## Frontend
+
+A React-based frontend lives in `frontend/` and uses Vite.
+It includes routed views for chat, agents, workflows, analytics, fine-tuning, security,
+connectors, and settings, all styled with a dark theme and authenticated through an
+API-key interceptor.
+
+### Development
+1. Install dependencies: `cd frontend && npm install`.
+2. Start the dev server: `npm run dev` (runs on port 3000).
+

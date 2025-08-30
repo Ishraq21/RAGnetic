@@ -2,7 +2,7 @@ import logging
 import yaml
 import json
 from fastapi import APIRouter, HTTPException, Request, Depends, status
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from sqlalchemy import create_engine, select, insert, update, delete
 from sqlalchemy.exc import IntegrityError
@@ -40,6 +40,22 @@ def get_sync_db_engine():
 
 class WorkflowResumeRequest(WorkflowUpdate):
     user_input: Optional[Dict[str, Any]] = None
+
+
+@router.get("/workflows", response_model=List[Workflow])
+def list_workflows(
+        current_user: User = Depends(PermissionChecker(["workflow:read"]))
+):
+    """Return all workflow definitions."""
+    engine = get_sync_db_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(select(workflows_table)).mappings().all()
+    workflows: List[Workflow] = []
+    for row in rows:
+        data = dict(row["definition"])
+        data["id"] = row["id"]
+        workflows.append(Workflow.model_validate(data))
+    return workflows
 
 
 @router.post("/workflows/{workflow_name}/trigger", status_code=status.HTTP_202_ACCEPTED)

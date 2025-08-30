@@ -182,6 +182,37 @@ async def delete_agent_by_name(
                             detail=f"An unexpected server error occurred during agent deletion for '{agent_name}'. Please check server logs.")
 
 
+@router.post("/{agent_name}/deploy", status_code=status.HTTP_202_ACCEPTED)
+async def deploy_agent_by_name(
+        agent_name: str,
+        bg: BackgroundTasks = BackgroundTasks(),
+        current_user: User = Depends(PermissionChecker(["agent:deploy"])),
+        db: AsyncSession = Depends(get_db),
+):
+    """Deploy an agent by building its vector store."""
+    try:
+        config = load_agent_config(agent_name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+    bg.add_task(embed_agent_data, config=config, db=db)
+    logger.info(f"User '{current_user.username}' triggered deployment for agent '{agent_name}'.")
+    return {"status": "deployment started"}
+
+
+@router.delete("/{agent_name}/deploy", status_code=status.HTTP_202_ACCEPTED)
+async def undeploy_agent_by_name(
+        agent_name: str,
+        current_user: User = Depends(PermissionChecker(["agent:deploy"])),
+):
+    """Remove an agent's vector store to undeploy it."""
+    vectorstore_path = _VECTORSTORE_DIR / f"{agent_name}"
+    if not vectorstore_path.exists():
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' is not deployed.")
+    shutil.rmtree(vectorstore_path)
+    logger.info(f"User '{current_user.username}' undeployed agent '{agent_name}'.")
+    return {"status": "undeployed"}
+
+
 @router.get("/{agent_name}/inspection", response_model=AgentInspectionResponse,
             summary="Inspect agent config and data health")
 async def inspect_agent_api(

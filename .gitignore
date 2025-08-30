@@ -61,3 +61,8 @@ celerybeat-schedule
 /data/prepared_datasets/
 /data/raw_data/
 /data_prep_configs/
+
+# Frontend dependencies
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.vite/

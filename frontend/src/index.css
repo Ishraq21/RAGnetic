@@ -1,0 +1,65 @@
+:root {
+    --background-color: #121212;
+    --text-color: #e0e0e0;
+    --card-background: #1e1e1e;
+    --button-background: #635DFF;
+    --button-hover-background: #5141d4;
+    --border-color: #333333;
+    --muted-text: #888888;
+    --accent-color: #635DFF;
+    --success-color: #28a745;
+    --error-color: #dc3545;
+    --sidebar-hover-bg: #2a2a2a;
+    --futuristic-glow: 0 0 8px -2px var(--accent-color);
+    --link-color: #8AB4F8;
+    --link-hover-color: #A8C7FA;
+    --link-visited-color: #9AB0FF;
+}
+
+body {
+    margin: 0;
+    background-color: var(--background-color);
+    color: var(--text-color);
+    font-family: Arial, sans-serif;
+}
+
+.sidebar {
+    width: 240px;
+    background-color: var(--card-background);
+    color: var(--text-color);
+    height: 100vh;
+    position: fixed;
+    display: flex;
+    flex-direction: column;
+    padding: 1rem;
+}
+
+.sidebar a {
+    color: var(--text-color);
+    text-decoration: none;
+    margin: 0.5rem 0;
+    padding: 0.5rem;
+    border-radius: 4px;
+}
+
+.sidebar a:hover {
+    background-color: var(--sidebar-hover-bg);
+}
+
+.content {
+    margin-left: 240px;
+    padding: 1rem;
+}
+
+button {
+    background-color: var(--button-background);
+    color: var(--text-color);
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+button:hover {
+    background-color: var(--button-hover-background);
+}
