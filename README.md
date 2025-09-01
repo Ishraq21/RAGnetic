@@ -4,7 +4,7 @@
 
 RAGnetic is an open-source, highly configurable, compliance-first AI framework for building and deploying production-ready agents and multi-step workflows. It offers full control at every layer, from data ingestion and vector embeddings to retrieval pipelines, benchmarking, and deployment with no infrastrucutre overhead. RAGnetic provides YAML for developers who need infra-as-code and automation, and a GUI for business users who need visibility and management without coding. Both share the same backend, enabling seamless collaboration.
 
-One of RAGnetic’s core philosophies is to give organizations complete ownership of their on-premise AI while eliminating infrastructure overhead and reducing development time and cost. 
+One of RAGnetic’s core philosophies is to give developers and organizations complete ownership of their on-premise AI while eliminating infrastructure overhead and reducing development time and cost. 
 
 > 🚧 **Work in Progress:** This documentation is under active development. More tutorials, guides, and official documentation website are coming soon!
 > 
