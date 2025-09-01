@@ -2,9 +2,9 @@
 <img width="20388" height="5692" alt="RAGnetic Logo" src="https://github.com/user-attachments/assets/92e1f139-9acb-43f3-9072-02d7f5336663" />
 
 
-RAGnetic is an open-source framework for building and deploying production-ready AI agents and complex, multi-step workflows. It provides a plug-and-play solution for creating agents that leverage your organization’s internal knowledge base through Retrieval Augmented Generation (RAG), LangGraph pipelines, and seamlessly integrate custom fine-tuned models via LoRA (PEFT) or full-model training.
+RAGnetic is an open-source, highly configurable, compliance-first AI framework for building and deploying production-ready agents and multi-step workflows. It offers full control at every layer, from data ingestion and vector embeddings to retrieval pipelines, benchmarking, and deployment with no infrastrucutre overhead. RAGnetic provides YAML for developers who need infra-as-code and automation, and a GUI for business users who need visibility and management without coding. Both share the same backend, enabling seamless collaboration.
 
-RAGnetic’s core philosophy is to enable organizations to embed, analyze and interact with their own code, infrastructure, data, and their docs. It’s a local-first, vendor-agnostic platform that lets you deploy private AI agents trained on everything inside your company, without lock-in. With built-in support for LoRA adapters and Hugging Face fine-tuning pipelines, you can quickly specialize models on proprietary data to meet your unique compliance, accuracy, and performance needs.
+RAGnetic’s philosophy is to give organizations complete ownership of their AI. It allows teams to embed, analyze, and interact with their own code, infrastructure, data, and documentation in a local-first, vendor-agnostic environment. Free from lock-in, companies can deploy private agents trained entirely on internal knowledge. With built-in support for LoRA adapters and Hugging Face fine-tuning pipelines, RAGnetic makes it easy to adapt models to proprietary data, aligning with each organization’s unique compliance, accuracy, and performance requirements.
 
 > 🚧 **Work in Progress:** This documentation is under active development. More tutorials, guides, and official documentation website are coming soon!
 > 
