@@ -61,3 +61,22 @@ celerybeat-schedule
 /data/prepared_datasets/
 /data/raw_data/
 /data_prep_configs/
+
+# Legacy/backup files
+requirements-old-bloated.txt.backup
+*.backup
+
+# Additional log patterns
+*.log
+logs/
+*.log.*
+
+# Temporary and cache files
+.cache/
+*.tmp
+*.temp
+temp/
+
+# Package testing artifacts
+.tox/
+.coverage.*

@@ -14,97 +14,183 @@ authors = [
 ]
 
 dependencies = [
-  "alembic",
-  "asyncpg",
-  "apscheduler",
-  "arxiv",
-  "beautifulsoup4",
-  "certifi",
-  "fastapi",
-  "datasets",
-  "google-api-python-client",
-  "google-auth-httplib2",
-  "google-auth-oauthlib",
-  "GitPython",
-  "gunicorn",
-  "ollama",
-  "langchain",
-  "langchain-community",
-  "langchain-google-genai",
-  "langchain-huggingface",
-  "langchain-openai",
-  "langchain-ollama",
-  "langchain_chroma",
-  "langchain_googledrive",
-  "langchain-mongodb",
-  "langchain-pinecone",
-  "langchain-qdrant",
-  "langchain-anthropic",
-  "llama-index",
-  "llama-index-embeddings-langchain",
-  "langgraph",
-  "pymysql",
-  "nbformat",
-  "pandas",
-  "PyMuPDF",
-  "python-multipart",
-  "psycopg2-binary",
-  "python-docx",
-  "python-dotenv",
-  "pyyaml",
-  "requests",
-  "sentence-transformers",
-  "sqlalchemy",
-  "rank_bm25",
-  "trafilatura",
-  "typer[all]",
-  "uvicorn[standard]",
-  "watchdog",
-  "chromadb",
-  "qdrant-client",
-  "pinecone",
-  "pymongo",
-  "redis",
-  "pytest",
-  "pytest-mock",
-  "pydantic[email]",
-  "tiktoken",
-  "pyarrow",
-  "langgraph-checkpoint-postgres",
-  "RestrictedPython",
-  "python-hcl2",
-  "sql-metadata",
-  "lark",
-  "sqlalchemy-celery-beat",
-  "transformers",
-  "fsspec",
-  "accelerate",
-  "peft",
-  "s3fs",
-  "trl",
-  "tensorboard",
-  "huggingface-hub>=0.34.0",
-  "filetype>=1.2.0",
+  # Core web framework and API
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.35.0",
+  "pydantic[email]>=2.11.0",
+  "python-multipart>=0.0.20",
+  "gunicorn>=23.0.0",
+  
+  # Database and ORM
+  "sqlalchemy>=2.0.0",
+  "alembic>=1.16.0",
+  "asyncpg>=0.30.0",
+  "psycopg2-binary>=2.9.0",
+  "langgraph-checkpoint-postgres>=2.0.0",
+  
+  # Task queue and scheduling
+  "celery>=5.5.0",
+  "redis>=6.2.0",
+  "apscheduler>=3.11.0",
+  "sqlalchemy-celery-beat>=0.8.4",
+  
+  # CLI and configuration
+  "typer[all]>=0.16.0",
+  "python-dotenv>=1.1.0",
+  "pyyaml>=6.0.0",
+  "requests>=2.32.4",
+  "aiofiles>=24.1.0",
+  
+  # Basic AI dependencies (minimal set)
+  "langchain>=0.3.26",
+  "langchain-core>=0.3.68",
+  "langchain-community>=0.3.27",
+  "langgraph>=0.5.2",
+  "tiktoken>=0.9.0",
   "numpy==1.26.4",
-  "python-json-logger",
-  "papermill",
+  
+  # Utilities
+  "python-json-logger>=3.3.0",
+  "watchdog>=6.0.0",
+  "RestrictedPython>=8.0",
+  "sql-metadata>=2.17.0",
+  "lark>=1.2.2",
+  "python-hcl2>=7.3.0",
 ]
 
 [project.optional-dependencies]
-cpu = [
-  "torch==2.7.1",
-  "faiss-cpu"
+# AI and ML providers
+ai = [
+  "langchain-openai>=0.3.27",
+  "langchain-anthropic>=0.3.15", 
+  "langchain-google-genai>=2.1.7",
+  "langchain-ollama>=0.3.3",
+  "langchain-huggingface>=0.3.0",
+  "openai>=1.95.0",
+  "anthropic>=0.55.0",
+  "sentence-transformers>=5.0.0",
+  "transformers>=4.54.0",
+  "huggingface-hub>=0.34.0",
+  "pandas>=2.2.3",
 ]
 
+# Vector stores (user can pick one or more)
+vectorstores = [
+  "chromadb>=1.0.15",
+  "langchain-chroma>=0.2.4",
+  "pinecone>=7.3.0",
+  "langchain-pinecone>=0.2.8",
+  "qdrant-client>=1.14.3",
+  "langchain-qdrant>=0.2.0",
+  "langchain-mongodb>=0.6.2",
+  "pymongo>=4.13.2",
+  "rank-bm25>=0.2.2",
+  "faiss-cpu>=1.11.0",
+]
+
+# Data processing and ingestion
+data = [
+  "beautifulsoup4>=4.13.0",
+  "PyMuPDF>=1.26.0",
+  "python-docx>=1.2.0",
+  "datasets>=4.0.0",
+  "pyarrow>=20.0.0",
+  "trafilatura>=2.0.0",
+  "unstructured>=0.17.0",
+  "arxiv>=2.2.0",
+  "GitPython>=3.1.44",
+  "google-api-python-client>=2.173.0",
+  "google-auth-oauthlib>=1.2.2",
+  "langchain-googledrive>=0.3.35",
+  "filetype>=1.2.0",
+]
+
+# Fine-tuning and training
+training = [
+  "torch>=2.7.1",
+  "accelerate>=1.9.0",
+  "peft>=0.16.0",
+  "trl>=0.20.0",
+  "tensorboard>=2.20.0",
+  "datasets>=4.0.0",
+  "s3fs>=2025.3.0",
+  "fsspec>=2025.3.0",
+]
+
+# GPU support for training (CUDA)
 gpu = [
-  "torch==2.7.1+cu121",
- #"bitsandbytes==0.43.1",
-  "faiss-gpu"
+  "torch>=2.7.1",
+  "bitsandbytes>=0.42.0",
+  "faiss-gpu>=1.11.0",
 ]
 
+# Apple Silicon support
 mps = [
-  "torch==2.7.1",
-  "faiss-cpu"
+  "torch>=2.7.1",
+  "faiss-cpu>=1.11.0",
+]
+
+# CPU-only (lighter install)
+cpu = [
+  "torch>=2.7.1",
+  "faiss-cpu>=1.11.0",
+]
+
+# Development tools
+dev = [
+  "pytest>=8.4.0",
+  "pytest-asyncio>=0.26.0",
+  "pytest-mock>=3.14.0",
+  "pytest-benchmark>=5.1.0",
+  "black>=25.1.0",
+  "mypy>=1.17.0",
+  "ruff>=0.12.0",
+  "papermill>=2.6.0",
+]
+
+# All optional dependencies (for comprehensive install)
+all = [
+  "beautifulsoup4>=4.13.0",
+  "PyMuPDF>=1.26.0", 
+  "python-docx>=1.2.0",
+  "datasets>=4.0.0",
+  "pyarrow>=20.0.0",
+  "trafilatura>=2.0.0",
+  "unstructured>=0.17.0",
+  "arxiv>=2.2.0",
+  "GitPython>=3.1.44",
+  "google-api-python-client>=2.173.0",
+  "google-auth-oauthlib>=1.2.2",
+  "langchain-googledrive>=0.3.35",
+  "filetype>=1.2.0",
+  "langchain-openai>=0.3.27",
+  "langchain-anthropic>=0.3.15", 
+  "langchain-google-genai>=2.1.7",
+  "langchain-ollama>=0.3.3",
+  "langchain-huggingface>=0.3.0",
+  "openai>=1.95.0",
+  "anthropic>=0.55.0",
+  "sentence-transformers>=5.0.0",
+  "transformers>=4.54.0",
+  "huggingface-hub>=0.34.0",
+  "pandas>=2.2.3",
+  "chromadb>=1.0.15",
+  "langchain-chroma>=0.2.4",
+  "pinecone>=7.3.0",
+  "langchain-pinecone>=0.2.8",
+  "qdrant-client>=1.14.3",
+  "langchain-qdrant>=0.2.0",
+  "langchain-mongodb>=0.6.2",
+  "pymongo>=4.13.2",
+  "rank-bm25>=0.2.2",
+  "faiss-cpu>=1.11.0",
+  "torch>=2.7.1",
+  "accelerate>=1.9.0",
+  "peft>=0.16.0",
+  "trl>=0.20.0",
+  "tensorboard>=2.20.0",
+  "s3fs>=2025.3.0",
+  "fsspec>=2025.3.0",
 ]
 
 [project.scripts]

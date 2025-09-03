@@ -1,0 +1,12 @@
+# Minimal installation for basic RAGnetic functionality
+# Install with: pip install ragnetic
+
+# This file lists the absolute minimum dependencies
+# Most users should install with: pip install ragnetic[ai,vectorstores]
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.35.0
+pydantic[email]>=2.11.0
+sqlalchemy>=2.0.0
+typer[all]>=0.16.0
+python-dotenv>=1.1.0

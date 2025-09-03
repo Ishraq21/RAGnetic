@@ -129,68 +129,63 @@ RAGnetic is built with security, compliance, and scalability in mind, making it 
 
 ## Getting Started
 
+### Quick Installation
+
+```bash
+# Recommended: Install with AI features
+pip install ragnetic[ai,vectorstores]
+
+# Or basic installation only
+pip install ragnetic
+```
+
+**📖 For detailed installation options, see [INSTALL.md](INSTALL.md)**
+
+### 5-Minute Setup
+
+```bash
+# 1. Install RAGnetic
+pip install ragnetic[ai,vectorstores]
+
+# 2. Initialize project
+ragnetic init
+
+# 3. Set API keys (interactive)
+ragnetic set-api-key
+
+# 4. Create admin user
+ragnetic user create admin --superuser
+
+# 5. Start server
+ragnetic start-server
+```
+
+Visit `http://localhost:8000` to access the web interface!
+
 ### Prerequisites
 
-- Python 3.9 or higher
-- <code>git</code>
-- <code>redis</code>
-- Operating System: RAGnetic supports Linux, macOS, and Windows. Specific
-  hardware limitations (e.g., <code>bitsandbytes</code> requires NVIDIA CUDA)
+- **Python 3.9+** 
+- **Redis** (for task queue)
+- **API Keys** for AI providers (OpenAI, Anthropic, etc.)
 
+### Installation Options
 
+| Install Command | Use Case | Dependencies |
+|---|---|---|
+| `pip install ragnetic` | Basic functionality | 31 core packages |
+| `pip install ragnetic[ai]` | + AI providers | + LangChain, OpenAI, etc. |
+| `pip install ragnetic[vectorstores]` | + Vector databases | + ChromaDB, Pinecone, etc. |
+| `pip install ragnetic[all]` | Everything | All features included |
 
-1.  **Clone the Repository:**
-    ```bash
-    git clone https://github.com/your-repo/ragnetic.git
-    cd ragnetic
-    ```
+### System Requirements
 
-2.  **Install Dependencies:**
-    ```bash
-    python3 -m venv .venv
-    source .venv/bin/activate    # macOS/Linux
-    .venv\Scripts\activate       # Windows
-    pip install . -e
-    
-    ```
-    To enable GPU acceleration for fine-tuning or embeddings, install the optional gpu or mps
-    dependencies that match your hardware.
-
-    For NVIDIA GPUs: <code>pip install ".[gpu]"</code>
-
-    For Apple Silicon (M-series) GPUs: <code>pip install ".[mps]"</code>
-
-3.  **Initialize the Project:**
-    This command creates the necessary project structure and sets up a default database. RAGnetic ships with a pre-migrated SQLite database, so no further database setup is required for the default experience.
-    ```bash
-    ragnetic init
-    ```
-4. **Set your API Keys:**
-   The framework needs API keys to use external services. Use the interactive <code>set-api-key</code> command to set a master administrative key, which is used for initial setup and emergency access.
-   ```bash
-    ragnetic set-api-key
-   ```
-5. **Create an Admin User:**
-   Create an Admin User:
-   Before you can log in, you need to create a user account. Use the master key you just set to create a user with superuser privileges (the equivalent of an admin user). You'll be prompted to set a password.
-   ```bash
-   ragnetic user create my_admin_user --superuser
-   ```
-   The <code>ragnetic set-server-key</code> command (we saw on the previous step) creates a master API key which is a global key with full access. It should be reserved for administrative and emergency situations.
-
-6. **Start the Server**:
-   Start the RAGnetic server, Celery worker, and scheduler in a single command.
-   ```bash
-    ragnetic start-server
-   ```
-You can use the <code>--reload</code> flag for development. Remove it for production.
-
-7. **Access the Web UI:**
-   With the server running, navigate to http://127.0.0.1:8000 in your browser. You will be redirected to the login page.
-   Enter the username and password for the <code>my_admin_user</code> you created earlier to log in. You now have access to the full administrative web interface.
-
-**Note**:
-If you prefer to use a different database, such as PostgreSQL, you can use the <code>ragnetic configure</code> command to set it up. This will overwrite the default SQLite database file. After configuration, run the <code>ragnetic migrate</code> command to apply the database schema to your new database.
+| Component | Requirement |
+|---|---|
+| **Python** | 3.9, 3.10, 3.11, 3.12 |
+| **Redis** | Any recent version |
+| **Database** | SQLite (default) or PostgreSQL |
+| **Memory** | 4GB+ recommended |
+| **GPU** | Optional (NVIDIA/Apple Silicon) |
 
 <img width="3432" height="1343" alt="RAGnetic New Chat Screen" src="https://github.com/user-attachments/assets/7077454d-44a0-4eac-a8f0-5d7cb09a8cbe" />
 

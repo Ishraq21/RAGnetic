@@ -1,0 +1,10 @@
+# Vector store dependencies - optional based on user choice
+chromadb>=1.0.15
+langchain-chroma>=0.2.4
+pinecone>=7.3.0
+langchain-pinecone>=0.2.8
+qdrant-client>=1.14.3
+langchain-qdrant>=0.2.0
+langchain-mongodb>=0.6.2
+pymongo>=4.13.2
+rank-bm25>=0.2.2
