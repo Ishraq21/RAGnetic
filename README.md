@@ -132,10 +132,7 @@ RAGnetic is built with security, compliance, and scalability in mind, making it 
 ### Quick Installation
 
 ```bash
-# Recommended: Install with AI features
-pip install ragnetic[ai,vectorstores]
-
-# Or basic installation only
+# Complete installation - everything included
 pip install ragnetic
 ```
 
@@ -144,8 +141,8 @@ pip install ragnetic
 ### 5-Minute Setup
 
 ```bash
-# 1. Install RAGnetic
-pip install ragnetic[ai,vectorstores]
+# 1. Install RAGnetic (includes all AI features)
+pip install ragnetic
 
 # 2. Initialize project
 ragnetic init
@@ -170,12 +167,11 @@ Visit `http://localhost:8000` to access the web interface!
 
 ### Installation Options
 
-| Install Command | Use Case | Dependencies |
+| Install Command | Use Case | What's Included |
 |---|---|---|
-| `pip install ragnetic` | Basic functionality | 31 core packages |
-| `pip install ragnetic[ai]` | + AI providers | + LangChain, OpenAI, etc. |
-| `pip install ragnetic[vectorstores]` | + Vector databases | + ChromaDB, Pinecone, etc. |
-| `pip install ragnetic[all]` | Everything | All features included |
+| `pip install ragnetic` | Complete functionality | All AI providers, vector stores, document processing |
+| `pip install ragnetic[training]` | + Model fine-tuning | + PyTorch, PEFT, LoRA adapters |
+| `pip install ragnetic[gpu]` | + GPU acceleration | + CUDA support for training |
 
 ### System Requirements
 
