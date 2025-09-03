@@ -41,26 +41,17 @@ dependencies = [
   "requests>=2.32.4",
   "aiofiles>=24.1.0",
   
-  # Basic AI dependencies (minimal set)
+  # AI and ML - Everything included by default
   "langchain>=0.3.26",
   "langchain-core>=0.3.68",
   "langchain-community>=0.3.27",
+  "langchain-text-splitters>=0.3.8",
   "langgraph>=0.5.2",
   "tiktoken>=0.9.0",
   "numpy==1.26.4",
+  "pandas>=2.2.3",
   
-  # Utilities
-  "python-json-logger>=3.3.0",
-  "watchdog>=6.0.0",
-  "RestrictedPython>=8.0",
-  "sql-metadata>=2.17.0",
-  "lark>=1.2.2",
-  "python-hcl2>=7.3.0",
-]
-
-[project.optional-dependencies]
-# AI and ML providers
-ai = [
+  # AI Providers - All major providers included
   "langchain-openai>=0.3.27",
   "langchain-anthropic>=0.3.15", 
   "langchain-google-genai>=2.1.7",
@@ -71,11 +62,8 @@ ai = [
   "sentence-transformers>=5.0.0",
   "transformers>=4.54.0",
   "huggingface-hub>=0.34.0",
-  "pandas>=2.2.3",
-]
-
-# Vector stores (user can pick one or more)
-vectorstores = [
+  
+  # Vector stores - All major vector DBs included
   "chromadb>=1.0.15",
   "langchain-chroma>=0.2.4",
   "pinecone>=7.3.0",
@@ -86,12 +74,10 @@ vectorstores = [
   "pymongo>=4.13.2",
   "rank-bm25>=0.2.2",
   "faiss-cpu>=1.11.0",
-]
-
-# Data processing and ingestion
-data = [
+  
+  # Data processing - All document types supported
   "beautifulsoup4>=4.13.0",
-  "PyMuPDF>=1.26.0",
+  "PyMuPDF>=1.26.0", 
   "python-docx>=1.2.0",
   "datasets>=4.0.0",
   "pyarrow>=20.0.0",
@@ -103,16 +89,24 @@ data = [
   "google-auth-oauthlib>=1.2.2",
   "langchain-googledrive>=0.3.35",
   "filetype>=1.2.0",
+  
+  # Utilities
+  "python-json-logger>=3.3.0",
+  "watchdog>=6.0.0",
+  "RestrictedPython>=8.0",
+  "sql-metadata>=2.17.0",
+  "lark>=1.2.2",
+  "python-hcl2>=7.3.0",
 ]
 
-# Fine-tuning and training
+[project.optional-dependencies]
+# Fine-tuning and training (only optional feature)
 training = [
   "torch>=2.7.1",
   "accelerate>=1.9.0",
   "peft>=0.16.0",
   "trl>=0.20.0",
   "tensorboard>=2.20.0",
-  "datasets>=4.0.0",
   "s3fs>=2025.3.0",
   "fsspec>=2025.3.0",
 ]

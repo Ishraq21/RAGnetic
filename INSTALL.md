@@ -2,63 +2,50 @@
 
 ## Quick Start
 
-### 1. Basic Installation
+### 1. Complete Installation (Recommended)
 ```bash
 pip install ragnetic
 ```
 
-This installs RAGnetic with minimal dependencies (31 core packages) for basic functionality.
+This installs RAGnetic with **everything included**:
+- ✅ All AI providers (OpenAI, Anthropic, Google, Ollama)
+- ✅ All vector stores (ChromaDB, Pinecone, Qdrant, FAISS)
+- ✅ Document processing (PDF, DOCX, web scraping)
+- ✅ Web UI, API, CLI, workflows
+- ✅ Ready to use immediately
 
-### 2. Recommended Installation (with AI features)
+### 2. With Model Training
 ```bash
-pip install ragnetic[ai,vectorstores]
+pip install ragnetic[training]
 ```
 
-This includes AI providers (OpenAI, Anthropic, etc.) and vector store support.
+Adds fine-tuning capabilities (PyTorch, PEFT, LoRA).
 
-### 3. Full Installation
+### 3. With GPU Support
 ```bash
-pip install ragnetic[all]
+pip install ragnetic[gpu]
 ```
 
-Includes all optional features: AI, vector stores, data processing, and development tools.
+For CUDA acceleration during training.
 
 ## Installation Options
 
-### Core Features Only
+### Complete Functionality (Default)
 ```bash
 pip install ragnetic
-# 31 dependencies - FastAPI, SQLAlchemy, basic CLI
-```
-
-### AI & Machine Learning
-```bash
-pip install ragnetic[ai]
-# Adds: langchain, openai, anthropic, transformers
-```
-
-### Vector Stores
-```bash
-pip install ragnetic[vectorstores]  
-# Adds: chromadb, pinecone, qdrant, faiss
-```
-
-### Data Processing
-```bash
-pip install ragnetic[data]
-# Adds: pdf parsing, document processing, web scraping
+# Everything included - AI providers, vector stores, document processing
 ```
 
 ### Model Training
 ```bash
-pip install ragnetic[training,gpu]
-# Adds: torch, peft, accelerate, bitsandbytes
+pip install ragnetic[training]
+# Adds: torch, peft, accelerate, tensorboard
 ```
 
-### Development
+### GPU Acceleration
 ```bash
-pip install ragnetic[dev]
-# Adds: pytest, black, mypy, ruff
+pip install ragnetic[gpu]
+# Adds: CUDA support, bitsandbytes for training
 ```
 
 ## Hardware-Specific
