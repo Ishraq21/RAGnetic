@@ -8,11 +8,12 @@ pip install ragnetic
 ```
 
 This installs RAGnetic with **everything included**:
-- ✅ All AI providers (OpenAI, Anthropic, Google, Ollama)
-- ✅ All vector stores (ChromaDB, Pinecone, Qdrant, FAISS)
-- ✅ Document processing (PDF, DOCX, web scraping)
-- ✅ Web UI, API, CLI, workflows
-- ✅ Ready to use immediately
+
+- All AI providers (OpenAI, Anthropic, Google, Ollama)
+- All vector stores (ChromaDB, Pinecone, Qdrant, FAISS)
+- Document processing (PDF, DOCX, web scraping)
+- Web UI, API, CLI, workflows
+- Ready to use immediately
 
 ### 2. With Model Training
 ```bash
