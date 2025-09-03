@@ -1,0 +1,14 @@
+# Data processing dependencies - for various file formats
+beautifulsoup4>=4.13.0
+PyMuPDF>=1.26.0
+python-docx>=1.2.0
+datasets>=4.0.0
+pyarrow>=20.0.0
+trafilatura>=2.0.0
+unstructured>=0.17.0
+arxiv>=2.2.0
+GitPython>=3.1.44
+google-api-python-client>=2.173.0
+google-auth-oauthlib>=1.2.2
+langchain-googledrive>=0.3.35
+filetype>=1.2.0

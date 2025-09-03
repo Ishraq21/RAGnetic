@@ -1,0 +1,8 @@
+# Fine-tuning and training dependencies - optional for model training
+torch>=2.7.1
+accelerate>=1.9.0
+peft>=0.16.0
+trl>=0.20.0
+tensorboard>=2.20.0
+bitsandbytes>=0.42.0
+datasets>=4.0.0

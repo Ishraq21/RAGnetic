@@ -1,0 +1,9 @@
+# Development dependencies - testing, linting, etc.
+pytest>=8.4.0
+pytest-asyncio>=0.26.0
+pytest-mock>=3.14.0
+pytest-benchmark>=5.1.0
+black>=25.1.0
+mypy>=1.17.0
+ruff>=0.12.0
+papermill>=2.6.0
