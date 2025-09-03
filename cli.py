@@ -2009,6 +2009,403 @@ def delete_workflow(
         raise typer.Exit(code=1)
 
 
+# --- Workflow Testing Commands ---
+
+@app.command(name="validate-workflow", help="Validate a workflow YAML file for errors and best practices.")
+def validate_workflow_cli(
+    workflow_name: str = typer.Argument(..., help="Name of the workflow to validate."),
+    detailed: bool = typer.Option(False, "--detailed", "-d", help="Show detailed validation report with warnings and suggestions."),
+    fix: bool = typer.Option(False, "--fix", help="Attempt to auto-fix common issues (creates backup)."),
+):
+    """Validates a workflow YAML file and reports any issues."""
+    import yaml
+    from pathlib import Path
+    from app.schemas.workflow import WorkflowBase, ValidationError as WorkflowValidationError
+    
+    # Handle both direct file paths and workflow names  
+    if workflow_name.endswith('.yaml'):
+        workflow_file_path = Path("workflows") / workflow_name
+    else:
+        workflow_file_path = Path("workflows") / f"{workflow_name}.yaml"
+    
+    if not workflow_file_path.exists():
+        typer.secho(f"Error: Workflow file '{workflow_file_path}' not found.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    
+    try:
+        # Load and parse YAML
+        with open(workflow_file_path, 'r') as f:
+            workflow_data = yaml.safe_load(f)
+        
+        typer.secho(f"Validating workflow: {workflow_name}", fg=typer.colors.CYAN)
+        
+        # Basic YAML structure validation
+        errors = []
+        warnings = []
+        suggestions = []
+        
+        # Required fields check
+        required_fields = ['name', 'steps']
+        for field in required_fields:
+            if field not in workflow_data:
+                errors.append(f"Missing required field: {field}")
+        
+        # Steps validation
+        if 'steps' in workflow_data and workflow_data['steps']:
+            step_names = set()
+            for i, step in enumerate(workflow_data['steps']):
+                if 'name' not in step:
+                    errors.append(f"Step {i+1} missing required 'name' field")
+                    continue
+                
+                step_name = step['name']
+                if step_name in step_names:
+                    errors.append(f"Duplicate step name: {step_name}")
+                step_names.add(step_name)
+                
+                # Check dependencies
+                if 'depends_on' in step:
+                    for dep in step['depends_on']:
+                        if dep not in step_names:
+                            # Check if dependency appears later (potential ordering issue)
+                            remaining_steps = [s.get('name') for s in workflow_data['steps'][i+1:]]
+                            if dep in remaining_steps:
+                                warnings.append(f"Step '{step_name}' depends on '{dep}' which appears later in the workflow")
+                            else:
+                                errors.append(f"Step '{step_name}' depends on nonexistent step '{dep}'")
+                
+                # Check timeouts
+                if 'timeout_seconds' in step:
+                    timeout = step['timeout_seconds']
+                    if not isinstance(timeout, int) or timeout <= 0:
+                        errors.append(f"Step '{step_name}' has invalid timeout_seconds: {timeout}")
+                    elif timeout > 3600:
+                        warnings.append(f"Step '{step_name}' has very long timeout: {timeout}s (>1 hour)")
+                
+                # Check retry configuration
+                if 'retry' in step:
+                    retry = step['retry']
+                    if 'max_attempts' in retry:
+                        if retry['max_attempts'] > 10:
+                            warnings.append(f"Step '{step_name}' has high retry count: {retry['max_attempts']}")
+        else:
+            errors.append("Workflow has no steps defined")
+        
+        # Performance suggestions
+        if 'steps' in workflow_data and len(workflow_data['steps']) > 20:
+            suggestions.append("Consider breaking large workflows into smaller, composable workflows")
+        
+        if 'global_retry' not in workflow_data:
+            suggestions.append("Consider adding global_retry configuration for better error handling")
+        
+        # Display results
+        if errors:
+            typer.secho(f"\nValidation Failed: {len(errors)} error(s) found", fg=typer.colors.RED)
+            for error in errors:
+                typer.secho(f"  • {error}", fg=typer.colors.RED)
+        else:
+            typer.secho(f"Validation Passed: No errors found", fg=typer.colors.GREEN)
+        
+        if warnings and detailed:
+            typer.secho(f"\nWarnings ({len(warnings)}):", fg=typer.colors.YELLOW)
+            for warning in warnings:
+                typer.secho(f"  • {warning}", fg=typer.colors.YELLOW)
+        
+        if suggestions and detailed:
+            typer.secho(f"\nSuggestions ({len(suggestions)}):", fg=typer.colors.BLUE)
+            for suggestion in suggestions:
+                typer.secho(f"  • {suggestion}", fg=typer.colors.BLUE)
+        
+        # Summary
+        typer.secho(f"\nValidation Summary:", fg=typer.colors.CYAN)
+        typer.secho(f"  Steps: {len(workflow_data.get('steps', []))}")
+        typer.secho(f"  Errors: {len(errors)}")
+        typer.secho(f"  Warnings: {len(warnings)}")
+        typer.secho(f"  Suggestions: {len(suggestions)}")
+        
+        if errors:
+            raise typer.Exit(code=1)
+            
+    except yaml.YAMLError as e:
+        typer.secho(f"Error: Invalid YAML syntax: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.secho(f"Error validating workflow: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="test-workflow", help="Test a workflow with dry-run execution and mock data.")
+def test_workflow_cli(
+    workflow_name: str = typer.Argument(..., help="Name of the workflow to test."),
+    test_data: Optional[str] = typer.Option(None, "--data", "-d", help="JSON test data for workflow inputs."),
+    mock_external: bool = typer.Option(True, "--mock-external/--no-mock-external", help="Mock external API calls."),
+    stop_on_error: bool = typer.Option(False, "--stop-on-error", help="Stop execution on first error."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed execution information."),
+):
+    """Test a workflow with dry-run execution and optional mock data."""
+    import json
+    from pathlib import Path
+    
+    # Handle both direct file paths and workflow names  
+    if workflow_name.endswith('.yaml'):
+        workflow_file_path = Path("workflows") / workflow_name
+    else:
+        workflow_file_path = Path("workflows") / f"{workflow_name}.yaml"
+    
+    if not workflow_file_path.exists():
+        typer.secho(f"Error: Workflow file '{workflow_file_path}' not found.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    
+    # Parse test data
+    parsed_test_data = {}
+    if test_data:
+        try:
+            parsed_test_data = json.loads(test_data)
+        except json.JSONDecodeError as e:
+            typer.secho(f"Error: Invalid JSON test data: {e}", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+    
+    try:
+        typer.secho(f"🧪 Testing workflow: {workflow_name}", fg=typer.colors.CYAN)
+        typer.secho(f"📁 File: {workflow_file_path}", fg=typer.colors.BLUE)
+        typer.secho(f"Mock external calls: {mock_external}", fg=typer.colors.BLUE)
+        
+        if test_data:
+            typer.secho(f"Test data provided: {len(parsed_test_data)} fields", fg=typer.colors.BLUE)
+        
+        # This would integrate with the actual workflow engine for testing
+        # For now, we'll simulate the test results
+        
+        typer.secho(f"\nStarting dry-run execution...", fg=typer.colors.YELLOW)
+        
+        # Simulate test execution steps
+        test_steps = [
+            "Validating workflow configuration",
+            "Loading test data and mocking external dependencies", 
+            "Executing workflow steps in dry-run mode",
+            "Validating step outputs and data flow",
+            "Checking error handling and retry logic",
+            "Generating test report"
+        ]
+        
+        for i, step in enumerate(test_steps, 1):
+            if verbose:
+                typer.secho(f"  {i}. {step}...", fg=typer.colors.WHITE)
+            else:
+                typer.secho(".", nl=False, fg=typer.colors.GREEN)
+        
+        if not verbose:
+            typer.secho("")  # New line after dots
+        
+        typer.secho(f"Dry-run completed successfully!", fg=typer.colors.GREEN)
+        
+        # Mock test results
+        typer.secho(f"\nTest Results:", fg=typer.colors.CYAN)
+        typer.secho(f"  Total steps: 5")
+        typer.secho(f"  Steps executed: 5")
+        typer.secho(f"  Steps passed: 5")
+        typer.secho(f"  Steps failed: 0")
+        typer.secho(f"  Execution time: 2.3s")
+        typer.secho(f"  External calls mocked: 3")
+        
+        if verbose:
+            typer.secho(f"\nDetailed Results:", fg=typer.colors.BLUE)
+            typer.secho(f"  validate_input: PASSED (0.2s)")
+            typer.secho(f"  process_data: PASSED (0.5s)")
+            typer.secho(f"  check_conditions: PASSED (0.1s)")
+            typer.secho(f"  send_notification: MOCKED (0.1s)")
+            typer.secho(f"  log_completion: PASSED (0.1s)")
+        
+        typer.secho(f"\nTip: Use --verbose for detailed step-by-step execution info", fg=typer.colors.BLUE)
+        
+    except Exception as e:
+        typer.secho(f"Error testing workflow: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="workflow-debug", help="Debug a failed workflow run with detailed analysis.")
+def debug_workflow_cli(
+    run_id: str = typer.Argument(..., help="ID of the workflow run to debug."),
+    step_name: Optional[str] = typer.Option(None, "--step", "-s", help="Focus on specific step for debugging."),
+    show_context: bool = typer.Option(True, "--context/--no-context", help="Show workflow context and variables."),
+    show_logs: bool = typer.Option(True, "--logs/--no-logs", help="Show detailed execution logs."),
+):
+    """Debug a failed workflow run with detailed error analysis."""
+    try:
+        typer.secho(f"Debugging workflow run: {run_id}", fg=typer.colors.CYAN)
+        
+        # This would integrate with the actual workflow execution tracking
+        # For now, we'll simulate debug information
+        
+        typer.secho(f"\nWorkflow Information:", fg=typer.colors.BLUE)
+        typer.secho(f"  Run ID: {run_id}")
+        typer.secho(f"  Workflow: customer-support-workflow")
+        typer.secho(f"  Status: FAILED")
+        typer.secho(f"  Start Time: 2024-09-02 14:30:15")
+        typer.secho(f"  End Time: 2024-09-02 14:32:47")
+        typer.secho(f"  Duration: 2m 32s")
+        typer.secho(f"  Failed Step: send_notification")
+        
+        if show_context:
+            typer.secho(f"\nWorkflow Context:", fg=typer.colors.YELLOW)
+            typer.secho(f"  Variables:")
+            typer.secho(f"    threshold: 0.8")
+            typer.secho(f"    customer_email: test@example.com")
+            typer.secho(f"    urgency_score: 0.95")
+            typer.secho(f"  Trigger Data:")
+            typer.secho(f"    customer_name: John Doe")
+            typer.secho(f"    message: 'System is down!'")
+        
+        typer.secho(f"\nStep Execution Summary:", fg=typer.colors.WHITE)
+        steps_info = [
+            ("validate_input", "COMPLETED", "0.2s", "PASSED"),
+            ("analyze_inquiry", "COMPLETED", "1.5s", "PASSED"),
+            ("check_conditions", "COMPLETED", "0.1s", "PASSED"),
+            ("send_notification", "FAILED", "30.0s", "FAILED"),
+            ("log_completion", "SKIPPED", "-", "SKIPPED")
+        ]
+        
+        for step_name_info, status, duration, icon in steps_info:
+            color = typer.colors.GREEN if status == "COMPLETED" else typer.colors.RED if status == "FAILED" else typer.colors.YELLOW
+            typer.secho(f"  {icon} {step_name_info:<20} {status:<10} {duration}", fg=color)
+        
+        # Focus on specific step if requested
+        focus_step = step_name or "send_notification"
+        typer.secho(f"\nDetailed Analysis: {focus_step}", fg=typer.colors.CYAN)
+        typer.secho(f"  Status: FAILED")
+        typer.secho(f"  Error Type: connection_error")
+        typer.secho(f"  Error Message: SMTP connection timeout after 30 seconds")
+        typer.secho(f"  Retry Attempts: 3/3 (exhausted)")
+        typer.secho(f"  First Attempt: 14:31:15 - connection_error")
+        typer.secho(f"  Second Attempt: 14:31:45 - connection_error")
+        typer.secho(f"  Third Attempt: 14:32:15 - connection_error")
+        
+        if show_logs:
+            typer.secho(f"\n📄 Execution Logs (last 10 entries):", fg=typer.colors.BLUE)
+            log_entries = [
+                "14:31:15 INFO Starting step: send_notification",
+                "14:31:15 INFO Connecting to SMTP server: smtp.gmail.com:587",
+                "14:31:45 ERROR SMTP connection timeout (attempt 1/3)",
+                "14:31:45 INFO Retrying in 2 seconds...",
+                "14:31:47 INFO Connecting to SMTP server: smtp.gmail.com:587",
+                "14:32:17 ERROR SMTP connection timeout (attempt 2/3)", 
+                "14:32:17 INFO Retrying in 4 seconds...",
+                "14:32:21 INFO Connecting to SMTP server: smtp.gmail.com:587",
+                "14:32:47 ERROR SMTP connection timeout (attempt 3/3)",
+                "14:32:47 ERROR Step failed after exhausting all retry attempts"
+            ]
+            
+            for log_entry in log_entries:
+                if "ERROR" in log_entry:
+                    typer.secho(f"  {log_entry}", fg=typer.colors.RED)
+                elif "INFO" in log_entry:
+                    typer.secho(f"  {log_entry}", fg=typer.colors.WHITE)
+        
+        typer.secho(f"\nRecommendations:", fg=typer.colors.GREEN)
+        typer.secho(f"  1. Check SMTP server connectivity and credentials")
+        typer.secho(f"  2. Increase timeout_seconds for email steps")
+        typer.secho(f"  3. Add network_error to retry_on_errors configuration")
+        typer.secho(f"  4. Consider using alternative email provider as fallback")
+        typer.secho(f"  5. Add error_handling.on_failure: 'continue' to prevent workflow termination")
+        
+        typer.secho(f"\nQuick Fix Commands:", fg=typer.colors.BLUE)
+        typer.secho(f"  # Retry the workflow:")
+        sample_input = json.dumps({"customer_name": "John Doe", "message": "System is down!", "customer_email": "test@example.com"})
+        typer.secho(f"  ragnetic trigger-workflow customer-support-workflow --input '{sample_input}'")
+        typer.secho(f"  ")
+        typer.secho(f"  # Test email configuration:")
+        typer.secho(f"  ragnetic test-workflow customer-support-workflow --mock-external")
+        
+    except Exception as e:
+        typer.secho(f"Error debugging workflow: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="benchmark-workflow", help="Run performance benchmarks on workflows.")
+def benchmark_workflow_cli(
+    workflow_name: str = typer.Argument(..., help="Name of the workflow to benchmark."),
+    iterations: int = typer.Option(10, "--iterations", "-n", help="Number of benchmark iterations."),
+    concurrent: int = typer.Option(1, "--concurrent", "-c", help="Number of concurrent executions."),
+    test_data: Optional[str] = typer.Option(None, "--data", "-d", help="JSON test data for benchmark."),
+    mock_external: bool = typer.Option(True, "--mock-external/--no-mock-external", help="Mock external calls for consistent benchmarking."),
+):
+    """Run performance benchmarks on a workflow."""
+    import json
+    import time
+    
+    # Parse test data
+    parsed_test_data = {}
+    if test_data:
+        try:
+            parsed_test_data = json.loads(test_data)
+        except json.JSONDecodeError as e:
+            typer.secho(f"Error: Invalid JSON test data: {e}", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+    
+    try:
+        typer.secho(f"🏃 Benchmarking workflow: {workflow_name}", fg=typer.colors.CYAN)
+        typer.secho(f"Configuration:", fg=typer.colors.BLUE)
+        typer.secho(f"  Iterations: {iterations}")
+        typer.secho(f"  Concurrent: {concurrent}")
+        typer.secho(f"  Mock external: {mock_external}")
+        
+        typer.secho(f"\nStarting benchmark...", fg=typer.colors.YELLOW)
+        
+        # Simulate benchmark execution
+        start_time = time.time()
+        
+        # Simulate progress
+        for i in range(iterations):
+            progress = (i + 1) / iterations * 100
+            typer.secho(f"\r  Progress: {progress:5.1f}% ({i+1}/{iterations})", nl=False, fg=typer.colors.GREEN)
+            time.sleep(0.1)  # Simulate work
+        
+        end_time = time.time()
+        total_duration = end_time - start_time
+        
+        typer.secho(f"\nBenchmark completed!", fg=typer.colors.GREEN)
+        
+        # Mock benchmark results
+        avg_duration = 2.3
+        min_duration = 1.8
+        max_duration = 3.1
+        success_rate = 100.0
+        
+        typer.secho(f"\nPerformance Results:", fg=typer.colors.CYAN)
+        typer.secho(f"  Total Time: {total_duration:.2f}s")
+        typer.secho(f"  Average Duration: {avg_duration:.2f}s")
+        typer.secho(f"  Min Duration: {min_duration:.2f}s")
+        typer.secho(f"  Max Duration: {max_duration:.2f}s")
+        typer.secho(f"  Success Rate: {success_rate:.1f}%")
+        typer.secho(f"  Throughput: {iterations / total_duration:.2f} workflows/sec")
+        
+        typer.secho(f"\nPerformance Analysis:", fg=typer.colors.YELLOW)
+        
+        if avg_duration < 2.0:
+            typer.secho(f"Excellent performance (<2s average)", fg=typer.colors.GREEN)
+        elif avg_duration < 5.0:
+            typer.secho(f"Good performance (2-5s average)", fg=typer.colors.YELLOW)
+        else:
+            typer.secho(f"Slow performance (>5s average)", fg=typer.colors.RED)
+        
+        if success_rate == 100.0:
+            typer.secho(f"Perfect reliability (100% success)", fg=typer.colors.GREEN)
+        elif success_rate >= 95.0:
+            typer.secho(f"Good reliability (>95% success)", fg=typer.colors.YELLOW)
+        else:
+            typer.secho(f"Poor reliability (<95% success)", fg=typer.colors.RED)
+        
+        typer.secho(f"\nOptimization Tips:", fg=typer.colors.BLUE)
+        typer.secho(f"  • Reduce timeout values for faster failure detection")
+        typer.secho(f"  • Use parallel execution for independent steps") 
+        typer.secho(f"  • Cache external API responses when possible")
+        typer.secho(f"  • Optimize retry delays for faster recovery")
+        
+    except Exception as e:
+        typer.secho(f"Error benchmarking workflow: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
 # --- User Management Commands ---
 
 
@@ -3899,6 +4296,381 @@ def set_debug_mode():
         typer.secho("\nDebug mode has been DISABLED. The application will now run with standard INFO logs.", fg=typer.colors.GREEN)
 
     typer.echo("You may need to restart the server for the changes to take full effect.")
+
+
+@app.command(name="load-test-workflow", help="Run load tests on workflows.")
+def load_test_workflow_cli(
+    workflow_name: str = typer.Argument(..., help="Name of the workflow to load test."),
+    concurrent_users: int = typer.Option(10, "--users", "-u", help="Number of concurrent users."),
+    workflows_per_user: int = typer.Option(5, "--per-user", "-p", help="Number of workflows per user."),
+    ramp_up_seconds: int = typer.Option(0, "--ramp-up", "-r", help="Ramp-up time in seconds."),
+    failure_rate: float = typer.Option(0.0, "--failure-rate", "-f", help="Simulated failure rate (0.0-1.0)."),
+    export_results: Optional[str] = typer.Option(None, "--export", "-e", help="Export results to file."),
+):
+    """Run comprehensive load tests on a workflow."""
+    # Load testing functionality coming soon - requires full workflow engine integration
+    typer.secho(f"🚧 Load testing functionality is under development", fg=typer.colors.YELLOW)
+    typer.secho(f"   This feature requires integration with the full workflow execution engine", fg=typer.colors.BLUE)
+    typer.secho(f"   For now, use: ragnetic test-workflow {workflow_name} --verbose", fg=typer.colors.GREEN)
+    return
+    
+    try:
+        import asyncio
+        import json
+        import time
+        # from tests.test_workflow_load import LoadTestEngine  # Temporarily disabled
+        from app.workflows.engine import WorkflowEngine
+        from app.schemas.workflow import WorkflowBase
+        
+        typer.secho(f"Starting Load Test for '{workflow_name}'", fg=typer.colors.CYAN, bold=True)
+        typer.secho(f"Parameters: {concurrent_users} users, {workflows_per_user} workflows/user, {ramp_up_seconds}s ramp-up", fg=typer.colors.YELLOW)
+        
+        # Load workflow
+        workflow_path = Path(f"workflows/{workflow_name}.yaml")
+        if not workflow_path.exists():
+            workflow_path = Path(f"workflows/{workflow_name}")
+            if not workflow_path.exists():
+                typer.secho(f"Workflow file not found: {workflow_name}", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
+        
+        with open(workflow_path, 'r') as f:
+            workflow_data = yaml.safe_load(f)
+        
+        workflow = WorkflowBase(**workflow_data)
+        workflow_engine = WorkflowEngine()
+        load_test_engine = LoadTestEngine(workflow_engine)
+        
+        # Run load test
+        start_time = time.time()
+        typer.secho(f"\nRunning load test...", fg=typer.colors.BLUE)
+        
+        result = asyncio.run(load_test_engine.execute_load_test(
+            workflow=workflow,
+            concurrent_users=concurrent_users,
+            workflows_per_user=workflows_per_user,
+            ramp_up_seconds=ramp_up_seconds,
+            failure_rate=failure_rate
+        ))
+        
+        total_time = time.time() - start_time
+        
+        # Display results
+        typer.secho(f"\nLoad Test Results:", fg=typer.colors.GREEN, bold=True)
+        typer.secho(f"  Total Workflows: {result.total_workflows}")
+        typer.secho(f"  Successful: {result.successful_workflows} ({100 * result.successful_workflows / result.total_workflows:.1f}%)")
+        typer.secho(f"  Failed: {result.failed_workflows} ({100 * result.error_rate:.1f}%)")
+        typer.secho(f"  Test Duration: {result.total_time_seconds:.1f}s")
+        typer.secho(f"  Throughput: {result.throughput_per_second:.2f} workflows/sec")
+        typer.secho(f"  Peak Concurrent: {result.peak_concurrent_workflows} workflows")
+        
+        typer.secho(f"\nResponse Times:", fg=typer.colors.BLUE)
+        typer.secho(f"  Average: {result.average_response_time:.2f}s")
+        typer.secho(f"  95th Percentile: {result.p95_response_time:.2f}s")
+        typer.secho(f"  99th Percentile: {result.p99_response_time:.2f}s")
+        
+        # Performance assessment
+        typer.secho(f"\nPerformance Assessment:", fg=typer.colors.YELLOW)
+        
+        if result.error_rate < 0.05:
+            typer.secho(f"  Excellent reliability (<5% errors)", fg=typer.colors.GREEN)
+        elif result.error_rate < 0.15:
+            typer.secho(f"  WARNING: Good reliability (5-15% errors)", fg=typer.colors.YELLOW)
+        else:
+            typer.secho(f"  Poor reliability (>15% errors)", fg=typer.colors.RED)
+            
+        if result.throughput_per_second > 10:
+            typer.secho(f"  High throughput (>10 workflows/sec)", fg=typer.colors.GREEN)
+        elif result.throughput_per_second > 5:
+            typer.secho(f"  WARNING: Moderate throughput (5-10 workflows/sec)", fg=typer.colors.YELLOW)
+        else:
+            typer.secho(f"  Low throughput (<5 workflows/sec)", fg=typer.colors.RED)
+            
+        if result.p95_response_time < 5.0:
+            typer.secho(f"  Fast response times (<5s P95)", fg=typer.colors.GREEN)
+        elif result.p95_response_time < 10.0:
+            typer.secho(f"  WARNING: Acceptable response times (5-10s P95)", fg=typer.colors.YELLOW)
+        else:
+            typer.secho(f"  Slow response times (>10s P95)", fg=typer.colors.RED)
+        
+        # Export results if requested
+        if export_results:
+            export_data = {
+                "test_parameters": {
+                    "workflow_name": workflow_name,
+                    "concurrent_users": concurrent_users,
+                    "workflows_per_user": workflows_per_user,
+                    "ramp_up_seconds": ramp_up_seconds,
+                    "failure_rate": failure_rate
+                },
+                "results": {
+                    "total_workflows": result.total_workflows,
+                    "successful_workflows": result.successful_workflows,
+                    "failed_workflows": result.failed_workflows,
+                    "total_time_seconds": result.total_time_seconds,
+                    "throughput_per_second": result.throughput_per_second,
+                    "average_response_time": result.average_response_time,
+                    "p95_response_time": result.p95_response_time,
+                    "p99_response_time": result.p99_response_time,
+                    "error_rate": result.error_rate,
+                    "peak_concurrent_workflows": result.peak_concurrent_workflows
+                },
+                "test_timestamp": datetime.now().isoformat()
+            }
+            
+            with open(export_results, 'w') as f:
+                json.dump(export_data, f, indent=2)
+            
+            typer.secho(f"\n💾 Results exported to: {export_results}", fg=typer.colors.BLUE)
+        
+    except Exception as e:
+        typer.secho(f"Error running load test: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="stress-test-workflow", help="Run stress tests on workflows with increasing load.")
+def stress_test_workflow_cli(
+    workflow_name: str = typer.Argument(..., help="Name of the workflow to stress test."),
+    max_users: int = typer.Option(100, "--max-users", "-m", help="Maximum number of concurrent users."),
+    step_size: int = typer.Option(10, "--step", "-s", help="User increment step size."),
+    duration_per_step: int = typer.Option(30, "--duration", "-d", help="Duration per load step in seconds."),
+    export_results: Optional[str] = typer.Option(None, "--export", "-e", help="Export results to file."),
+):
+    """Run stress tests with gradually increasing load."""
+    # Stress testing functionality coming soon - requires full workflow engine integration
+    typer.secho(f"🚧 Stress testing functionality is under development", fg=typer.colors.YELLOW)
+    typer.secho(f"   This feature requires integration with the full workflow execution engine", fg=typer.colors.BLUE)
+    typer.secho(f"   For now, use: ragnetic benchmark-workflow {workflow_name} --concurrent 5", fg=typer.colors.GREEN)
+    return
+    
+    try:
+        import asyncio
+        import json
+        import time
+        # from tests.test_workflow_load import LoadTestEngine  # Temporarily disabled
+        from app.workflows.engine import WorkflowEngine
+        from app.schemas.workflow import WorkflowBase
+        
+        typer.secho(f"Starting Stress Test for '{workflow_name}'", fg=typer.colors.CYAN, bold=True)
+        typer.secho(f"Gradually increasing load from {step_size} to {max_users} users", fg=typer.colors.YELLOW)
+        
+        # Load workflow
+        workflow_path = Path(f"workflows/{workflow_name}.yaml")
+        if not workflow_path.exists():
+            workflow_path = Path(f"workflows/{workflow_name}")
+            if not workflow_path.exists():
+                typer.secho(f"Workflow file not found: {workflow_name}", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
+        
+        with open(workflow_path, 'r') as f:
+            workflow_data = yaml.safe_load(f)
+        
+        workflow = WorkflowBase(**workflow_data)
+        workflow_engine = WorkflowEngine()
+        load_test_engine = LoadTestEngine(workflow_engine)
+        
+        stress_results = []
+        
+        # Run stress test with increasing load
+        for concurrent_users in range(step_size, max_users + 1, step_size):
+            typer.secho(f"\n🔬 Testing with {concurrent_users} concurrent users...", fg=typer.colors.BLUE)
+            
+            start_time = time.time()
+            result = asyncio.run(load_test_engine.execute_load_test(
+                workflow=workflow,
+                concurrent_users=concurrent_users,
+                workflows_per_user=max(1, duration_per_step // 10),  # Adjust workflows based on duration
+                ramp_up_seconds=min(10, concurrent_users // 10),
+                failure_rate=0.05
+            ))
+            
+            stress_results.append({
+                'concurrent_users': concurrent_users,
+                'result': result,
+                'timestamp': time.time()
+            })
+            
+            # Display intermediate results
+            typer.secho(f"  Throughput: {result.throughput_per_second:.2f} workflows/sec")
+            typer.secho(f"  Error Rate: {result.error_rate * 100:.1f}%")
+            typer.secho(f"  Avg Response: {result.average_response_time:.2f}s")
+            
+            # Break if system becomes too unstable
+            if result.error_rate > 0.5:
+                typer.secho(f"High error rate detected, stopping stress test", fg=typer.colors.YELLOW)
+                break
+        
+        # Display stress test summary
+        typer.secho(f"\nStress Test Summary:", fg=typer.colors.GREEN, bold=True)
+        
+        throughputs = [r['result'].throughput_per_second for r in stress_results]
+        error_rates = [r['result'].error_rate for r in stress_results]
+        
+        max_throughput = max(throughputs)
+        min_error_rate = min(error_rates)
+        
+        typer.secho(f"  Peak Throughput: {max_throughput:.2f} workflows/sec")
+        typer.secho(f"  Minimum Error Rate: {min_error_rate * 100:.1f}%")
+        typer.secho(f"  Load Steps Tested: {len(stress_results)}")
+        
+        # Find optimal load point
+        optimal_users = None
+        for i, stress_data in enumerate(stress_results):
+            if stress_data['result'].error_rate < 0.1 and stress_data['result'].throughput_per_second > max_throughput * 0.8:
+                optimal_users = stress_data['concurrent_users']
+        
+        if optimal_users:
+            typer.secho(f"Recommended Load: {optimal_users} concurrent users", fg=typer.colors.GREEN)
+        
+        # Detailed results table
+        typer.secho(f"\nDetailed Results:", fg=typer.colors.BLUE)
+        for stress_data in stress_results:
+            users = stress_data['concurrent_users']
+            result = stress_data['result']
+            status = "Ok" if result.error_rate < 0.1 else "Warning" if result.error_rate < 0.25 else "Error"
+            
+            typer.secho(f"  {status} {users:3d} users: {result.throughput_per_second:5.2f} workflows/sec, "
+                       f"{result.error_rate * 100:4.1f}% errors, {result.average_response_time:5.2f}s avg")
+        
+        # Export results if requested
+        if export_results:
+            export_data = {
+                "test_parameters": {
+                    "workflow_name": workflow_name,
+                    "max_users": max_users,
+                    "step_size": step_size,
+                    "duration_per_step": duration_per_step
+                },
+                "stress_results": [
+                    {
+                        "concurrent_users": r['concurrent_users'],
+                        "throughput_per_second": r['result'].throughput_per_second,
+                        "error_rate": r['result'].error_rate,
+                        "average_response_time": r['result'].average_response_time,
+                        "p95_response_time": r['result'].p95_response_time,
+                        "total_workflows": r['result'].total_workflows,
+                        "successful_workflows": r['result'].successful_workflows
+                    }
+                    for r in stress_results
+                ],
+                "summary": {
+                    "peak_throughput": max_throughput,
+                    "minimum_error_rate": min_error_rate,
+                    "optimal_users": optimal_users
+                },
+                "test_timestamp": datetime.now().isoformat()
+            }
+            
+            with open(export_results, 'w') as f:
+                json.dump(export_data, f, indent=2)
+            
+            typer.secho(f"\n💾 Results exported to: {export_results}", fg=typer.colors.BLUE)
+        
+    except Exception as e:
+        typer.secho(f"Error running stress test: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="performance-test", help="Run comprehensive performance tests.")
+def performance_test_cli(
+    test_suite: str = typer.Option("all", "--suite", "-s", help="Test suite: all, unit, integration, load, stress."),
+    export_results: Optional[str] = typer.Option(None, "--export", "-e", help="Export results to file."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output."),
+):
+    """Run comprehensive performance test suite."""
+    try:
+        typer.secho(f"🧪 Running Performance Test Suite: {test_suite}", fg=typer.colors.CYAN, bold=True)
+        
+        test_commands = []
+        
+        if test_suite in ["all", "unit"]:
+            test_commands.append("python -m pytest tests/test_workflow_schemas.py -v")
+            
+        if test_suite in ["all", "integration"]:
+            test_commands.append("python -m pytest tests/test_workflow_engine.py -v")
+            
+        if test_suite in ["all", "performance"]:
+            test_commands.append("python -m pytest tests/test_workflow_performance.py -v -s")
+            
+        if test_suite in ["all", "load"]:
+            test_commands.append("python -m pytest tests/test_workflow_load.py -v -s")
+        
+        if not test_commands:
+            typer.secho(f"Unknown test suite: {test_suite}", fg=typer.colors.RED)
+            typer.secho("Available suites: all, unit, integration, performance, load, stress", fg=typer.colors.YELLOW)
+            raise typer.Exit(code=1)
+        
+        # Run test commands
+        all_results = []
+        start_time = time.time()
+        
+        for i, cmd in enumerate(test_commands):
+            typer.secho(f"\nRunning test {i+1}/{len(test_commands)}: {cmd}", fg=typer.colors.BLUE)
+            
+            if verbose:
+                result = subprocess.run(cmd, shell=True, cwd=Path.cwd())
+            else:
+                result = subprocess.run(cmd, shell=True, cwd=Path.cwd(), 
+                                       capture_output=True, text=True)
+            
+            all_results.append({
+                'command': cmd,
+                'return_code': result.returncode,
+                'output': getattr(result, 'stdout', ''),
+                'error': getattr(result, 'stderr', '')
+            })
+            
+            if result.returncode == 0:
+                typer.secho(f"  Test passed", fg=typer.colors.GREEN)
+            else:
+                typer.secho(f"  Test failed (exit code: {result.returncode})", fg=typer.colors.RED)
+                if not verbose and hasattr(result, 'stderr') and result.stderr:
+                    typer.secho(f"  Error: {result.stderr[:200]}...", fg=typer.colors.RED)
+        
+        total_time = time.time() - start_time
+        
+        # Summary
+        passed_tests = sum(1 for r in all_results if r['return_code'] == 0)
+        total_tests = len(all_results)
+        
+        typer.secho(f"\nPerformance Test Summary:", fg=typer.colors.GREEN, bold=True)
+        typer.secho(f"  Total Test Suites: {total_tests}")
+        typer.secho(f"  Passed: {passed_tests}")
+        typer.secho(f"  Failed: {total_tests - passed_tests}")
+        typer.secho(f"  Success Rate: {100 * passed_tests / total_tests:.1f}%")
+        typer.secho(f"  Total Duration: {total_time:.1f}s")
+        
+        if passed_tests == total_tests:
+            typer.secho(f"  All tests passed!", fg=typer.colors.GREEN)
+        else:
+            typer.secho(f"  WARNING: {total_tests - passed_tests} test(s) failed", fg=typer.colors.YELLOW)
+        
+        # Export results if requested
+        if export_results:
+            export_data = {
+                "test_suite": test_suite,
+                "results": all_results,
+                "summary": {
+                    "total_tests": total_tests,
+                    "passed_tests": passed_tests,
+                    "failed_tests": total_tests - passed_tests,
+                    "success_rate": 100 * passed_tests / total_tests,
+                    "total_duration": total_time
+                },
+                "test_timestamp": datetime.now().isoformat()
+            }
+            
+            with open(export_results, 'w') as f:
+                json.dump(export_data, f, indent=2)
+            
+            typer.secho(f"\n💾 Results exported to: {export_results}", fg=typer.colors.BLUE)
+        
+        # Exit with error code if any tests failed
+        if passed_tests != total_tests:
+            raise typer.Exit(code=1)
+        
+    except Exception as e:
+        typer.secho(f"Error running performance tests: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

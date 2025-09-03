@@ -1,21 +1,22 @@
-# --- IMPORTANT NOTE ON SKILLS ---
-# While this engine contains underlying code for managing and executing 'Skills'
-# (formal capabilities defined in separate YAML files), these are currently
-# considered **BETA features** and are not the primary recommended way for end-users
-# to extend agent capabilities.
-#
-# The design currently prioritizes the agent's intrinsic LLM intelligence
-# (driven by its robust system prompt and universal policies) to perform
-# diverse tasks and process data directly within 'agent_call' workflow steps.
-#
-# Developers may choose to leverage explicit 'Skills' for highly specialized,
-# deterministic, or complex integrations that go beyond basic LLM reasoning,
-# but the default expectation is that capabilities are derived from the LLM's
-# understanding of tasks and its available 'Tools'.
-# Users are generally encouraged to rely on defining clear tasks within workflows,
-# rather than creating separate skill definitions. Skills are still work in progress.
-# -------------------------------
+"""
+RAGnetic Workflow System
 
+This module defines the core workflow system for RAGnetic, enabling:
+1. Multi-step AI agent workflows with conditional logic and loops
+2. Robust error handling and retry mechanisms
+3. Integration with external tools and services
+4. Human-in-the-loop capabilities
+5. State management and execution tracking
+
+Workflow Architecture:
+- Workflows are defined declaratively in YAML
+- Each workflow consists of typed steps (agent_call, tool_call, if_then, loop, human_in_the_loop)
+- Steps can reference outputs from previous steps
+- Complex conditional logic is supported with boolean expressions
+- Comprehensive error handling with retries and recovery strategies
+"""
+
+from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Any, Union, Annotated
 from pydantic import BaseModel, Field, ConfigDict
@@ -28,10 +29,29 @@ class StepType(str, Enum):
     LOOP = "loop"
     HUMAN_IN_THE_LOOP = "human_in_the_loop"
 
+# --- Error Handling Models ---
+class RetryConfig(BaseModel):
+    """Configuration for step retry behavior"""
+    max_attempts: int = Field(default=3, ge=1, le=10, description="Maximum number of retry attempts")
+    delay_seconds: float = Field(default=1.0, ge=0.1, le=300, description="Initial delay between retries in seconds")
+    backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0, description="Multiplier for exponential backoff")
+    retry_on_errors: List[str] = Field(default=["timeout", "connection_error", "rate_limit"], description="Error types that trigger retries")
+
+class ErrorHandling(BaseModel):
+    """Configuration for error handling behavior"""
+    on_failure: Literal["stop", "continue", "skip_remaining"] = Field(default="stop", description="What to do when step fails after all retries")
+    failure_message: Optional[str] = Field(None, description="Custom error message to display on failure")
+    continue_on_errors: List[str] = Field(default=[], description="Specific error types to ignore and continue")
+
 # --- Base Step Model ---
 class BaseStep(BaseModel):
     name: str = Field(..., description="A unique name for the step within the workflow.")
     description: Optional[str] = None
+    retry: Optional[RetryConfig] = Field(default=None, description="Retry configuration for this step")
+    error_handling: Optional[ErrorHandling] = Field(default=None, description="Error handling configuration")
+    timeout_seconds: Optional[int] = Field(default=None, ge=1, le=3600, description="Maximum execution time in seconds")
+    depends_on: Optional[List[str]] = Field(default=[], description="List of step names this step depends on")
+    tags: Optional[List[str]] = Field(default=[], description="Tags for categorizing and filtering steps")
 
 # --- Specific Step Models ---
 # This is the model for our new agent-driven steps
@@ -46,11 +66,17 @@ class ToolCallStep(BaseStep):
     tool_name: str
     tool_input: Dict[str, Any] = Field(..., description="The input arguments for the tool.")
 
+class Condition(BaseModel):
+    """Enhanced condition model supporting complex boolean expressions"""
+    expression: str = Field(..., description="Boolean expression to evaluate (e.g., 'step1.score > 0.8 AND user.tier == \"premium\"')")
+    description: Optional[str] = Field(None, description="Human readable description of what this condition checks")
+    
 class IfThenStep(BaseStep):
     type: Literal[StepType.IF_THEN] = StepType.IF_THEN
-    condition: str = Field(..., description="A condition to evaluate.")
+    condition: Union[str, Condition] = Field(..., description="A condition to evaluate. Can be a simple string or complex Condition object.")
     on_true: List['WorkflowStep'] = Field(..., description="A list of steps to execute if the condition is true.")
     on_false: Optional[List['WorkflowStep']] = Field(None, description="A list of steps to execute if the condition is false.")
+    else_if: Optional[List[Dict[str, Any]]] = Field(None, description="Additional elif conditions with their steps")
 
 class LoopStep(BaseStep):
     type: Literal[StepType.LOOP] = StepType.LOOP
@@ -76,6 +102,38 @@ WorkflowStep = Annotated[
     Field(discriminator="type")
 ]
 
+# --- Workflow Execution State ---
+class StepStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    RETRYING = "retrying"
+
+class StepExecution(BaseModel):
+    """Runtime execution state of a workflow step"""
+    step_name: str
+    status: StepStatus = StepStatus.PENDING
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    attempts: int = 0
+    error_message: Optional[str] = None
+    output: Optional[Dict[str, Any]] = None
+    execution_time_seconds: Optional[float] = None
+
+class WorkflowExecution(BaseModel):
+    """Runtime execution state of an entire workflow"""
+    workflow_name: str
+    run_id: str
+    status: StepStatus = StepStatus.PENDING
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    current_step: Optional[str] = None
+    step_executions: Dict[str, StepExecution] = {}
+    global_context: Dict[str, Any] = {}
+    error_message: Optional[str] = None
+
 # --- Main Workflow Schemas ---
 class WorkflowBase(BaseModel):
     name: str = Field(..., description="The unique name of the workflow.")
@@ -83,6 +141,11 @@ class WorkflowBase(BaseModel):
     description: Optional[str] = Field(None, description="A description of what the workflow does.")
     steps: List[WorkflowStep] = Field(..., description="An ordered list of steps to execute.")
     trigger: Optional[WorkflowTrigger] = Field(default=None, description="The trigger that starts the workflow.")
+    global_retry: Optional[RetryConfig] = Field(default=None, description="Default retry configuration for all steps")
+    global_error_handling: Optional[ErrorHandling] = Field(default=None, description="Default error handling for all steps")
+    variables: Optional[Dict[str, Any]] = Field(default={}, description="Global workflow variables and constants")
+    version: str = Field(default="1.0", description="Workflow version for tracking changes")
+    tags: Optional[List[str]] = Field(default=[], description="Tags for categorizing workflows")
 
 
 class WorkflowCreate(BaseModel):
@@ -98,6 +161,47 @@ class WorkflowUpdate(BaseModel):
     description: Optional[str] = None
     steps: Optional[List[WorkflowStep]] = None
     trigger: Optional[WorkflowTrigger] = None
+
+# --- Workflow Validation ---
+class ValidationError(BaseModel):
+    """Represents a validation error in workflow configuration"""
+    error_type: str
+    message: str
+    step_name: Optional[str] = None
+    severity: Literal["error", "warning", "info"] = "error"
+
+class WorkflowValidationResult(BaseModel):
+    """Result of workflow validation"""
+    is_valid: bool
+    errors: List[ValidationError] = []
+    warnings: List[ValidationError] = []
+    suggestions: List[str] = []
+    
+    @property
+    def has_errors(self) -> bool:
+        return len(self.errors) > 0
+    
+    @property
+    def has_warnings(self) -> bool:
+        return len(self.warnings) > 0
+
+# --- Workflow Testing and Debugging ---
+class WorkflowTestConfig(BaseModel):
+    """Configuration for testing workflows"""
+    dry_run: bool = True
+    mock_external_calls: bool = True
+    test_data: Dict[str, Any] = {}
+    stop_on_error: bool = True
+    validate_outputs: bool = True
+
+class WorkflowDebugInfo(BaseModel):
+    """Debug information for workflow execution"""
+    step_name: str
+    inputs: Dict[str, Any]
+    outputs: Dict[str, Any]
+    execution_time_ms: float
+    memory_usage_mb: Optional[float] = None
+    debug_logs: List[str] = []
 
 class Workflow(WorkflowBase):
     id: int
