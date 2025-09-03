@@ -1,12 +1,12 @@
 # tests/test_agent_workflow.py
 
 import pytest
-from unittest.mock import MagicMock
 
 from app.schemas.agent import AgentConfig
 from app.agents.agent_graph import get_agent_workflow
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage
+from unittest.mock import MagicMock, AsyncMock
 
 @tool
 def dummy_tool(query: str) -> str:
@@ -25,7 +25,8 @@ def sample_agent_config():
         # any extra fields will be ignored by Pydantic
     )
 
-def test_agent_workflow_with_tool_call(sample_agent_config, mocker):
+@pytest.mark.asyncio
+async def test_agent_workflow_with_tool_call(sample_agent_config, mocker):
     """
     GIVEN a user query that should trigger a tool
     WHEN the agent graph is executed
@@ -64,10 +65,16 @@ def test_agent_workflow_with_tool_call(sample_agent_config, mocker):
         "agent_config": sample_agent_config,
         "request_id": "test-request-id",
     }
-    # only thread_id is needed in config now
-    config = {"configurable": {"thread_id": "test-thread"}}
-
-    final_state = runnable.invoke(inputs, config)
+    
+    # Mock database session for test
+    mock_db = AsyncMock()
+    config = {
+        "configurable": {
+            "thread_id": "test-thread",
+            "db_session": mock_db
+        }
+    }
+    final_state = await runnable.ainvoke(inputs, config)
 
     # --- Assert: the last message is our final LLM response ---
     final_message = final_state["messages"][-1]

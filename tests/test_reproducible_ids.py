@@ -10,6 +10,7 @@ from app.agents.config_manager import load_agent_config
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
 from app.core.config import get_api_key
+from unittest.mock import AsyncMock, patch
 
 # Define paths relative to the project root for testing purposes
 TEST_AGENT_NAME = "test-reproducible-agent-temp"
@@ -112,17 +113,33 @@ def get_faiss_chunk_ids(agent_name: str, vectorstore_base_path: Path) -> set[str
 
 # This test will run once per module due to the fixture scope
 @pytest.mark.asyncio
-async def test_reproducible_embedding_ids(setup_test_environment_for_reproducibility): # MODIFIED: Add async
+@patch('app.pipelines.embed.get_embedding_model')  # Mock the embedding model
+async def test_reproducible_embedding_ids(mock_embedding_model, setup_test_environment_for_reproducibility): # MODIFIED: Add async
     """
     Tests that chunk IDs are reproducible when reproducible_ids is set to True.
     """
+    # Set up mock embedding model that doesn't make API calls
+    from unittest.mock import MagicMock
+    import numpy as np
+    
+    mock_embeddings = MagicMock()
+    # Mock the embed_documents method to return consistent fake embeddings
+    def fake_embeddings(texts):
+        # Return consistent fake embeddings for reproducibility
+        return [np.random.RandomState(42).random(1536).tolist() for _ in texts]
+    
+    mock_embeddings.embed_documents = fake_embeddings
+    mock_embedding_model.return_value = mock_embeddings
+    
     # Load agent config
     # We use TEST_AGENT_NAME directly as load_agent_config expects the name
     agent_config_1 = load_agent_config(TEST_AGENT_NAME)
 
     # --- First embedding pass ---
     print(f"Running first embedding pass for agent '{TEST_AGENT_NAME}'...")
-    await embed_agent_data(agent_config_1) # MODIFIED: Add await
+    # Mock database session for test
+    mock_db = AsyncMock()
+    await embed_agent_data(agent_config_1, mock_db) # MODIFIED: Add await and db parameter
 
     # Assert vectorstore exists
     vectorstore_path_agent = Path(TEST_VECTORSTORE_DIR) / TEST_AGENT_NAME
@@ -143,7 +160,9 @@ async def test_reproducible_embedding_ids(setup_test_environment_for_reproducibi
     # Reload config to simulate a fresh run, though content should be identical
     agent_config_2 = load_agent_config(TEST_AGENT_NAME)
     print(f"Running second embedding pass for agent '{TEST_AGENT_NAME}'...")
-    await embed_agent_data(agent_config_2) # MODIFIED: Add await
+    # Mock database session for second pass  
+    mock_db2 = AsyncMock()
+    await embed_agent_data(agent_config_2, mock_db2) # MODIFIED: Add await and db parameter
 
     # Assert vectorstore exists for second pass
     assert vectorstore_path_agent.exists(), "Vector store was not created in the second pass."
