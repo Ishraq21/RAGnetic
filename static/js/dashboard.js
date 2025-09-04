@@ -838,7 +838,7 @@ class Dashboard {
         const agentNameElement = document.getElementById('delete-agent-name');
         
         if (agentNameElement) {
-            agentNameElement.textContent = `This action cannot be undone and will permanently remove the agent "${agentName}" and all its associated data.`;
+            agentNameElement.textContent = agentName;
         }
         
         // Store the agent name for the confirmation
