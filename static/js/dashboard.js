@@ -15,14 +15,14 @@ class Dashboard {
     }
 
     setupEventListeners() {
-        // Sidebar Navigation
-        document.querySelectorAll('.sidebar-nav-item').forEach(item => {
+        // Tab Navigation
+        document.querySelectorAll('.tab-nav-item').forEach(item => {
             item.addEventListener('click', (e) => {
                 const view = e.currentTarget.dataset.view;
                 this.switchView(view);
                 
                 // Update active state
-                document.querySelectorAll('.sidebar-nav-item').forEach(navItem => {
+                document.querySelectorAll('.tab-nav-item').forEach(navItem => {
                     navItem.classList.remove('active');
                 });
                 e.currentTarget.classList.add('active');
@@ -398,8 +398,8 @@ class Dashboard {
     }
 
     switchView(view) {
-        // Update sidebar navigation
-        document.querySelectorAll('.sidebar-nav-item').forEach(item => {
+        // Update tab navigation
+        document.querySelectorAll('.tab-nav-item').forEach(item => {
             item.classList.toggle('active', item.dataset.view === view);
         });
 
@@ -869,10 +869,7 @@ function logout() {
     window.location.href = '/login';
 }
 
-function toggleSidebar() {
-    const sidebar = document.querySelector('.sidebar');
-    sidebar.classList.toggle('open');
-}
+// toggleSidebar function removed - no longer needed
 
 // Initialize dashboard when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {

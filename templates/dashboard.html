@@ -29,21 +29,32 @@
     <nav class="navbar">
         <div class="navbar-content">
             <div class="nav-menu">
-                <button class="mobile-menu-toggle" onclick="toggleSidebar()">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="3" y1="6" x2="21" y2="6"></line>
-                        <line x1="3" y1="12" x2="21" y2="12"></line>
-                        <line x1="3" y1="18" x2="21" y2="18"></line>
+                <!-- Mobile menu toggle removed - no longer needed -->
+            </div>
+            <div class="nav-actions">
+                <button class="btn-text" onclick="window.location.href='/'">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                     </svg>
+                    Chat
+                </button>
+                <button class="sidebar-logout-btn" onclick="logout()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 21H5a2 2 0 0 1 2-2h4"></path>
+                        <polyline points="16,17 21,12 16,7"></polyline>
+                        <line x1="21" y1="12" x2="9" y2="12"></line>
+                    </svg>
+                    Logout
                 </button>
             </div>
         </div>
     </nav>
 
-    <!-- Sidebar Navigation -->
-    <aside class="sidebar">
-        <nav class="sidebar-nav">
-            <button class="sidebar-nav-item active" data-view="overview">
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Tab Navigation -->
+        <div class="tab-navigation">
+            <button class="tab-nav-item active" data-view="overview">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="3" y="3" width="7" height="7"></rect>
                     <rect x="14" y="3" width="7" height="7"></rect>
@@ -52,7 +63,7 @@
                 </svg>
                 Overview
             </button>
-            <button class="sidebar-nav-item" data-view="agents">
+            <button class="tab-nav-item" data-view="agents">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
                     <circle cx="9" cy="7" r="4"></circle>
@@ -61,14 +72,14 @@
                 </svg>
                 Agents
             </button>
-            <button class="sidebar-nav-item" data-view="workflows">
+            <button class="tab-nav-item" data-view="workflows">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="9 11 12 14 22 4"></polyline>
                     <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
                 </svg>
                 Workflows
             </button>
-            <button class="sidebar-nav-item" data-view="analytics">
+            <button class="tab-nav-item" data-view="analytics">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <line x1="18" y1="20" x2="18" y2="10"></line>
                     <line x1="12" y1="20" x2="12" y2="4"></line>
@@ -76,31 +87,9 @@
                 </svg>
                 Analytics
             </button>
-            <div class="sidebar-divider"></div>
-            <button class="sidebar-nav-item chat-nav-item" onclick="window.location.href='/'">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                </svg>
-                Chat
-            </button>
-        </nav>
-        
-        <!-- Logout Button at Bottom -->
-        <div class="sidebar-footer">
-            <button class="sidebar-logout-btn" onclick="logout()">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M9 21H5a2 2 0 0 1 2-2h4"></path>
-                    <polyline points="16,17 21,12 16,7"></polyline>
-                    <line x1="21" y1="12" x2="9" y2="12"></line>
-                </svg>
-                Logout
-            </button>
         </div>
-    </aside>
 
-    <!-- Main Content -->
-    <main class="main-content">
-                <div class="content-container">
+        <div class="content-container">
             <!-- Overview View -->
             <div class="view-content active" id="overview-view">
             
