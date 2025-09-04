@@ -476,23 +476,83 @@ class Dashboard {
         const form = document.getElementById('create-agent-form');
         const formData = new FormData(form);
         
+        // Get selected tools
+        const selectedTools = [];
+        const toolCheckboxes = form.querySelectorAll('input[name="tools"]:checked');
+        toolCheckboxes.forEach(checkbox => {
+            selectedTools.push(checkbox.value);
+        });
+        
+        // Get PII redaction settings
+        const piiRedaction = formData.get('pii_redaction');
+        let dataPolicies = [];
+        
+        if (piiRedaction && piiRedaction !== 'none') {
+            const piiTypes = piiRedaction === 'basic' 
+                ? ['email', 'phone'] 
+                : ['email', 'phone', 'ssn', 'credit_card', 'name'];
+            
+            dataPolicies.push({
+                type: 'pii_redaction',
+                pii_config: {
+                    types: piiTypes,
+                    redaction_char: '*',
+                    redaction_placeholder: null
+                }
+            });
+        }
+        
+        // Get keyword filtering
+        const keywordFiltering = formData.get('keyword_filtering');
+        if (keywordFiltering && keywordFiltering.trim()) {
+            const keywords = keywordFiltering.split(',').map(k => k.trim()).filter(k => k);
+            if (keywords.length > 0) {
+                dataPolicies.push({
+                    type: 'keyword_filter',
+                    keyword_filter_config: {
+                        keywords: keywords,
+                        action: 'redact',
+                        redaction_char: '*',
+                        redaction_placeholder: null
+                    }
+                });
+            }
+        }
+        
         const agentData = {
             name: formData.get('name'),
             display_name: formData.get('display_name'),
             description: formData.get('description'),
             persona_prompt: formData.get('persona_prompt') || 'You are a helpful assistant.',
+            execution_prompt: formData.get('execution_prompt') || null,
             llm_model: formData.get('llm_model'),
             embedding_model: formData.get('embedding_model'),
-            tools: ['retriever'],
-            sources: [],
+            tools: selectedTools,
+            sources: [], // Will be populated when data sources are added
             vector_store: {
-                type: 'faiss',
-                bm25_k: 5,
-                semantic_k: 5,
-                rerank_top_n: 5,
+                type: formData.get('vector_store_type') || 'faiss',
+                bm25_k: parseInt(formData.get('bm25_k')) || 5,
+                semantic_k: parseInt(formData.get('semantic_k')) || 5,
+                rerank_top_n: parseInt(formData.get('rerank_top_n')) || 5,
                 hit_rate_k_value: 5,
-                retrieval_strategy: 'hybrid'
-            }
+                retrieval_strategy: formData.get('retrieval_strategy') || 'hybrid'
+            },
+            chunking: {
+                mode: formData.get('chunking_mode') || 'default',
+                chunk_size: parseInt(formData.get('chunk_size')) || 1000,
+                chunk_overlap: parseInt(formData.get('chunk_overlap')) || 100,
+                breakpoint_percentile_threshold: 95
+            },
+            model_params: {
+                temperature: parseFloat(formData.get('temperature')) || 0.7,
+                max_tokens: parseInt(formData.get('max_tokens')) || 2000,
+                top_p: null
+            },
+            scaling: {
+                parallel_ingestion: formData.get('parallel_ingestion') === 'on',
+                num_ingestion_workers: parseInt(formData.get('ingestion_workers')) || 4
+            },
+            data_policies: dataPolicies
         };
 
         try {
@@ -823,6 +883,133 @@ class Dashboard {
             }
         }, 5000);
     }
+
+    // Advanced Settings Toggle
+    toggleAdvancedSettings() {
+        const advancedSettings = document.getElementById('advanced-settings');
+        const toggleText = document.getElementById('advanced-toggle-text');
+        const toggleIcon = document.getElementById('advanced-toggle-icon');
+        
+        if (advancedSettings.classList.contains('hidden')) {
+            advancedSettings.classList.remove('hidden');
+            toggleText.textContent = 'Hide Advanced';
+            toggleIcon.style.transform = 'rotate(180deg)';
+        } else {
+            advancedSettings.classList.add('hidden');
+            toggleText.textContent = 'Show Advanced';
+            toggleIcon.style.transform = 'rotate(0deg)';
+        }
+    }
+
+    // Data Source Management
+    addDataSource() {
+        const container = document.getElementById('data-sources-container');
+        const emptyState = container.querySelector('.empty-state');
+        
+        if (emptyState) {
+            emptyState.remove();
+        }
+        
+        const dataSourceId = Date.now();
+        const dataSourceHtml = `
+            <div class="data-source-form" id="data-source-${dataSourceId}">
+                <div class="data-source-header">
+                    <h4>Data Source ${container.children.length + 1}</h4>
+                    <button type="button" class="remove-data-source" onclick="dashboard.removeDataSource(${dataSourceId})">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="source-type-${dataSourceId}">Source Type</label>
+                        <select id="source-type-${dataSourceId}" name="source_type_${dataSourceId}" required>
+                            <option value="local">Local Files</option>
+                            <option value="url">Web URL</option>
+                            <option value="api">API Endpoint</option>
+                            <option value="db">Database</option>
+                            <option value="code_repository">Code Repository</option>
+                            <option value="gdoc">Google Docs</option>
+                            <option value="web_crawler">Web Crawler</option>
+                            <option value="notebook">Jupyter Notebook</option>
+                            <option value="parquet">Parquet Files</option>
+                            <option value="csv">CSV Files</option>
+                            <option value="pdf">PDF Documents</option>
+                            <option value="txt">Text Files</option>
+                            <option value="docx">Word Documents</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="source-path-${dataSourceId}">Path/URL</label>
+                        <input type="text" id="source-path-${dataSourceId}" name="source_path_${dataSourceId}" 
+                               placeholder="Enter file path, URL, or connection string">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="source-description-${dataSourceId}">Description</label>
+                    <input type="text" id="source-description-${dataSourceId}" name="source_description_${dataSourceId}" 
+                           placeholder="Brief description of this data source">
+                </div>
+            </div>
+        `;
+        
+        container.insertAdjacentHTML('beforeend', dataSourceHtml);
+    }
+
+    removeDataSource(dataSourceId) {
+        const dataSource = document.getElementById(`data-source-${dataSourceId}`);
+        if (dataSource) {
+            dataSource.remove();
+            
+            // Check if we need to show the empty state
+            const container = document.getElementById('data-sources-container');
+            if (container.children.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14,2 14,8 20,8"></polyline>
+                            <line x1="16" y1="13" x2="8" y2="13"></line>
+                            <line x1="16" y1="17" x2="8" y2="17"></line>
+                            <polyline points="10,9 9,9 8,9"></polyline>
+                        </svg>
+                        <p>No data sources configured</p>
+                        <small>Your agent will start with general knowledge only</small>
+                    </div>
+                `;
+            }
+        }
+    }
+
+    // Initialize form event listeners
+    initializeFormListeners() {
+        // Temperature range input
+        const temperatureInput = document.getElementById('temperature');
+        if (temperatureInput) {
+            const temperatureValue = document.getElementById('temperature-value');
+            temperatureInput.addEventListener('input', (e) => {
+                if (temperatureValue) {
+                    temperatureValue.textContent = e.target.value;
+                }
+            });
+        }
+
+        // Toggle switch for parallel ingestion
+        const parallelIngestionToggle = document.getElementById('parallel-ingestion');
+        if (parallelIngestionToggle) {
+            parallelIngestionToggle.addEventListener('change', (e) => {
+                const workersInput = document.getElementById('ingestion-workers');
+                if (workersInput) {
+                    workersInput.disabled = !e.target.checked;
+                    if (!e.target.checked) {
+                        workersInput.value = 4;
+                    }
+                }
+            });
+        }
+    }
 }
 
 // Global functions for onclick handlers
@@ -871,24 +1058,17 @@ function logout() {
 
 // toggleSidebar function removed - no longer needed
 
+// Global functions for the form
+function toggleAdvancedSettings() {
+    dashboard.toggleAdvancedSettings();
+}
+
+function addDataSource() {
+    dashboard.addDataSource();
+}
+
 // Initialize dashboard when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    // Ensure all required elements exist before initializing
-    const requiredElements = [
-        'toast-notification',
-        'create-agent-form',
-        'create-workflow-form'
-    ];
-    
-    const missingElements = requiredElements.filter(id => !document.getElementById(id));
-    
-    if (missingElements.length > 0) {
-        console.warn('Some required elements are missing:', missingElements);
-    }
-    
-    try {
-        window.dashboard = new Dashboard();
-    } catch (error) {
-        console.error('Failed to initialize dashboard:', error);
-    }
+document.addEventListener('DOMContentLoaded', function() {
+    dashboard = new Dashboard();
+    dashboard.initializeFormListeners();
 });
