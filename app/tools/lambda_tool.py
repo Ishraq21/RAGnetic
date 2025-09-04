@@ -19,17 +19,54 @@ from app.agents.config_manager import AgentConfig
 logger = logging.getLogger(__name__)
 
 def _guess_filenames_from_code(code: str) -> List[str]:
-    """Infer candidate filenames from code when 'inputs' aren't provided."""
+    """Infer candidate INPUT filenames from code when 'inputs' aren't provided.
+    
+    Only looks for files that are being READ, not written to.
+    """
     if not code:
         return []
     candidates = set()
-    # quoted filenames like "invoice_sample.txt" or 'data.csv'
-    for m in re.finditer(r"""['"]([^'"/\\\s]+\.[A-Za-z0-9]{1,8})['"]""", code):
-        candidates.add(m.group(1))
-    # explicit /work/<name.ext>
-    for m in re.finditer(r"""/work/([^\s'"]+\.[A-Za-z0-9]{1,8})""", code):
-        candidates.add(m.group(1))
+    
+    # Look for file READ operations specifically - simplified patterns
+    read_patterns = [
+        # with open() for reading - default mode or 'r'
+        r"""with\s+open\s*\(\s*['"]([^'"/\\]+\.[a-zA-Z0-9]{1,8})['"](?:\s*,\s*['"]r['"])?""",
+        # open() calls without 'w' or 'a' mode
+        r"""(?<!\.)\bopen\s*\(\s*['"]([^'"/\\]+\.[a-zA-Z0-9]{1,8})['"](?:\s*,\s*['"]r['"])?""",
+        # pandas and other read functions - including /work/ paths
+        r"""pd\.read_\w+\s*\(\s*['"](?:/work/(.+?\.[a-zA-Z0-9]{1,8})|([^'"/\\]+\.[a-zA-Z0-9]{1,8}))['"]""",
+        r"""read_\w+\s*\(\s*['"](?:/work/(.+?\.[a-zA-Z0-9]{1,8})|([^'"/\\]+\.[a-zA-Z0-9]{1,8}))['"]""",
+    ]
+    
+    for pattern in read_patterns:
+        for m in re.finditer(pattern, code):
+            # Handle multiple capture groups (for /work/ paths vs regular paths)
+            filename = None
+            for i in range(1, len(m.groups()) + 1):
+                if m.group(i):
+                    filename = m.group(i)
+                    break
+            
+            if filename:
+                # Skip if it looks like an output file based on context
+                if not _looks_like_output_file(code, filename):
+                    candidates.add(filename)
+    
     return list(candidates)
+
+def _looks_like_output_file(code: str, filename: str) -> bool:
+    """Check if a filename appears to be used for writing/output based on context."""
+    # Look for write operations on this file - must have 'w' or 'a' mode
+    write_patterns = [
+        rf"""open\s*\(\s*['"](?:/work/)?{re.escape(filename)}['"](?:\s*,\s*['"][wa]['"])""",
+        rf"""with\s+open\s*\(\s*['"](?:/work/)?{re.escape(filename)}['"](?:\s*,\s*['"][wa]['"])""",
+        rf"""\.dump\s*\([^,]+,\s*\w+\).*{re.escape(filename)}""",
+    ]
+    
+    for pattern in write_patterns:
+        if re.search(pattern, code):
+            return True
+    return False
 
 def _normalize_code_for_payload(code: str) -> str:
     if not code:
@@ -99,8 +136,13 @@ class LambdaTool(BaseTool):
                 if not fname:
                     continue
 
-                record = svc.get_latest_by_filename(fname)
-                if not record:
+                try:
+                    record = svc.get_latest_by_filename(fname)
+                    if not record:
+                        missing.append(fname)
+                        continue
+                except (RuntimeError, Exception) as e:
+                    logger.warning(f"Database access failed for file {fname}: {e}. Skipping file input.")
                     missing.append(fname)
                     continue
 
@@ -132,11 +174,20 @@ class LambdaTool(BaseTool):
                     "thread_id": th_id,
                 })
 
-            if missing and not staged_inputs:
+            if missing and not staged_inputs and declared_inputs:
+                # Only fail if inputs were explicitly declared but none found
+                missing_files = ", ".join(sorted(set(missing)))
                 return (
-                        "LambdaTool: no matching temporary documents were found for: "
-                        + ", ".join(sorted(set(missing)))
+                    f"ERROR: **Lambda Tool Error**: No matching files found\n\n"
+                    f"**Missing files**: {missing_files}\n\n"
+                    f"**Solutions**:\n"
+                    f"• Upload files using `/api/v1/documents/upload`\n"
+                    f"• Use `temp_doc_id` in inputs instead of `file_name`\n"
+                    f"• Check file names match exactly (case-sensitive)\n"
+                    f"• Remove file references from code to run without inputs"
                 )
+            elif missing:
+                logger.warning(f"Some files not found but execution will continue: {missing}")
 
             raw_payload["inputs"] = staged_inputs
 
@@ -159,10 +210,26 @@ class LambdaTool(BaseTool):
 
         except Exception as e:
             logger.error(f"Invalid LambdaTool payload: {e}", exc_info=True)
-            return f"LambdaTool: invalid payload. {e}"
+            error_type = type(e).__name__
+            return (
+                f"X **Lambda Tool Validation Error**\n\n"
+                f"**Error**: {error_type}: {str(e)}\n\n"
+                f"**Expected format**:\n"
+                f"• `mode`: \"code\"\n"
+                f"• `code`: \"your python code here\"\n"
+                f"• `inputs`: [{{\"temp_doc_id\": \"...\"}}, ...] (optional)\n\n"
+                f"**Example**:\n"
+                f"```json\n"
+                f"{{\"mode\": \"code\", \"code\": \"print('Hello World!')\"}}\n"
+                f"```"
+            )
 
         if not self.api_keys:
-            return "LambdaTool: no server API key configured."
+            return (
+                f"ERROR: **Lambda Tool Configuration Error**\n\n"
+                f"**Issue**: No API key configured\n\n"
+                f"**Solution**: Set `RAGNETIC_API_KEYS` in environment variables"
+            )
         headers = {
             "Content-Type": "application/json",
             "X-API-Key": self.api_keys[0],
@@ -180,11 +247,39 @@ class LambdaTool(BaseTool):
             resp.raise_for_status()
         except requests.RequestException as e:
             logger.error(f"LambdaTool submit error: {e}", exc_info=True)
-            return f"LambdaTool: failed to submit job. {e}"
+            error_msg = str(e)
+            if "ConnectionError" in error_msg:
+                return (
+                    f"ERROR: **Lambda Tool Connection Error**\n\n"
+                    f"**Issue**: Cannot connect to lambda service\n"
+                    f"**Server URL**: {self.server_url}\n\n"
+                    f"**Solutions**:\n"
+                    f"• Check if RAGnetic server is running\n"
+                    f"• Verify RAGNETIC_SERVER_URL is correct\n"
+                    f"• Check network connectivity"
+                )
+            elif "401" in error_msg or "403" in error_msg:
+                return (
+                    f"ERROR: **Lambda Tool Authentication Error**\n\n"
+                    f"**Issue**: Invalid API key or unauthorized access\n\n"
+                    f"**Solutions**:\n"
+                    f"• Check RAGNETIC_API_KEYS environment variable\n"
+                    f"• Verify API key is valid and not expired"
+                )
+            else:
+                return (
+                    f"ERROR: **Lambda Tool Submission Error**\n\n"
+                    f"**Error**: {error_msg}\n\n"
+                    f"Check server logs for more details"
+                )
 
         run_id = (resp.json() or {}).get("run_id")
         if not run_id:
-            return "LambdaTool: submission succeeded but no run_id was returned."
+            return (
+                f"ERROR: **Lambda Tool Response Error**\n\n"
+                f"**Issue**: Server accepted job but returned no run_id\n\n"
+                f"This indicates a server-side issue. Check server logs."
+            )
 
         # 3) Poll for completion...
         wait_secs = int(os.getenv("LAMBDA_TOOL_WAIT_SECONDS", "30"))
@@ -207,12 +302,45 @@ class LambdaTool(BaseTool):
                 error_msg = data.get("error_message")
 
                 if status == "failed":
-                    structured_msg = (
-                            final_state.get("message")
-                            or (final_state.get("error_type") and final_state.get("traceback"))
+                    error_type = final_state.get("error_type", "Unknown")
+                    traceback = final_state.get("traceback", "")
+                    message = final_state.get("message") or error_msg or "Unknown error"
+                    
+                    # Provide specific help for common errors
+                    if "ImportError" in error_type and "not allowed" in message:
+                        help_text = (
+                            f"\n**SOLUTION**: This module is restricted in the sandbox.\n"
+                            f"Try using allowed modules: pandas, numpy, json, csv, requests, etc."
+                        )
+                    elif "FileNotFoundError" in error_type:
+                        help_text = (
+                            f"\n**SOLUTION**: File not found in sandbox.\n"
+                            f"• Upload files using `/api/v1/documents/upload`\n"
+                            f"• Check file paths are correct\n"
+                            f"• Files must be in `/work/` directory"
+                        )
+                    elif "PermissionError" in error_type:
+                        help_text = (
+                            f"\n**SOLUTION**: Permission denied.\n"
+                            f"• Files must be within `/work/` directory\n"
+                            f"• Some operations are restricted for security"
+                        )
+                    elif "SyntaxError" in error_type:
+                        help_text = (
+                            f"\n**SOLUTION**: Fix the Python syntax error.\n"
+                            f"• Check indentation and brackets\n"
+                            f"• Verify quotes and parentheses match"
+                        )
+                    else:
+                        help_text = ""
+                    
+                    return (
+                        f"ERROR: **Sandbox Execution Failed** (run_id={run_id})\n\n"
+                        f"**Error Type**: {error_type}\n"
+                        f"**Message**: {message}\n"
+                        f"{help_text}\n\n"
+                        f"**Traceback**:\n```\n{traceback.strip()}\n```" if traceback else ""
                     )
-                    msg = structured_msg or error_msg or "Unknown error."
-                    return f"Sandbox run **failed** (run_id={run_id}).\n\n{msg}"
 
                 output_str = None
                 if isinstance(final_state, dict):
@@ -239,6 +367,11 @@ class LambdaTool(BaseTool):
                 return "\n".join(lines)
 
         return (
-            f"Job submitted (run_id={run_id}) and still running after {wait_secs}s. "
-            f"Check status later or increase LAMBDA_TOOL_WAIT_SECONDS."
+            f"TIMEOUT: **Lambda Tool Timeout** (run_id={run_id})\n\n"
+            f"**Status**: Job is still running after {wait_secs} seconds\n\n"
+            f"**Solutions**:\n"
+            f"• Check job status later using run_id: {run_id}\n"
+            f"• Increase timeout with LAMBDA_TOOL_WAIT_SECONDS environment variable\n"
+            f"• Optimize code to run faster\n"
+            f"• Check server logs for potential issues"
         )

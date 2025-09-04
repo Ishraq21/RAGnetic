@@ -322,9 +322,16 @@ class TemporaryDocumentService:
 
         try:
             loop = asyncio.get_running_loop()
+            # If we're in an async context, we need to create a task
+            import concurrent.futures
+            import threading
+            
+            # Run in a separate thread to avoid event loop conflicts
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(lambda: asyncio.run(_fetch()))
+                return future.result(timeout=30)  # 30 second timeout
         except RuntimeError:
+            # No event loop running, safe to use asyncio.run()
             return asyncio.run(_fetch())
-        else:
-            return loop.run_until_complete(_fetch())
 
 #22

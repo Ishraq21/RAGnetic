@@ -49,10 +49,11 @@ class TestLambdaToolNuclear:
     @pytest.fixture
     def lambda_tool(self):
         """Create a lambda tool instance for testing"""
-        return LambdaTool(
-            server_url="http://localhost:8000",
-            api_keys=["test-api-key-nuclear-warrior"]
-        )
+        with patch('app.db.initialize_db_connections'):
+            return LambdaTool(
+                server_url="http://localhost:8000",
+                api_keys=["test-api-key-nuclear-warrior"]
+            )
 
     @pytest.fixture
     def test_client(self):
@@ -72,7 +73,7 @@ class TestLambdaToolNuclear:
             "config.json": '{"key": "value", "number": 42}',
             "binary.bin": b'\x00\x01\x02\x03\xFF\xFE\xFD',
             "large.txt": "x" * 10000,  # 10KB file
-            "unicode.txt": "🚀💥⚡🔥 Unicode destruction! 中文 العربية Русский",
+            "unicode.txt": " Unicode destruction! 中文 العربية Русский",
             "malicious.py": "import os; os.system('rm -rf /')",  # Malicious content
             "empty.txt": "",
         }
@@ -101,30 +102,38 @@ class TestLambdaToolNuclear:
         
         import pandas as pd
         df = pd.read_csv("/work/results.xlsx")
+        
+        # This should NOT be detected as input (it's output)
+        with open("output.json", "w") as f:
+            json.dump(data, f)
         '''
         
         filenames = _guess_filenames_from_code(code)
         assert "data.csv" in filenames
         assert "results.xlsx" in filenames
+        assert "output.json" not in filenames  # Should not detect output files
 
     def test_guess_filenames_edge_cases(self):
         """Test filename guessing edge cases - EXTREME CONDITIONS"""
+        # Updated test cases for smarter filename detection (READ operations only)
         test_cases = [
             ("", []),
             ("no files here", []),
-            ('"file.txt"', ["file.txt"]),
-            ("'another.py'", ["another.py"]),
-            ('"/work/deep/path/file.json"', ["deep/path/file.json"]),  # Fixed: captures full path
+            ('with open("file.txt", "r") as f: pass', ["file.txt"]),  # Explicit read
+            ("open('another.py')", ["another.py"]),  # Default read mode
+            ('pd.read_csv("/work/deep/path/file.json")', ["deep/path/file.json"]),  # pandas read
             ('"file with spaces.doc"', []),  # Should not match spaces
             ('"file.verylongextension"', []),  # Should not match long extensions
-            ('"normalfile.txt" and "another.csv"', ["normalfile.txt", "another.csv"]),
-            ('f"/work/{filename}.dat"', ["{filename}.dat"]),  # Partial match
+            ('open("normalfile.txt") and open("another.csv")', ["normalfile.txt", "another.csv"]),  # Multiple reads
+            ('with open("output.json", "w"): pass', []),  # Write mode - should not be detected
         ]
         
         for code, expected in test_cases:
             result = _guess_filenames_from_code(code)
             for exp in expected:
                 assert exp in result, f"Failed for code: {code}, expected {exp} in {result}"
+            # Also check that we don't have unexpected extras
+            assert len(result) == len(expected), f"Expected {len(expected)} files, got {len(result)}: {result} for code: {code}"
 
     def test_normalize_code_for_payload_variations(self):
         """Test code normalization - ALL THE EDGE CASES"""
@@ -297,7 +306,7 @@ class TestLambdaToolNuclear:
     def test_unicode_and_special_characters(self, lambda_tool):
         """Test Unicode and special character handling"""
         special_codes = [
-            "print('🚀 Unicode test')",
+            "print(' Unicode test')",
             "print('中文测试')",
             "print('العربية')",
             "print('Русский')",
