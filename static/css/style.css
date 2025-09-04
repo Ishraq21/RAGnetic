@@ -22,10 +22,26 @@
     --font-size-2xl: 1.5rem;
     --font-size-3xl: 1.875rem;
     --font-size-4xl: 2.25rem;
+    
+    /* Dashboard-compatible variables for logout button */
+    --text-primary: #ffffff;
+    --text-secondary: #a0a0a0;
+    --radius-md: 0.75rem;
 }
 
 * {
     box-sizing: border-box;
+}
+
+/* Reset button styles to prevent conflicts */
+button {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    cursor: pointer;
+    outline: none;
 }
 
 body {
@@ -378,29 +394,42 @@ body.login-body {
     color: var(--text-color);
 }
 
-/* Logout button styling to match dashboard sidebar */
-.sidebar-logout-btn {
+/* Dashboard-style logout button */
+.dashboard-logout-btn {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
     width: 100%;
-    padding: 12px;
-    background: transparent;
+    padding: 8px 12px;
+    background: transparent !important;
     border: 1px solid #1f1f1f;
-    border-radius: var(--radius-md);
-    color: #a0a0a0;
+    border-radius: 0.75rem;
+    color: var(--text-secondary);
     font-size: var(--font-size-sm);
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s ease;
     text-decoration: none;
     text-align: left;
+    /* Reset any default button styles */
+    margin: 0;
+    outline: none;
+    box-shadow: none;
 }
 
-.sidebar-logout-btn:hover {
-    background: rgba(139, 92, 246, 0.1);
-    border-color: #8b5cf6;
-    color: #ffffff;
+/* Hover effect removed */
+
+/* Ensure logout button styling takes precedence */
+#chat-history-sidebar .sidebar-footer .dashboard-logout-btn {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+.dashboard-logout-btn svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    transition: stroke 0.2s ease;
 }
 
 /* Sidebar footer to match dashboard */
@@ -411,16 +440,7 @@ body.login-body {
     margin-top: auto;
 }
 
-.sidebar-logout-btn::before {
-    content: '';
-    width: 18px;
-    height: 18px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpath d='M9 21H5a2 2 0 0 1 2-2h4'%3E%3C/path%3E%3Cpolyline points='16,17 21,12 16,7'%3E%3C/polyline%3E%3Cline x1='21' y1='12' x2='9' y2='12'%3E%3C/line%3E%3C/svg%3E");
-    background-size: contain;
-    background-repeat: no-repeat;
-    background-position: center;
-    flex-shrink: 0;
-}
+/* Old ::before pseudo-element removed - now using actual SVG element */
 
 #messages {
     flex-grow: 1;
@@ -658,7 +678,7 @@ body.login-body {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.2s, transform 0.2s;
+    transition: background-color 0.2s, transform: 0.2s;
 }
 
 #send-stop-btn:hover {
@@ -1141,26 +1161,7 @@ body.login-body {
     background-color: #c82333;
 }
 
-/* New secondary button style */
-.secondary-btn {
-    padding: 10px 15px;
-    background: #3a3a3a;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    color: var(--text-color);
-    font-size: var(--font-size-sm);
-    font-weight: 500;
-    cursor: pointer;
-    transition: background-color 0.2s, border-color 0.2s, transform: 0.2s;
-    width: 100%; /* Make it full width like the submit button */
-    margin-top: 20px;
-}
-
-.secondary-btn:hover {
-    background-color: #4a4a4a;
-    border-color: var(--accent-color);
-    transform: translateY(-1px);
-}
+/* Duplicate .secondary-btn rule removed - keeping the better one below */
 
 
 /* === ANIMATIONS === */
@@ -1469,20 +1470,4 @@ a:visited {
 
 
 
-#logout-btn {
-    background-color: #f44336;
-    color: white;
-    border: none;
-    padding: 0.75rem 1rem;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: var(--font-size-sm);
-    font-weight: 500;
-    transition: all 0.2s ease;
-}
-
-#logout-btn:hover {
-    background-color: #d32f2f;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(244, 67, 54, 0.3);
-}
+/* Duplicate #logout-btn rules removed - using .dashboard-logout-btn class instead */
