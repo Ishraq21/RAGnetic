@@ -49,6 +49,14 @@ class Dashboard {
             });
         }
 
+        const editAgentForm = document.getElementById('edit-agent-form');
+        if (editAgentForm) {
+            editAgentForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.updateAgent();
+            });
+        }
+
         // Modal close buttons
         document.querySelectorAll('.modal-close').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -281,6 +289,9 @@ class Dashboard {
                     <button class="btn-text" onclick="event.stopPropagation(); dashboard.editAgent('${agent.name}')">
                         Edit
                     </button>
+                    <button class="btn-danger" onclick="event.stopPropagation(); dashboard.deleteAgent('${agent.name}')">
+                        Delete
+                    </button>
                 </div>
             </div>
         `;
@@ -444,6 +455,15 @@ class Dashboard {
         this.hideModal(document.getElementById('create-agent-modal'));
     }
 
+    showEditAgentModal(agent) {
+        this.populateEditForm(agent);
+        this.showModal('edit-agent-modal');
+    }
+
+    hideEditAgentModal() {
+        this.hideModal(document.getElementById('edit-agent-modal'));
+    }
+
     showCreateWorkflowModal() {
         this.showModal('create-workflow-modal');
         this.populateWorkflowAgentSelect();
@@ -472,6 +492,189 @@ class Dashboard {
     }
 
     // Agent Management
+    populateEditForm(agent) {
+        const form = document.getElementById('edit-agent-form');
+        if (!form) return;
+
+        // Populate basic fields
+        form.querySelector('#edit-agent-name').value = agent.name;
+        form.querySelector('#edit-agent-display-name').value = agent.display_name || '';
+        form.querySelector('#edit-agent-description').value = agent.description || '';
+        form.querySelector('#edit-agent-persona').value = agent.persona_prompt || '';
+        form.querySelector('#edit-agent-execution-prompt').value = agent.execution_prompt || '';
+        form.querySelector('#edit-agent-llm-model').value = agent.llm_model;
+        form.querySelector('#edit-agent-embedding-model').value = agent.embedding_model;
+        
+        // Populate vector store settings
+        if (agent.vector_store) {
+            form.querySelector('#edit-vector-store-type').value = agent.vector_store.type || 'faiss';
+            form.querySelector('#edit-bm25-k').value = agent.vector_store.bm25_k || 5;
+            form.querySelector('#edit-semantic-k').value = agent.vector_store.semantic_k || 5;
+            form.querySelector('#edit-rerank-top-n').value = agent.vector_store.rerank_top_n || 5;
+            form.querySelector('#edit-retrieval-strategy').value = agent.vector_store.retrieval_strategy || 'hybrid';
+        }
+
+        // Populate chunking settings
+        if (agent.chunking) {
+            form.querySelector('#edit-chunking-mode').value = agent.chunking.mode || 'default';
+            form.querySelector('#edit-chunk-size').value = agent.chunking.chunk_size || 1000;
+            form.querySelector('#edit-chunk-overlap').value = agent.chunking.chunk_overlap || 100;
+        }
+
+        // Populate model parameters
+        if (agent.model_params) {
+            form.querySelector('#edit-temperature').value = agent.model_params.temperature || 0.7;
+            form.querySelector('#edit-max-tokens').value = agent.model_params.max_tokens || 2000;
+        }
+
+        // Populate scaling settings
+        if (agent.scaling) {
+            form.querySelector('#edit-parallel-ingestion').checked = agent.scaling.parallel_ingestion || false;
+            form.querySelector('#edit-ingestion-workers').value = agent.scaling.num_ingestion_workers || 4;
+        }
+
+        // Populate tools
+        const toolCheckboxes = form.querySelectorAll('input[name="edit-tools"]');
+        toolCheckboxes.forEach(checkbox => {
+            checkbox.checked = agent.tools && agent.tools.includes(checkbox.value);
+        });
+
+        // Populate data policies
+        if (agent.data_policies && agent.data_policies.length > 0) {
+            const piiPolicy = agent.data_policies.find(p => p.type === 'pii_redaction');
+            if (piiPolicy) {
+                const piiTypes = piiPolicy.pii_config?.types || [];
+                if (piiTypes.includes('email') && piiTypes.includes('phone') && piiTypes.includes('ssn')) {
+                    form.querySelector('#edit-pii-redaction').value = 'comprehensive';
+                } else if (piiTypes.includes('email') && piiTypes.includes('phone')) {
+                    form.querySelector('#edit-pii-redaction').value = 'basic';
+                } else {
+                    form.querySelector('#edit-pii-redaction').value = 'none';
+                }
+            }
+
+            const keywordPolicy = agent.data_policies.find(p => p.type === 'keyword_filter');
+            if (keywordPolicy) {
+                form.querySelector('#edit-keyword-filtering').value = keywordPolicy.keyword_filter_config?.keywords?.join(', ') || '';
+            }
+        }
+
+        // Update temperature display
+        const tempSlider = form.querySelector('#edit-temperature');
+        const tempValue = form.querySelector('#edit-temperature-value');
+        if (tempSlider && tempValue) {
+            tempValue.textContent = tempSlider.value;
+        }
+    }
+
+    async updateAgent() {
+        const form = document.getElementById('edit-agent-form');
+        const formData = new FormData(form);
+        
+        // Get selected tools
+        const selectedTools = [];
+        const toolCheckboxes = form.querySelectorAll('input[name="edit-tools"]:checked');
+        toolCheckboxes.forEach(checkbox => {
+            selectedTools.push(checkbox.value);
+        });
+        
+        // Get PII redaction settings
+        const piiRedaction = formData.get('pii_redaction');
+        let dataPolicies = [];
+        
+        if (piiRedaction && piiRedaction !== 'none') {
+            const piiTypes = piiRedaction === 'basic' 
+                ? ['email', 'phone'] 
+                : ['email', 'phone', 'ssn', 'credit_card', 'name'];
+            
+            dataPolicies.push({
+                type: 'pii_redaction',
+                pii_config: {
+                    types: piiTypes,
+                    redaction_char: '*',
+                    redaction_placeholder: null
+                }
+            });
+        }
+        
+        // Get keyword filtering
+        const keywordFiltering = formData.get('keyword_filtering');
+        if (keywordFiltering && keywordFiltering.trim()) {
+            const keywords = keywordFiltering.split(',').map(k => k.trim()).filter(k => k);
+            if (keywords.length > 0) {
+                dataPolicies.push({
+                    type: 'keyword_filter',
+                    keyword_filter_config: {
+                        keywords: keywords,
+                        action: 'redact',
+                        redaction_char: '*',
+                        redaction_placeholder: null
+                    }
+                });
+            }
+        }
+        
+        const agentData = {
+            name: formData.get('name'),
+            display_name: formData.get('display_name'),
+            description: formData.get('description'),
+            persona_prompt: formData.get('persona_prompt') || 'You are a helpful assistant.',
+            execution_prompt: formData.get('execution_prompt') || null,
+            llm_model: formData.get('llm_model'),
+            embedding_model: formData.get('embedding_model'),
+            tools: selectedTools,
+            sources: [], // Keep existing sources for now
+            vector_store: {
+                type: formData.get('vector_store_type') || 'faiss',
+                bm25_k: parseInt(formData.get('bm25_k')) || 5,
+                semantic_k: parseInt(formData.get('semantic_k')) || 5,
+                rerank_top_n: parseInt(formData.get('rerank_top_n')) || 5,
+                hit_rate_k_value: 5,
+                retrieval_strategy: formData.get('retrieval_strategy') || 'hybrid'
+            },
+            chunking: {
+                mode: formData.get('chunking_mode') || 'default',
+                chunk_size: parseInt(formData.get('chunk_size')) || 1000,
+                chunk_overlap: parseInt(formData.get('chunk_overlap')) || 100,
+                breakpoint_percentile_threshold: 95
+            },
+            model_params: {
+                temperature: parseFloat(formData.get('temperature')) || 0.7,
+                max_tokens: parseInt(formData.get('max_tokens')) || 2000,
+                top_p: null
+            },
+            scaling: {
+                parallel_ingestion: formData.get('parallel_ingestion') === 'on',
+                num_ingestion_workers: parseInt(formData.get('ingestion_workers')) || 4
+            },
+            data_policies: dataPolicies
+        };
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/agents/${agentData.name}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': loggedInUserToken
+                },
+                body: JSON.stringify(agentData)
+            });
+
+            if (response.ok) {
+                this.showToast('Agent updated successfully', 'success');
+                this.hideEditAgentModal();
+                await this.loadAgents();
+                this.updateStats();
+            } else {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to update agent');
+            }
+        } catch (error) {
+            console.error('Failed to update agent:', error);
+            this.showToast(error.message, 'error');
+        }
+    }
+
     async createAgent() {
         const form = document.getElementById('create-agent-form');
         const formData = new FormData(form);
@@ -583,24 +786,101 @@ class Dashboard {
 
     async deployAgent(agentName) {
         try {
-            this.showToast(`Deploying agent ${agentName}...`, 'info');
+            this.showToast(`Checking agent ${agentName} deployment status...`, 'info');
             
-            // This would typically call a deployment endpoint
-            // For now, we'll simulate the process
-            setTimeout(() => {
-                this.showToast(`Agent ${agentName} deployed successfully`, 'success');
+            // Check agent inspection to see deployment status
+            const response = await fetch(`${API_BASE_URL}/agents/${agentName}/inspection`, {
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+
+            if (response.ok) {
+                const inspection = await response.json();
+                if (inspection.is_deployed) {
+                    this.showToast(`Agent ${agentName} is already deployed and ready`, 'success');
+                } else {
+                    this.showToast(`Agent ${agentName} is not yet deployed. Data embedding may still be in progress.`, 'warning');
+                }
                 this.loadAgents(); // Refresh the list
-            }, 2000);
+            } else {
+                throw new Error('Failed to check deployment status');
+            }
         } catch (error) {
-            console.error('Failed to deploy agent:', error);
-            this.showToast('Failed to deploy agent', 'error');
+            console.error('Failed to check agent deployment:', error);
+            this.showToast('Failed to check agent deployment status', 'error');
         }
     }
 
     async editAgent(agentName) {
-        // For now, we'll just show the agent details
-        // In a real implementation, you might want to show an edit form
-        this.showAgentDetails(agentName);
+        // Load agent data and show edit form
+        try {
+            const response = await fetch(`${API_BASE_URL}/agents/${agentName}`, {
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+
+            if (response.ok) {
+                const agent = await response.json();
+                this.showEditAgentModal(agent);
+            } else {
+                throw new Error('Failed to load agent details');
+            }
+        } catch (error) {
+            console.error('Failed to load agent details:', error);
+            this.showToast('Failed to load agent details', 'error');
+        }
+    }
+
+    async deleteAgent(agentName) {
+        this.showDeleteConfirmationModal(agentName);
+    }
+
+    showDeleteConfirmationModal(agentName) {
+        const modal = document.getElementById('delete-confirmation-modal');
+        const agentNameElement = document.getElementById('delete-agent-name');
+        
+        if (agentNameElement) {
+            agentNameElement.textContent = `This action cannot be undone and will permanently remove the agent "${agentName}" and all its associated data.`;
+        }
+        
+        // Store the agent name for the confirmation
+        this.agentToDelete = agentName;
+        
+        if (modal) {
+            modal.classList.add('show');
+        }
+    }
+
+    hideDeleteConfirmationModal() {
+        const modal = document.getElementById('delete-confirmation-modal');
+        if (modal) {
+            modal.classList.remove('show');
+        }
+        this.agentToDelete = null;
+    }
+
+    async confirmDeleteAgent() {
+        if (!this.agentToDelete) return;
+        
+        try {
+            this.showToast(`Deleting agent ${this.agentToDelete}...`, 'info');
+            this.hideDeleteConfirmationModal();
+            
+            const response = await fetch(`${API_BASE_URL}/agents/${this.agentToDelete}`, {
+                method: 'DELETE',
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+
+            if (response.ok) {
+                this.showToast('Agent deleted successfully', 'success');
+                await this.loadAgents();
+                this.updateStats();
+            } else {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to delete agent');
+            }
+        } catch (error) {
+            console.error('Failed to delete agent:', error);
+            this.showToast(error.message, 'error');
+        }
     }
 
     async loadAgentDetails(agentName) {
@@ -985,7 +1265,7 @@ class Dashboard {
 
     // Initialize form event listeners
     initializeFormListeners() {
-        // Temperature range input
+        // Temperature range input for create form
         const temperatureInput = document.getElementById('temperature');
         if (temperatureInput) {
             const temperatureValue = document.getElementById('temperature-value');
@@ -996,11 +1276,36 @@ class Dashboard {
             });
         }
 
-        // Toggle switch for parallel ingestion
+        // Temperature range input for edit form
+        const editTemperatureInput = document.getElementById('edit-temperature');
+        if (editTemperatureInput) {
+            const editTemperatureValue = document.getElementById('edit-temperature-value');
+            editTemperatureInput.addEventListener('input', (e) => {
+                if (editTemperatureValue) {
+                    editTemperatureValue.textContent = e.target.value;
+                }
+            });
+        }
+
+        // Toggle switch for parallel ingestion (create form)
         const parallelIngestionToggle = document.getElementById('parallel-ingestion');
         if (parallelIngestionToggle) {
             parallelIngestionToggle.addEventListener('change', (e) => {
                 const workersInput = document.getElementById('ingestion-workers');
+                if (workersInput) {
+                    workersInput.disabled = !e.target.checked;
+                    if (!e.target.checked) {
+                        workersInput.value = 4;
+                    }
+                }
+            });
+        }
+
+        // Toggle switch for parallel ingestion (edit form)
+        const editParallelIngestionToggle = document.getElementById('edit-parallel-ingestion');
+        if (editParallelIngestionToggle) {
+            editParallelIngestionToggle.addEventListener('change', (e) => {
+                const workersInput = document.getElementById('edit-ingestion-workers');
                 if (workersInput) {
                     workersInput.disabled = !e.target.checked;
                     if (!e.target.checked) {
@@ -1023,6 +1328,26 @@ function showCreateAgentModal() {
 
 function hideCreateAgentModal() {
     dashboard.hideCreateAgentModal();
+}
+
+function showEditAgentModal(agentName) {
+    dashboard.editAgent(agentName);
+}
+
+function hideEditAgentModal() {
+    dashboard.hideEditAgentModal();
+}
+
+function deleteAgent(agentName) {
+    dashboard.deleteAgent(agentName);
+}
+
+function hideDeleteConfirmationModal() {
+    dashboard.hideDeleteConfirmationModal();
+}
+
+function confirmDeleteAgent() {
+    dashboard.confirmDeleteAgent();
 }
 
 function showCreateWorkflowModal() {
