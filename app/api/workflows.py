@@ -2,7 +2,7 @@ import logging
 import yaml
 import json
 from fastapi import APIRouter, HTTPException, Request, Depends, status
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from sqlalchemy import create_engine, select, insert, update, delete
 from sqlalchemy.exc import IntegrityError
@@ -118,6 +118,28 @@ async def create_workflow(
     data = dict(row["definition"])
     data["id"] = row["id"]
     return Workflow.model_validate(data)
+
+
+@router.get("/workflows", response_model=List[Workflow])
+def list_workflows(
+        # Users need 'workflow:read' permission to list workflows
+        current_user: User = Depends(PermissionChecker(["workflow:read"]))
+):
+    """
+    Retrieves a list of all workflow definitions.
+    Requires: 'workflow:read' permission.
+    """
+    engine = get_sync_db_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(select(workflows_table)).mappings().fetchall()
+        
+    workflows = []
+    for row in rows:
+        data = dict(row["definition"])
+        data["id"] = row["id"]
+        workflows.append(Workflow.model_validate(data))
+    
+    return workflows
 
 
 @router.get("/workflows/{workflow_name}", response_model=Workflow)

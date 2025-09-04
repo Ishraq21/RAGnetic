@@ -14,6 +14,14 @@
     --link-color: #8AB4F8;
     --link-hover-color: #A8C7FA;
     --link-visited-color: #9AB0FF;
+    --font-size-xs: 0.75rem;
+    --font-size-sm: 0.875rem;
+    --font-size-base: 0.9375rem;
+    --font-size-lg: 1.0625rem;
+    --font-size-xl: 1.25rem;
+    --font-size-2xl: 1.5rem;
+    --font-size-3xl: 1.875rem;
+    --font-size-4xl: 2.25rem;
 }
 
 * {
@@ -23,9 +31,13 @@
 body {
     margin: 0;
     padding: 0;
-    background: radial-gradient(ellipse at 50% 0%, rgba(81, 65, 212, 0.15), transparent 70%), var(--background-color);
+    background: radial-gradient(ellipse at top, rgba(139, 92, 246, 0.1) 0%, transparent 50%), 
+                radial-gradient(ellipse at bottom, rgba(168, 85, 247, 0.05) 0%, transparent 50%),
+                var(--background-color);
     color: var(--text-color);
     font-family: 'Inter', sans-serif;
+    font-size: var(--font-size-base);
+    line-height: 1.5;
     display: flex; /* Changed to flex for centering login */
     min-height: 100vh; /* Ensure body takes full viewport height */
 }
@@ -52,7 +64,7 @@ body.login-body {
 }
 
 #login-container h1 {
-    font-size: 2.8em;
+    font-size: var(--font-size-3xl);
     font-weight: 700;
     margin: 0;
     color: var(--text-color);
@@ -65,7 +77,7 @@ body.login-body {
 #login-container p {
     color: var(--muted-text);
     margin-top: -1rem;
-    font-size: 1.1em;
+    font-size: var(--font-size-lg);
     line-height: 1.5;
 }
 
@@ -81,7 +93,7 @@ body.login-body {
     border: 1px solid var(--border-color);
     border-radius: 8px;
     color: var(--text-color);
-    font-size: 1em;
+    font-size: var(--font-size-base);
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
@@ -101,10 +113,10 @@ body.login-body {
     border: none;
     border-radius: 8px;
     color: white;
-    font-size: 1.1em;
+    font-size: var(--font-size-lg);
     font-weight: 600;
     cursor: pointer;
-    transition: background-color 0.2s, transform 0.2s;
+    transition: background-color 0.2s, transform: 0.2s;
 }
 
 #login-form button:hover {
@@ -117,14 +129,16 @@ body.login-body {
     position: sticky;
     top: 0;
     height: 100vh;
-    background: var(--card-background);
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(24px);
     padding: 2.5rem 0.75rem 1.5rem;
     display: flex;
     flex-direction: column;
     gap: 1.25rem;
     border-right: 1px solid var(--border-color);
     flex-shrink: 0; /* Prevents sidebar from shrinking */
-    width: 280px; /* Fixed width for sidebar */
+    width: 220px; /* Match dashboard sidebar width */
+    box-shadow: 2px 0 20px rgba(0, 0, 0, 0.3);
 }
 
 .sidebar-top {
@@ -132,6 +146,10 @@ body.login-body {
     flex-direction: column;
     align-items: stretch;
     gap: 0.75rem;
+}
+
+.sidebar-top .sidebar-dashboard-btn {
+    margin-bottom: 8px;
 }
 
 #new-chat-btn,
@@ -142,49 +160,52 @@ body.login-body {
     justify-content: flex-start;
     gap: 0.75rem;
     padding: 0.75rem 1rem;
-    background: var(--sidebar-hover-bg);
+    background: transparent;
     border: none;
-    border-radius: 999px;
+    border-radius: var(--radius-md);
     color: var(--text-color);
-    font-size: 0.9em;
+    font-size: var(--font-size-sm);
     font-weight: 500;
     cursor: pointer;
-    transition: background-color 0.2s;
+    transition: all 0.2s ease;
 }
 
 #new-chat-btn:hover,
 #open-ingestion-modal-btn:hover {
-    background-color: #3f3f3f;
+    background: rgba(139, 92, 246, 0.1);
+    color: var(--text-color);
 }
 
 #agent-select {
     width: 100%;
     padding: 0.75rem 1rem;
-    background: var(--card-background);
+    background: rgba(0, 0, 0, 0.3);
     border: 1px solid var(--border-color);
-    border-radius: 999px;
+    border-radius: var(--radius-md);
     color: var(--text-color);
-    font-size: 0.9em;
+    font-size: var(--font-size-sm);
     appearance: none;
     background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23888888' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
     background-position: right 1rem top 50%;
     background-repeat: no-repeat;
     background-size: 1.25em;
-    transition: border-color 0.2s, box-shadow 0.2s;
+    transition: all 0.2s ease;
 }
 
 #agent-select:hover {
-    border-color: var(--muted-text);
+    border-color: var(--accent-color);
+    background: rgba(0, 0, 0, 0.4);
 }
 
 #agent-select:focus {
     outline: none;
     border-color: var(--accent-color);
-    box-shadow: var(--futuristic-glow);
+    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.3);
+    background: rgba(0, 0, 0, 0.4);
 }
 
 .history-heading {
-    font-size: 0.8em;
+    font-size: var(--font-size-xs);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -212,7 +233,7 @@ body.login-body {
     margin-bottom: 0.25rem;
     border-radius: 8px;
     cursor: pointer;
-    font-size: 0.9em;
+    font-size: var(--font-size-sm);
     transition: background-color 0.2s, color 0.2s;
 }
 
@@ -326,7 +347,79 @@ body.login-body {
     width: 100%;
     margin: 0 auto;
     min-height: 100vh;
-    padding: 4rem 1rem 1rem;
+    padding: 1rem 1rem 1rem;
+    background: radial-gradient(ellipse at top, rgba(139, 92, 246, 0.05) 0%, transparent 50%), 
+                radial-gradient(ellipse at bottom, rgba(168, 85, 247, 0.03) 0%, transparent 50%);
+    border-radius: 16px;
+    margin: 2rem auto;
+}
+
+.sidebar-dashboard-btn {
+    width: 100%;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: transparent;
+    color: var(--text-color);
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    transition: all 0.2s ease;
+    margin-bottom: 0;
+}
+
+.sidebar-dashboard-btn:hover {
+    background: rgba(139, 92, 246, 0.1);
+    color: var(--text-color);
+}
+
+/* Logout button styling to match dashboard sidebar */
+.sidebar-logout-btn {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px;
+    background: transparent;
+    border: 1px solid #1f1f1f;
+    border-radius: var(--radius-md);
+    color: #a0a0a0;
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    text-align: left;
+}
+
+.sidebar-logout-btn:hover {
+    background: rgba(139, 92, 246, 0.1);
+    border-color: #8b5cf6;
+    color: #ffffff;
+}
+
+/* Sidebar footer to match dashboard */
+.sidebar-footer {
+    padding: 16px;
+    border-top: 1px solid var(--border-color);
+    background: rgba(0, 0, 0, 0.3);
+    margin-top: auto;
+}
+
+.sidebar-logout-btn::before {
+    content: '';
+    width: 18px;
+    height: 18px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpath d='M9 21H5a2 2 0 0 1 2-2h4'%3E%3C/path%3E%3Cpolyline points='16,17 21,12 16,7'%3E%3C/polyline%3E%3Cline x1='21' y1='12' x2='9' y2='12'%3E%3C/line%3E%3C/svg%3E");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    flex-shrink: 0;
 }
 
 #messages {
@@ -368,7 +461,7 @@ body.login-body {
     background-color: rgba(255, 255, 255, 0.2);
     padding: 5px 10px;
     border-radius: 6px;
-    font-size: 0.85em;
+    font-size: var(--font-size-sm);
     color: rgba(255, 255, 255, 0.9);
     white-space: nowrap;
     overflow: hidden;
@@ -398,7 +491,7 @@ body.login-body {
     padding: 1rem;
     overflow-x: auto;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.9em;
+    font-size: var(--font-size-sm);
     position: relative;
 }
 
@@ -414,7 +507,7 @@ body.login-body {
 }
 
 .message.agent .code-header span {
-    font-size: 0.85em;
+    font-size: var(--font-size-sm);
     color: var(--muted-text);
     font-family: 'Inter', sans-serif;
     text-transform: lowercase;
@@ -478,7 +571,7 @@ body.login-body {
 }
 
 #empty-state h1 {
-    font-size: 3em;
+    font-size: var(--font-size-4xl);
     font-weight: 700;
     margin: 0;
     color: var(--text-color);
@@ -547,7 +640,7 @@ body.login-body {
     border: none;
     outline: none;
     color: var(--text-color);
-    font-size: 1em;
+    font-size: var(--font-size-base);
     font-family: 'Inter', sans-serif;
     resize: none;
     line-height: 1.5;
@@ -588,7 +681,7 @@ body.login-body {
 }
 
 .disclaimer-text {
-    font-size: 0.75em;
+    font-size: var(--font-size-xs);
     color: var(--muted-text);
     text-align: center;
     padding-top: 0.75rem;
@@ -604,7 +697,7 @@ body.login-body {
 }
 
 #typing-indicator span {
-    font-size: 0.9em;
+    font-size: var(--font-size-sm);
     color: var(--muted-text);
 }
 
@@ -642,7 +735,7 @@ body.login-body {
     border: 1px solid #444;
     border-radius: 6px;
     padding: 5px 10px;
-    font-size: 0.85em;
+    font-size: var(--font-size-sm);
     color: var(--text-color);
     gap: 5px;
     white-space: nowrap;
@@ -662,7 +755,7 @@ body.login-body {
     border: none;
     color: var(--muted-text);
     cursor: pointer;
-    font-size: 0.9em;
+    font-size: var(--font-size-sm);
     font-weight: bold;
     padding: 0 4px;
     transition: color 0.2s;
@@ -750,7 +843,7 @@ body.login-body {
 }
 
 .modal-content h2 {
-    font-size: 1.8em; /* Adjusted size */
+    font-size: var(--font-size-2xl); /* Adjusted size */
     color: var(--accent-color);
     margin-top: 0;
     margin-bottom: 1rem; /* Adjusted margin */
@@ -763,7 +856,7 @@ body.login-body {
     top: 20px; /* Adjusted position */
     right: 20px; /* Adjusted position */
     color: var(--muted-text);
-    font-size: 2em; /* Adjusted size */
+    font-size: var(--font-size-2xl); /* Adjusted size */
     font-weight: bold;
     cursor: pointer;
     transition: color 0.2s;
@@ -789,7 +882,7 @@ body.login-body {
 
 .modal-content label {
     display: block;
-    font-size: 0.9em; /* Slightly smaller label for density */
+    font-size: var(--font-size-sm); /* Slightly smaller label for density */
     color: var(--muted-text); /* Muted color for labels */
     letter-spacing: 0.03em; /* Slight letter spacing */
     margin-bottom: 6px; /* Reduced margin */
@@ -807,7 +900,7 @@ body.login-body {
     border: 1px solid var(--border-color);
     border-radius: 6px; /* Slightly less rounded */
     color: var(--text-color);
-    font-size: 0.95em; /* Consistent font size */
+    font-size: var(--font-size-base); /* Consistent font size */
     transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
 }
 
@@ -867,7 +960,7 @@ body.login-body {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    font-size: 14px;
+    font-size: var(--font-size-sm);
     color: white;
 }
 
@@ -876,19 +969,19 @@ body.login-body {
     align-items: center;
     margin-top: 10px; /* Reduced margin */
     margin-bottom: 15px; /* Consistent spacing */
-    font-size: 0.9em;
+    font-size: var(--font-size-sm);
     color: var(--text-color);
 }
 
 .modal-content .info {
-    font-size: 0.75em; /* Slightly smaller info text */
+    font-size: var(--font-size-xs); /* Slightly smaller info text */
     color: var(--muted-text);
     margin-top: 8px; /* Adjusted margin */
     margin-bottom: 0;
 }
 
 .modal-content button[type="submit"] {
-    font-size: 1.1em; /* Adjusted size */
+    font-size: var(--font-size-lg); /* Adjusted size */
     padding: 12px 20px; /* Adjusted padding */
     background: linear-gradient(145deg, var(--button-background) 0%, var(--button-hover-background) 100%);
     border: none;
@@ -931,7 +1024,7 @@ body.login-body {
 }
 
 .form-section h3 {
-    font-size: 1.15em; /* Adjusted size */
+    font-size: var(--font-size-lg); /* Adjusted size */
     color: var(--text-color);
     margin-top: 0;
     margin-bottom: 0.8rem; /* Adjusted margin */
@@ -947,7 +1040,7 @@ body.login-body {
     box-shadow: inset 0 0 10px rgba(99, 93, 255, 0.15); /* Inner glow for logs */
     max-height: 150px; /* Significantly reduced */
     font-family: 'JetBrains Mono', monospace; /* Monospaced font for logs */
-    font-size: 0.8em; /* Slightly smaller font for more lines */
+    font-size: var(--font-size-xs); /* Slightly smaller font for more lines */
     line-height: 1.4;
     padding: 0.8rem; /* Reduced padding */
     overflow-y: auto;
@@ -1002,7 +1095,7 @@ body.login-body {
     text-align: center;
     color: white;
     line-height: 25px;
-    font-size: 0.9em;
+    font-size: var(--font-size-sm);
     transition: width 0.3s ease-in-out;
     box-shadow: 0 0 10px rgba(99, 93, 255, 0.6); /* Glow on the bar itself */
     font-weight: 500;
@@ -1011,7 +1104,7 @@ body.login-body {
 
 .modal-content p {
     margin: 0 0 1.5rem 0;
-    font-size: 1.1em;
+    font-size: var(--font-size-lg);
     line-height: 1.6;
 }
 
@@ -1025,7 +1118,7 @@ body.login-body {
     padding: 0.75rem 1.5rem;
     border-radius: 8px;
     border: none;
-    font-size: 1em;
+    font-size: var(--font-size-base);
     font-weight: 500;
     cursor: pointer;
 }
@@ -1055,10 +1148,10 @@ body.login-body {
     border: 1px solid var(--border-color);
     border-radius: 8px;
     color: var(--text-color);
-    font-size: 0.9em;
+    font-size: var(--font-size-sm);
     font-weight: 500;
     cursor: pointer;
-    transition: background-color 0.2s, border-color 0.2s, transform 0.2s;
+    transition: background-color 0.2s, border-color 0.2s, transform: 0.2s;
     width: 100%; /* Make it full width like the submit button */
     margin-top: 20px;
 }
@@ -1123,7 +1216,7 @@ body:not(.login-body) {
     border: 1px solid var(--border-color); /* Maintain a soft border */
     border-radius: 10px; /* Consistent rounded corners with primary submit button */
     color: var(--text-color); /* Use the general text color */
-    font-size: 1.05em; /* Slightly larger and more readable font */
+    font-size: var(--font-size-lg); /* Slightly larger and more readable font */
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s ease-in-out; /* Smooth transitions for all properties */
@@ -1154,7 +1247,7 @@ body:not(.login-body) {
   border: none;
   border-radius: 4px;
   padding: 4px 8px;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
   cursor: pointer;
   margin-top: 8px;
 }
@@ -1191,7 +1284,7 @@ body:not(.login-body) {
 #sources-panel-close {
   background: none;
   border: none;
-  font-size: 1.5rem;
+  font-size: var(--font-size-2xl);
   cursor: pointer;
 }
 
@@ -1213,7 +1306,7 @@ body:not(.login-body) {
 
 #sources-list .source-snippet {
   display: block;
-  font-size: 0.9rem;
+  font-size: var(--font-size-sm);
   color: var(--text);
   margin-top: 4px;
 }
@@ -1287,7 +1380,7 @@ body:not(.login-body) {
 }
 
 #citation-popup .popup-title {
-  font-size: 0.9em;
+  font-size: var(--font-size-sm);
   font-weight: bold;
   color: var(--accent-color);
   white-space: pre-wrap;
@@ -1298,7 +1391,7 @@ body:not(.login-body) {
     background: none;
     border: none;
     color: var(--muted-text);
-    font-size: 1.2em;
+    font-size: var(--font-size-lg);
     cursor: pointer;
     line-height: 1;
     padding: 0;
@@ -1308,7 +1401,7 @@ body:not(.login-body) {
     padding: 15px;
     max-height: 200px;
     overflow-y: auto;
-    font-size: 0.9em;
+    font-size: var(--font-size-sm);
     line-height: 1.6;
 }
 
@@ -1332,7 +1425,7 @@ body:not(.login-body) {
 .citation-popup .toggle-snippet {
   display: inline-block;
   margin-top: 0.5em;
-  font-size: 0.85em;
+  font-size: var(--font-size-sm);
   color: #888888;
   text-decoration: underline;
   cursor: pointer;
@@ -1372,4 +1465,24 @@ a:visited {
   color: inherit;
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+
+
+#logout-btn {
+    background-color: #f44336;
+    color: white;
+    border: none;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+#logout-btn:hover {
+    background-color: #d32f2f;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(244, 67, 54, 0.3);
 }

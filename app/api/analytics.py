@@ -15,7 +15,8 @@ from sqlalchemy import select, func, join, and_
 
 from app.db import get_db
 from app.db.models import conversation_metrics_table, chat_sessions_table, users_table, citations_table, \
-    chat_messages_table, document_chunks_table, lambda_runs, benchmark_runs_table, benchmark_items_table
+    chat_messages_table, document_chunks_table, lambda_runs, benchmark_runs_table, benchmark_items_table, \
+    workflows_table, workflow_runs_table
 from app.core.security import PermissionChecker
 from app.schemas.security import User
 from pydantic import BaseModel, Field
@@ -418,8 +419,6 @@ async def get_workflow_runs_summary(
         f"API: User '{current_user.username}' fetching workflow run summary with filters: {workflow_name=}, {status=}, {start_time=}, {end_time=}")
 
     try:
-        from app.db.models import workflows_table, workflow_runs_table  # Import these models locally if not at top
-
         stmt = select(
             workflows_table.c.name.label("workflow_name"),
             func.count(workflow_runs_table.c.run_id).label("total_runs"),
@@ -428,7 +427,6 @@ async def get_workflow_runs_summary(
             ).label("avg_duration_days"),
             func.sum(
                 expression.case((workflow_runs_table.c.status == 'completed', 1), else_=0)
-
             ).label("completed_runs"),
             func.sum(
                 expression.case((workflow_runs_table.c.status == 'failed', 1), else_=0)
@@ -535,7 +533,7 @@ async def get_agent_steps_summary(
         f"API: User '{current_user.username}' fetching agent step summary with filters: {agent_name=}, {node_name=}, {status=}, {start_time=}, {end_time=}")
 
     try:
-        from app.db.models import agent_runs, agent_run_steps, chat_sessions_table  # Ensure these are imported
+
 
         stmt = select(
             chat_sessions_table.c.agent_name,
@@ -650,8 +648,7 @@ async def get_agent_runs_summary(
         f"API: User '{current_user.username}' fetching agent run summary with filters: {agent_name=}, {status=}, {start_time=}, {end_time=}")
 
     try:
-        # Import necessary models locally if not already at the top level
-        from app.db.models import agent_runs, chat_sessions_table
+
 
         stmt = select(
             chat_sessions_table.c.agent_name,
