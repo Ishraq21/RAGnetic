@@ -367,7 +367,7 @@ class TestEndToEndPipelineDestruction:
             {"content": "Large content " * 100000, "metadata": {"size": "large"}},
             
             # Document with special characters
-            {"content": "Special chars: 你好 🔥 ñoño \x00\x01\x02", "metadata": {}},
+            {"content": "Special chars: 你好  ñoño \x00\x01\x02", "metadata": {}},
             
             # Document with only whitespace
             {"content": "   \n\n\t\t   ", "metadata": {}},
@@ -508,7 +508,7 @@ class TestEndToEndPipelineDestruction:
             {"query": "long query " * 1000, "expected_behavior": "truncation_or_processing"},
             
             # Query with special characters
-            {"query": "Special query: 你好 🔥 ñoño", "expected_behavior": "unicode_handling"},
+            {"query": "Special query: 你好  ñoño", "expected_behavior": "unicode_handling"},
             
             # Query with only whitespace
             {"query": "   \n\n\t\t   ", "expected_behavior": "empty_results_or_error"},

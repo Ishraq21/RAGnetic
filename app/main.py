@@ -98,6 +98,7 @@ from app.api.evaluation import router as evaluation_api_router
 from app.api.metrics import router as metrics_api_router
 from app.api.training import router as training_api_router
 from app.api.citations import router as citations_api_router
+from app.api.documents import router as documents_api_router
 
 from app.api import workflows
 from app.api import webhooks
@@ -415,6 +416,7 @@ app.include_router(webhooks.router, prefix="/webhooks/v1")
 app.include_router(citations_api_router)
 app.include_router(evaluation_api_router)
 app.include_router(lambda_tool_router)
+app.include_router(documents_api_router)
 
 
 

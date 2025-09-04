@@ -523,14 +523,14 @@ def run_comprehensive_direct_stress_test():
     logger.info("DIRECT STRESS TEST RESULTS SUMMARY")
     logger.info("="*80)
     
-    print(f"🔥 Test Duration: {duration:.1f} seconds")
-    print(f"💻 System: {test_results['system_info']['cpu_cores']} cores, {test_results['system_info']['total_memory_gb']:.1f}GB RAM")
+    print(f" Test Duration: {duration:.1f} seconds")
+    print(f" System: {test_results['system_info']['cpu_cores']} cores, {test_results['system_info']['total_memory_gb']:.1f}GB RAM")
     
     # Analyze results
     breaking_points = []
     
     for test_name, test_data in test_results['test_results'].items():
-        print(f"\n📊 {test_name.upper().replace('_', ' ')}:")
+        print(f"\n {test_name.upper().replace('_', ' ')}:")
         
         if isinstance(test_data, list):
             successful_tests = sum(1 for t in test_data if t.get('success', False))
@@ -549,7 +549,7 @@ def run_comprehensive_direct_stress_test():
         for bp in breaking_points:
             print(f"   • {bp}")
     else:
-        print(f"\n✅ NO BREAKING POINTS FOUND - ALL SYSTEMS SURVIVED MAXIMUM STRESS!")
+        print(f"\n NO BREAKING POINTS FOUND - ALL SYSTEMS SURVIVED MAXIMUM STRESS!")
     
     # Save detailed report
     report_filename = f"ragnetic_direct_stress_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"

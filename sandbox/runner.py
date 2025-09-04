@@ -221,7 +221,10 @@ ALLOWED_MODULES = {
     # stdlib commonly used in EDA/scripts
     "json", "re", "io", "itertools", "collections", "datetime", "time", "pathlib", "base64","decimal", "uuid", "enum", "typing",
 
-    "textblob", "csv", "requests"
+    "textblob", "csv", "requests",
+    
+    # Safe os operations
+    "os", "os.path"
 }
 os.environ.setdefault("MPLBACKEND", "Agg")
 os.environ.setdefault("MPLCONFIGDIR", str(WORK_DIR / ".mplconfig"))
@@ -231,7 +234,82 @@ def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
     root = name.split(".")[0]
     if root not in ALLOWED_MODULES:
         raise ImportError(f"Import of '{name}' is not allowed")
-    return __import__(name, globals, locals, fromlist, level)
+    
+    # Import the module normally
+    module = __import__(name, globals, locals, fromlist, level)
+    
+    # For os module, return a restricted wrapper
+    if name == "os":
+        return _create_safe_os_module(module)
+    elif name == "os.path":
+        return module  # os.path is generally safe
+    
+    return module
+
+
+def _create_safe_os_module(original_os):
+    """Create a restricted os module that only allows safe operations"""
+    class SafeOS:
+        # Safe file system operations (read-only or within sandbox)
+        path = original_os.path
+        listdir = original_os.listdir
+        getcwd = original_os.getcwd
+        getsize = original_os.path.getsize
+        exists = original_os.path.exists
+        isfile = original_os.path.isfile
+        isdir = original_os.path.isdir
+        dirname = original_os.path.dirname
+        basename = original_os.path.basename
+        join = original_os.path.join
+        splitext = original_os.path.splitext
+        
+        # Environment variables (read-only)
+        environ = dict(original_os.environ)  # Copy to prevent modifications
+        getenv = original_os.getenv
+        
+        # Safe directory operations within sandbox
+        def mkdir(self, path, mode=0o777, exist_ok=False):
+            p = Path(path)
+            if not p.is_absolute():
+                p = WORK_DIR / p
+            p = p.resolve()
+            if not p.is_relative_to(WORK_DIR):
+                raise PermissionError(f"Cannot create directory outside sandbox: {p}")
+            return original_os.makedirs(p, mode=mode, exist_ok=exist_ok)
+        
+        makedirs = mkdir
+        
+        def stat(self, path):
+            p = Path(path)
+            if not p.is_absolute():
+                p = WORK_DIR / p
+            p = p.resolve()
+            if not p.is_relative_to(WORK_DIR):
+                raise PermissionError(f"Cannot access path outside sandbox: {p}")
+            return original_os.stat(p)
+        
+        # Block dangerous operations
+        def __getattr__(self, name):
+            dangerous_ops = {
+                'system', 'exec', 'execv', 'execl', 'spawn', 'popen', 'fork',
+                'kill', 'killpg', 'remove', 'unlink', 'rmdir', 'removedirs',
+                'rename', 'chmod', 'chown', 'chdir', 'fchdir'
+            }
+            if name in dangerous_ops:
+                raise AttributeError(f"'{name}' operation is not allowed in sandbox")
+            
+            # Allow other safe operations
+            if hasattr(original_os, name):
+                attr = getattr(original_os, name)
+                if callable(attr):
+                    # For callable attributes, we could add more restrictions here
+                    return attr
+                else:
+                    return attr
+            
+            raise AttributeError(f"'SafeOS' object has no attribute '{name}'")
+    
+    return SafeOS()
 
 
 def _is_within_sandbox(path: Path) -> bool:

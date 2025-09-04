@@ -107,7 +107,7 @@ print(f'Stress test from thread {thread_id}')
         
         # Launch the nuclear thread army!
         threads = []
-        print(f"🚀 Launching {num_threads} threads for MAXIMUM CONCURRENCY!")
+        print(f" Launching {num_threads} threads for MAXIMUM CONCURRENCY!")
         
         for i in range(num_threads):
             thread = threading.Thread(target=stress_lambda_execution, name=f"StressThread-{i}")
@@ -134,7 +134,7 @@ print(f'Stress test from thread {thread_id}')
         completion_rate = completed_threads / num_threads
         success_rate = success_count / (success_count + error_count) if (success_count + error_count) > 0 else 0
         
-        print(f"💥 CONCURRENCY RESULTS:")
+        print(f" CONCURRENCY RESULTS:")
         print(f"   Total threads: {num_threads}")
         print(f"   Completed threads: {completed_threads}")
         print(f"   Successful executions: {success_count}")
@@ -200,7 +200,7 @@ time.sleep(0.1)
         processes = []
         results_queue = multiprocessing.Queue()
         
-        print(f"🔥 Starting {num_processes} processes with {requests_per_process} requests each")
+        print(f" Starting {num_processes} processes with {requests_per_process} requests each")
         
         for p_id in range(num_processes):
             process = multiprocessing.Process(
@@ -433,7 +433,7 @@ print(f'Computation result: {result}, Primes found: {len(primes)}, Duration: {en
         # Launch CPU-intensive workers
         start_time = time.time()
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            print(f"🔥 Launching {num_workers} CPU-intensive workers!")
+            print(f" Launching {num_workers} CPU-intensive workers!")
             
             # Submit all tasks
             futures = [executor.submit(cpu_intensive_worker) for _ in range(num_workers)]
@@ -449,7 +449,7 @@ print(f'Computation result: {result}, Primes found: {len(primes)}, Duration: {en
         
         total_duration = time.time() - start_time
         
-        print(f"⚡ CPU STRESS RESULTS:")
+        print(f" CPU STRESS RESULTS:")
         print(f"   Workers: {num_workers}")
         print(f"   Completed: {len(results)}")
         print(f"   Total duration: {total_duration:.2f}s")
@@ -523,7 +523,7 @@ print('Network flood batch completed')
         # Launch network flood
         start_time = time.time()
         with ThreadPoolExecutor(max_workers=concurrent_batches) as executor:
-            print(f"🌊 Launching network flood with {concurrent_batches} concurrent batches!")
+            print(f" Launching network flood with {concurrent_batches} concurrent batches!")
             
             futures = [executor.submit(network_flood_batch) for _ in range(concurrent_batches)]
             
@@ -538,7 +538,7 @@ print('Network flood batch completed')
         total_duration = time.time() - start_time
         expected_requests = concurrent_batches * 10
         
-        print(f"🌊 NETWORK FLOOD RESULTS:")
+        print(f" NETWORK FLOOD RESULTS:")
         print(f"   Expected requests: {expected_requests}")
         print(f"   Successful: {len(results)}")
         print(f"   Failed: {len(errors)}")
@@ -560,7 +560,7 @@ print('Network flood batch completed')
         ]
         
         for scenario in timeout_scenarios:
-            print(f"⏰ Testing timeout scenario: {scenario['wait_seconds']}s")
+            print(f" Testing timeout scenario: {scenario['wait_seconds']}s")
             
             with patch.dict('os.environ', {'LAMBDA_TOOL_WAIT_SECONDS': str(scenario['wait_seconds'])}), \
                  patch('requests.post') as mock_post, \
@@ -829,6 +829,6 @@ print(f'Created file {{temp_file}}')
 
 if __name__ == "__main__":
     # Run the nuclear stress tests!
-    print("💥 INITIATING NUCLEAR LAMBDA_TOOL STRESS TESTS! 💥")
-    print("🔥 NO MERCY! NO SURVIVORS! TO VALHALLA! 🔥")
+    print(" INITIATING NUCLEAR LAMBDA_TOOL STRESS TESTS! ")
+    print(" NO MERCY! NO SURVIVORS! TO VALHALLA! ")
     pytest.main([__file__, "-v", "--tb=short", "-s"])  # -s for print output
