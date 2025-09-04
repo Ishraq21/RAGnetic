@@ -19,7 +19,7 @@ Workflow Architecture:
 from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Any, Union, Annotated
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator, field_validator
 
 # --- Step Type Enum ---
 class StepType(str, Enum):
@@ -52,6 +52,13 @@ class BaseStep(BaseModel):
     timeout_seconds: Optional[int] = Field(default=None, ge=1, le=3600, description="Maximum execution time in seconds")
     depends_on: Optional[List[str]] = Field(default=[], description="List of step names this step depends on")
     tags: Optional[List[str]] = Field(default=[], description="Tags for categorizing and filtering steps")
+    
+    @field_validator('name')
+    @classmethod
+    def validate_name_not_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Step name cannot be empty or whitespace only")
+        return v
 
 # --- Specific Step Models ---
 # This is the model for our new agent-driven steps
@@ -60,11 +67,25 @@ class AgentCallStep(BaseStep):
     task: str = Field(..., description="The high-level task for the agent to complete.")
     # This is optional because it can be inherited from the top-level workflow
     agent_name: Optional[str] = None
+    
+    @field_validator('task')
+    @classmethod
+    def validate_task_not_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Agent task cannot be empty or whitespace only")
+        return v
 
 class ToolCallStep(BaseStep):
     type: Literal[StepType.TOOL_CALL] = StepType.TOOL_CALL
     tool_name: str
     tool_input: Dict[str, Any] = Field(..., description="The input arguments for the tool.")
+    
+    @field_validator('tool_name')
+    @classmethod
+    def validate_tool_name_not_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Tool name cannot be empty or whitespace only")
+        return v
 
 class Condition(BaseModel):
     """Enhanced condition model supporting complex boolean expressions"""
@@ -204,11 +225,59 @@ class WorkflowDebugInfo(BaseModel):
     debug_logs: List[str] = []
 
 class Workflow(WorkflowBase):
-    id: int
+    id: Optional[int] = Field(default=None, description="Unique identifier for the workflow (auto-generated if not provided)")
     model_config = ConfigDict(
         extra="ignore",
         from_attributes=True,
     )
+    
+    @model_validator(mode='after')
+    def validate_no_circular_dependencies(self):
+        """Validate that there are no circular dependencies in the workflow steps"""
+        if not self.steps:
+            return self
+            
+        # Build dependency graph
+        step_names = {step.name for step in self.steps}
+        dependencies = {}
+        
+        for step in self.steps:
+            depends_on = getattr(step, 'depends_on', []) or []
+            dependencies[step.name] = depends_on
+            
+            # Check for self-referencing dependencies
+            if step.name in depends_on:
+                raise ValueError(f"Step '{step.name}' cannot depend on itself (circular dependency)")
+            
+            # Check that all dependencies reference valid steps
+            for dep in depends_on:
+                if dep not in step_names:
+                    raise ValueError(f"Step '{step.name}' depends on non-existent step '{dep}'")
+        
+        # Detect circular dependencies using depth-first search
+        def has_cycle(graph, start, visited, rec_stack):
+            visited[start] = True
+            rec_stack[start] = True
+            
+            for neighbor in graph.get(start, []):
+                if not visited.get(neighbor, False):
+                    if has_cycle(graph, neighbor, visited, rec_stack):
+                        return True
+                elif rec_stack.get(neighbor, False):
+                    return True
+            
+            rec_stack[start] = False
+            return False
+        
+        visited = {}
+        rec_stack = {}
+        
+        for step_name in step_names:
+            if not visited.get(step_name, False):
+                if has_cycle(dependencies, step_name, visited, rec_stack):
+                    raise ValueError(f"Circular dependency detected involving step '{step_name}'")
+        
+        return self
 
 # --- Skill Schema ---
 class Skill(BaseModel):
