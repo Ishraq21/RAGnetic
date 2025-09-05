@@ -129,6 +129,7 @@ class Dashboard {
             
             if (response.ok) {
                 this.agents = await response.json();
+                console.log('Loaded agents:', this.agents);
                 this.renderAgents();
             } else {
                 throw new Error(`HTTP ${response.status}`);
@@ -171,8 +172,8 @@ class Dashboard {
     async loadRecentActivity() {
         try {
             // Load recent agent runs from audit API
-            const auditUrl = `${API_BASE_URL.replace('/analytics', '/audit')}/runs?limit=5`;
-            console.log('Loading recent agent runs from:', auditUrl);
+            const auditUrl = `${API_BASE_URL}/audit/runs?limit=5`;
+            console.log('Loading recent agent runs from:', auditUrl, '(FIXED VERSION)');
             
             const agentRunsResponse = await fetch(auditUrl, {
                 headers: { 'X-API-Key': loggedInUserToken }
@@ -256,6 +257,12 @@ class Dashboard {
     }
 
     renderAgentCard(agent) {
+        console.log('renderAgentCard called with agent:', agent);
+        if (!agent || !agent.name) {
+            console.error('Invalid agent data in renderAgentCard:', agent);
+            return '';
+        }
+        
         const status = this.getAgentStatus(agent);
         const statusClass = status === 'online' ? 'online' : status === 'deploying' ? 'deploying' : 'offline';
         
@@ -289,7 +296,7 @@ class Dashboard {
                     <button class="btn-text" onclick="event.stopPropagation(); dashboard.editAgent('${agent.name}')">
                         Edit
                     </button>
-                    <button class="btn-danger" onclick="event.stopPropagation(); dashboard.deleteAgent('${agent.name}')">
+                    <button class="btn-danger" onclick="event.stopPropagation(); console.log('Delete button clicked for agent:', '${agent.name}'); dashboard.deleteAgent('${agent.name}')">
                         Delete
                     </button>
                 </div>
@@ -830,10 +837,23 @@ class Dashboard {
     }
 
     async deleteAgent(agentName) {
+        console.log('deleteAgent called with:', agentName);
+        if (!agentName || agentName === 'null' || agentName === 'undefined') {
+            console.error('Invalid agent name:', agentName);
+            this.showToast('Invalid agent name', 'error');
+            return;
+        }
         this.showDeleteConfirmationModal(agentName);
     }
 
     showDeleteConfirmationModal(agentName) {
+        console.log('showDeleteConfirmationModal called with:', agentName);
+        if (!agentName || agentName === 'null' || agentName === 'undefined') {
+            console.error('Invalid agent name in showDeleteConfirmationModal:', agentName);
+            this.showToast('Invalid agent name', 'error');
+            return;
+        }
+        
         const modal = document.getElementById('delete-confirmation-modal');
         const agentNameElement = document.getElementById('delete-agent-name');
         
@@ -858,13 +878,22 @@ class Dashboard {
     }
 
     async confirmDeleteAgent() {
-        if (!this.agentToDelete) return;
+        console.log('confirmDeleteAgent called, agentToDelete:', this.agentToDelete);
+        if (!this.agentToDelete || this.agentToDelete === 'null' || this.agentToDelete === 'undefined') {
+            console.error('No agent to delete or invalid agent name:', this.agentToDelete);
+            this.showToast('No agent selected for deletion', 'error');
+            this.hideDeleteConfirmationModal();
+            return;
+        }
+        
+        // Store the agent name before hiding the modal
+        const agentToDelete = this.agentToDelete;
         
         try {
-            this.showToast(`Deleting agent ${this.agentToDelete}...`, 'info');
+            this.showToast(`Deleting agent ${agentToDelete}...`, 'info');
             this.hideDeleteConfirmationModal();
             
-            const response = await fetch(`${API_BASE_URL}/agents/${this.agentToDelete}`, {
+            const response = await fetch(`${API_BASE_URL}/agents/${encodeURIComponent(agentToDelete)}`, {
                 method: 'DELETE',
                 headers: { 'X-API-Key': loggedInUserToken }
             });
