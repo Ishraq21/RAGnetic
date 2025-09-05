@@ -291,34 +291,38 @@ class TemporaryDocumentService:
         """
 
         async def _fetch():
-            async with get_async_db_session() as db:
-                stmt = (
-                    select(temporary_documents_table)
-                    .where(temporary_documents_table.c.original_name == file_name)
-                    .order_by(desc(temporary_documents_table.c.created_at))
-                    .limit(1)
-                )
-                result = await db.execute(stmt)
-                row = result.mappings().first()
-                if not row:
-                    return None
+            try:
+                async with get_async_db_session() as db:
+                    stmt = (
+                        select(temporary_documents_table)
+                        .where(temporary_documents_table.c.original_name == file_name)
+                        .order_by(desc(temporary_documents_table.c.created_at))
+                        .limit(1)
+                    )
+                    result = await db.execute(stmt)
+                    row = result.mappings().first()
+                    if not row:
+                        return None
 
-                # Build original path (where process_and_store_temp_document saved the file)
-                user_id = row["user_id"]
-                thread_id = row["thread_id"]
-                temp_doc_id = row["temp_doc_id"]
-                original_name = row["original_name"]
-                file_path = (
-                        _TEMP_CHAT_UPLOADS_DIR / str(user_id) / thread_id / f"{temp_doc_id}_{original_name}"
-                )
+                    # Build original path (where process_and_store_temp_document saved the file)
+                    user_id = row["user_id"]
+                    thread_id = row["thread_id"]
+                    temp_doc_id = row["temp_doc_id"]
+                    original_name = row["original_name"]
+                    file_path = (
+                            _TEMP_CHAT_UPLOADS_DIR / str(user_id) / thread_id / f"{temp_doc_id}_{original_name}"
+                    )
 
-                return {
-                    "temp_doc_id": temp_doc_id,
-                    "original_name": original_name,
-                    "user_id": user_id,
-                    "thread_id": thread_id,
-                    "file_path": str(file_path),
-                }
+                    return {
+                        "temp_doc_id": temp_doc_id,
+                        "original_name": original_name,
+                        "user_id": user_id,
+                        "thread_id": thread_id,
+                        "file_path": str(file_path),
+                    }
+            except Exception as e:
+                logger.error(f"Database query failed for file {file_name}: {e}", exc_info=True)
+                return None
 
         try:
             loop = asyncio.get_running_loop()
@@ -333,5 +337,8 @@ class TemporaryDocumentService:
         except RuntimeError:
             # No event loop running, safe to use asyncio.run()
             return asyncio.run(_fetch())
+        except Exception as e:
+            logger.error(f"Failed to fetch latest document for {file_name}: {e}", exc_info=True)
+            return None
 
 #22
