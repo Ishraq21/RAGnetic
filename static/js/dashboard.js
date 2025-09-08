@@ -158,12 +158,42 @@ class Dashboard {
         const totalAgentsElement = document.getElementById('total-agents');
         const totalRunsElement = document.getElementById('total-runs');
         const successRateElement = document.getElementById('success-rate');
+        const totalTrainingJobsElement = document.getElementById('total-training-jobs');
         
         if (totalAgentsElement) totalAgentsElement.textContent = this.agents.length;
         
         // Calculate total runs and success rate (placeholder for now)
         if (totalRunsElement) totalRunsElement.textContent = '0';
         if (successRateElement) successRateElement.textContent = '0%';
+        
+        // Load training statistics
+        this.loadTrainingStats();
+    }
+
+    async loadTrainingStats() {
+        try {
+            const response = await fetch('/api/v1/training/stats', {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': loggedInUserToken
+                }
+            });
+
+            if (response.ok) {
+                const stats = await response.json();
+                const totalTrainingJobsElement = document.getElementById('total-training-jobs');
+                if (totalTrainingJobsElement) {
+                    totalTrainingJobsElement.textContent = stats.total_jobs || 0;
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load training stats:', error);
+            const totalTrainingJobsElement = document.getElementById('total-training-jobs');
+            if (totalTrainingJobsElement) {
+                totalTrainingJobsElement.textContent = '0';
+            }
+        }
     }
 
     renderAgents() {
@@ -299,6 +329,22 @@ class Dashboard {
         // Load view-specific data
         if (view === 'agents') {
             this.loadAgents();
+        } else if (view === 'training') {
+            // Initialize training dashboard if not already done
+            if (typeof trainingDashboard !== 'undefined') {
+                trainingDashboard.loadTrainingJobs();
+            } else {
+                // Wait for training dashboard to be initialized
+                const checkTrainingDashboard = setInterval(() => {
+                    if (typeof trainingDashboard !== 'undefined') {
+                        trainingDashboard.loadTrainingJobs();
+                        clearInterval(checkTrainingDashboard);
+                    }
+                }, 100);
+                
+                // Clear interval after 5 seconds to prevent infinite checking
+                setTimeout(() => clearInterval(checkTrainingDashboard), 5000);
+            }
         }
     }
 
