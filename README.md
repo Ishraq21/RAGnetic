@@ -2,7 +2,7 @@
 <img width="20388" height="5692" alt="RAGnetic Logo" src="https://github.com/user-attachments/assets/92e1f139-9acb-43f3-9072-02d7f5336663" />
 
 
-RAGnetic is an open-source, highly configurable, compliance-first AI framework for building and deploying production-ready agents and multi-step workflows. It offers full control at every layer, from data ingestion and vector embeddings to retrieval pipelines, benchmarking, and deployment with no infrastrucutre overhead. RAGnetic provides YAML for developers who need infra-as-code and automation, and a GUI for business users who need visibility and management without coding. Both share the same backend, enabling seamless collaboration.
+RAGnetic is an open-source, highly configurable, compliance-first AI framework for building and deploying production-ready RAG systems and intelligent agents. It offers full control at every layer, from data ingestion and vector embeddings to retrieval pipelines, benchmarking, and deployment with no infrastructure overhead. RAGnetic provides YAML configuration for developers and an intuitive GUI for users who need powerful AI capabilities without coding.
 
 One of RAGnetic’s core philosophies is to give developers and organizations complete ownership of their on-premise AI while eliminating infrastructure overhead and reducing development time and cost. 
 
@@ -15,7 +15,7 @@ One of RAGnetic’s core philosophies is to give developers and organizations co
 
 - [Why Use RAGnetic?](#why-use-ragnetic)
 - [Features](#features)
-- [Multi-Agent Workflows & Orchestration](#multi-agent-workflows--orchestration)
+- [Multi-Agent Systems](#multi-agent-systems)
 - [Custom Model Fine-Tuning](#custom-model-fine-tuning)
 - [RAGnetic API](#ragnetic-api)
 - [Enterprise & Government Readiness](#enterprise--government-readiness)
@@ -36,7 +36,7 @@ One of RAGnetic’s core philosophies is to give developers and organizations co
 RAGnetic moves beyond simple RAG libraries by providing a full-stack platform that addresses the entire lifecycle of an AI agent, from data ingestion to evaluation and enterprise-grade security.
 
 
-* **Agentic Orchestration**: At its core, RAGnetic uses a multi-agent, multi-step system built on the powerful LangGraph. This allows you to define complex, stateful workflows where multiple agents can collaborate to reason, plan, and execute tasks across various tools and data sources.
+* **Multi-Agent Intelligence**: At its core, RAGnetic enables sophisticated multi-agent systems built on LangGraph. Agents can collaborate to reason, plan, and execute complex tasks across various tools and data sources, with each agent specialized for specific domains or capabilities.
 
 
 * **Custom Model Fine-Tuning**: RAGnetic empowers you to fine-tune open-source Hugging Face models on your private data, making them specialized for your specific domain and use cases. This is crucial for improving accuracy and controlling an agent's behavior.
@@ -45,7 +45,7 @@ RAGnetic moves beyond simple RAG libraries by providing a full-stack platform th
 * **Production-Ready by Design:**  The framework is built with features crucial for enterprise deployment, including robust data ingestion, user and role management, performance benchmarking, and detailed analytics.
 
 
-* **Built-in Observability & Analytics:** Don't just deploy, understand. The platform provides detailed logging, metrics for LLM usage and costs, and a powerful CLI for auditing agent and workflow runs in real-time.
+* **Built-in Observability & Analytics:** Don't just deploy, understand. The platform provides detailed logging, metrics for LLM usage and costs, and a powerful CLI for auditing agent runs and performance in real-time.
 
 ---
 
@@ -63,11 +63,11 @@ An agent's intelligence is defined not just by its core LLM, but by the ecosyste
 - **Custom & Hosted Models**: Use hosted LLMs (OpenAI, Anthropic, Google Gemini) or local open-source models via Ollama or Hugging Face.
 - **Fine-Tuning**: Full fine-tuning pipeline for Hugging Face models using LoRA (PEFT) or full-model training, to control behavior, tone, and accuracy.
 
-### 3. Orchestrate: The Agent’s Strategic Workflow
+### 3. Collaborate: Multi-Agent Intelligence
 - **Stateful Conversations**: Durable, conversation-level memory for iterative dialogue without repeating context.
-- **Multi-Agent Workflows**: Primary orchestrator agent can call on specialized sub-agents to complete complex tasks.
-- **Declarative YAML**: Define conditional logic, loops, and human-in-the-loop steps in a readable YAML format.
-- **Dynamic Triggers**: Kick off workflows via API webhooks, schedules, or manual triggers.
+- **Agent Collaboration**: Primary agents can delegate to specialized sub-agents for domain-specific tasks.
+- **Declarative YAML**: Configure agent behavior, tool access, and collaboration patterns in readable YAML format.
+- **Dynamic Interaction**: Trigger agents via API calls, chat interface, or programmatic integration.
 
 ### 4. Interact: The Agent’s Toolkit
 - **Core Toolkit**: Pre-built tools for real-world tasks: SQL queries, HTTP requests, sandboxed Python scripts, email notifications.
@@ -75,18 +75,18 @@ An agent's intelligence is defined not just by its core LLM, but by the ecosyste
 
 ### 5. Evaluate: The Agent’s Feedback Loop
 - **Automated Benchmarking**: Generate test sets and run benchmarks to measure accuracy, faithfulness, and relevance.
-- **Detailed Analytics**: Track LLM usage, costs, and step-by-step metrics across agent and workflow runs.
+- **Detailed Analytics**: Track LLM usage, costs, and step-by-step metrics across agent runs and conversations.
 
 
-## Multi-Agent Workflows & Orchestration
+## Multi-Agent Systems
 
-RAGnetic’s core power lies in its ability to orchestrate complex tasks that go beyond a single chat prompt. The platform’s multi-agent workflow engine allows you to chain together multiple steps, where each step can be a call to a specialized tool or a call to another agent.
+RAGnetic's core power lies in its ability to create sophisticated multi-agent systems that can handle complex tasks requiring diverse expertise. The platform enables agents to collaborate seamlessly, with each agent specialized for specific domains or capabilities.
 
-- **Define Complex Logic**: Use declarative YAML files to define workflows with conditional logic, loops, and even human-in-the-loop steps.
+- **Agent Specialization**: Create agents with specific expertise - research, analysis, code generation, data processing, or domain knowledge.
 
-- **Orchestrate Multiple Agents**: Define an orchestrator agent that calls on a roster of specialized sub-agents to complete different parts of a complex task.
+- **Intelligent Collaboration**: Primary agents can delegate tasks to specialized sub-agents, combining their outputs for comprehensive solutions.
 
-- **How to Use It**: Use the command <code>ragnetic deploy-orchestrator</code> to deploy a primary orchestrator and all its constituent sub-agents, creating a complete, interconnected system.
+- **How to Use It**: Use the command <code>ragnetic deploy</code> to deploy agents with defined collaboration patterns, creating intelligent systems that can handle complex multi-step reasoning.
 
 ## Custom Model Fine-Tuning
 
@@ -108,9 +108,9 @@ RAGnetic provides a full-featured fine-tuning pipeline, allowing you to train op
 
 ## RAGnetic API
 
-RAGnetic’s entire functionality is exposed through a robust RESTful API, allowing you to programmatically interact with the framework from any application. This is how RAGnetic integrates into larger enterprise ecosystems, enabling you to build custom frontends, connect to external services, and automate workflows.
+RAGnetic's entire functionality is exposed through a robust RESTful API, allowing you to programmatically interact with the framework from any application. This enables integration into larger enterprise ecosystems and custom application development.
 
-- **API-Driven Workflows:** Trigger any RAGnetic workflow from an external service via a simple HTTP POST request to a dedicated webhook URL.  
+- **API-Driven Interactions:** Trigger agent conversations and tasks from external services via simple HTTP requests.  
 - **Programmatic Management:** Use API endpoints to manage agents, users, roles, and fine-tuning jobs.  
 - **Real-time Interaction:** A WebSocket-based chat interface allows for streaming, real-time interactions with your agents.  
 - **Data & Analytics Access:** Pull detailed performance metrics, cost data, and audit logs directly from the API for integration with dashboards and reporting tools.  
@@ -264,20 +264,15 @@ ragnetic deploy hello_world_agent
 | `ragnetic role assign-permission` | Assigns a permission string to a role. | `ragnetic role assign-permission 1 agent:create` |
 | `ragnetic role remove-permission` | Removes a permission from a role. | `ragnetic role remove-permission 1 agent:create` |
 
-### Agent & Workflow Management
+### Agent Management
 
 | Command | Description | Example |
 | :--- | :--- | :--- |
 | `ragnetic list-agents` | Lists all configured agents. | `ragnetic list-agents` |
 | `ragnetic deploy` | Deploys an agent by processing its data sources and building its vector store. | `ragnetic deploy my_research_agent` |
-| `ragnetic deploy-orchestrator` | Deploys an orchestrator and all its sub-agents from a roster. | `ragnetic deploy-orchestrator my_team_orchestrator` |
 | `ragnetic inspect-agent` | Displays an agent's configuration and can check connections or document metadata. | `ragnetic inspect-agent my_research_agent --check-connections` |
 | `ragnetic reset-agent` | Resets an agent by deleting its vector store and memory files. | `ragnetic reset-agent my_agent` |
 | `ragnetic delete-agent` | Permanently deletes an agent's configuration and all its data. | `ragnetic delete-agent my_old_agent` |
-| `ragnetic list-workflows` | Lists recent workflow runs. | `ragnetic list-workflows` |
-| `ragnetic trigger-workflow` | Triggers a workflow to run via the API. | `ragnetic trigger-workflow my_report_gen --input '{"topic":"Q3 results"}'` |
-| `ragnetic inspect-orchestration` | Inspects a full orchestration, showing all sub-runs in a tree view. | `ragnetic inspect-orchestration <run_id>` |
-| `ragnetic delete-workflow` | Permanently deletes a workflow definition and its YAML file. | `ragnetic delete-workflow my_old_workflow` |
 
 ### Training & Evaluation
 
@@ -298,14 +293,11 @@ ragnetic deploy hello_world_agent
 | `ragnetic analytics benchmarks` | Displays summaries of past benchmark runs. | `ragnetic analytics benchmarks --agent my_agent` |
 | `ragnetic analytics agent-runs` | Displays aggregated agent run metrics. | `ragnetic analytics agent-runs --agent my_agent` |
 | `ragnetic analytics agent-steps` | Displays aggregated agent step metrics. | `ragnetic analytics agent-steps --agent my_agent` |
-| `ragnetic analytics workflow-runs` | Displays aggregated workflow run metrics. | `ragnetic analytics workflow-runs --workflow my_workflow` |
 | `ragnetic inspect-run` | Inspects a specific agent run and its steps. | `ragnetic inspect-run <run_id>` |
-| `ragnetic inspect-workflow` | Inspects a specific workflow run and its I/O. | `ragnetic inspect-workflow <run_id>` |
-| `ragnetic inspect-orchestration` | Inspects a full orchestration, showing all sub-runs in a tree view. | `ragnetic inspect-orchestration <run_id>` |
 
 ## YAML Configuration Examples
 
-RAGnetic uses a declarative YAML-based approach for configuring agents, workflows, and training jobs.
+RAGnetic uses a declarative YAML-based approach for configuring agents and training jobs.
 
 ### 1. Agent Configuration
 
@@ -378,64 +370,7 @@ hyperparameters:
 
 ```
 
-### 3. Workflow Configuration
-Workflows chain together agents and tools to accomplish multi-step, complex tasks.
-```yaml
-# workflows_data/support_ticket_analyzer.yaml
-name: support_ticket_analyzer
-description: An automated workflow to analyze and route support tickets.
-trigger:
-  type: api_webhook
-  path: /webhooks/v1/new-support-ticket
-
-steps:
-  - name: retrieve_ticket_info
-    type: tool_call
-    tool_name: http_request_tool
-    tool_input:
-      method: "GET"
-      url: "https://api.internal-crm.com/ticket/{{trigger.body.ticket_id}}"
-
-  - name: summarize_ticket
-    type: agent_call
-    agent_name: support_summarizer_agent
-    task: |
-      **WHAT is the Goal?**
-      Summarize the support ticket information.
-
-      **IMPLICIT FROM WHERE?**
-      The raw JSON from the "retrieve_ticket_info" step.
-
-      **HOW should the Output Look?**
-      Return a single sentence summary.
-
-  - name: route_to_team
-    type: agent_call
-    agent_name: ticket_router_agent
-    task: |
-      **WHAT is the Goal?**
-      Categorize this ticket summary and determine which team should handle it.
-
-      **IMPLICIT FROM WHERE?**
-      The summary from the "summarize_ticket" step.
-
-      **HOW should the Output Look?**
-      Return a JSON object with a single key, `team`, which contains the team name
-      (e.g., "sales", "engineering").
-
-  - name: send_notification
-    type: tool_call
-    tool_name: email_tool
-    tool_input:
-      to_email: "support_manager@company.com"
-      subject: "New Ticket for {{route_to_team.team}} Team"
-      body: |
-        A new support ticket has been assigned to your team.
-        Summary: "{{summarize_ticket.summary}}"
-        Ticket ID: {{trigger.body.ticket_id}}
-```
-
-### 4. Data Preparation Configuration
+### 3. Data Preparation Configuration
 
 ```yaml
 # data_prep_configs/jsonl_qa_prep.yaml
@@ -471,7 +406,7 @@ RAGnetic’s agents are designed to produce traceable and auditable outputs, a k
   Ensure the RAGnetic server is running with <code>ragnetic start-server</code> and that no firewall is blocking access to the configured host and port.
 
 - **FileNotFoundError**  
-  Verify that all file paths in your agent or workflow YAML files are correct and that the necessary files exist.
+  Verify that all file paths in your agent YAML files are correct and that the necessary files exist.
 
 - **Database Migration Errors**  
   If you encounter errors during <code>ragnetic migrate</code>, it could be due to a malformed connection string or an incompatible database schema. Try running <code>ragnetic check-system-db</code> to diagnose the          connection.

@@ -16,7 +16,6 @@ venv/
 /logs/
 /benchmark/
 /agents/
-/workflows
 
 # RAGnetic Internal & System Files
 # The .ragnetic directory contains configuration and temporary files

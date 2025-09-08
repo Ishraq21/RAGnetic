@@ -13,7 +13,7 @@ from app.core.security import get_http_api_key, PermissionChecker
 from app.core.validation import sanitize_for_path
 from app.db.models import agent_runs, chat_sessions_table, chat_messages_table, users_table
 from app.agents.config_manager import load_agent_config
-from app.agents.agent_graph import get_agent_workflow, AgentState
+from app.agents.agent_graph import get_agent_graph, AgentState
 from app.tools.retriever_tool import get_retriever_tool
 from app.tools.sql_tool import create_sql_toolkit
 from app.tools.arxiv_tool import get_arxiv_tool
@@ -157,7 +157,7 @@ async def query_agent(
     if "lambda_tool" in agent_config.tools:
         tools.append(LambdaTool())
 
-    agent = get_agent_workflow(tools).compile()
+    agent = get_agent_graph(tools).compile()
     initial_state: AgentState = {
         "messages": history,
         "request_id": request_id,

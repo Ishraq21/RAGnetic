@@ -72,13 +72,6 @@
                 </svg>
                 Agents
             </button>
-            <button class="tab-nav-item" data-view="workflows">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="9 11 12 14 22 4"></polyline>
-                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
-                </svg>
-                Workflows
-            </button>
             <button class="tab-nav-item" data-view="analytics">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <line x1="18" y1="20" x2="18" y2="10"></line>
@@ -110,18 +103,6 @@
                     </div>
                 </div>
                 
-                <div class="stat-card">
-                    <div class="stat-icon">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="9 11 12 14 22 4"></polyline>
-                            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
-                        </svg>
-                    </div>
-                    <div class="stat-content">
-                        <h3 id="total-workflows">0</h3>
-                        <p>Workflows</p>
-                    </div>
-                </div>
                 
                 <div class="stat-card">
                     <div class="stat-icon">
@@ -165,18 +146,6 @@
                     </div>
                 </div>
                 
-                <div class="section-card">
-                    <div class="section-header">
-                        <h3>Recent Workflow Runs</h3>
-                        <button class="btn-text" onclick="switchView('workflows')">View All</button>
-                    </div>
-                    <div class="activity-list" id="recent-workflow-activity">
-                        <div class="loading-state">
-                            <div class="loading-spinner"></div>
-                            <p>Loading recent activity...</p>
-                        </div>
-                    </div>
-                </div>
             </div>
         </div>
 
@@ -202,27 +171,6 @@
             </div>
         </div>
 
-        <!-- Workflows View -->
-        <div class="view-content" id="workflows-view">
-            
-            <div class="actions-bar">
-                <button class="btn-primary" onclick="showCreateWorkflowModal()">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="12" y1="5" x2="12" y2="19"></line>
-                        <line x1="5" y1="12" x2="19" y2="12"></line>
-                    </svg>
-                    New Workflow
-                </button>
-            </div>
-            
-            <div class="workflows-list" id="workflows-list">
-                <div class="list-header">Workflows</div>
-                <div class="loading-state">
-                    <div class="loading-spinner"></div>
-                    <p>Loading workflows...</p>
-                </div>
-            </div>
-        </div>
 
         <!-- Analytics View -->
         <div class="view-content" id="analytics-view">
@@ -239,14 +187,6 @@
                     <p>Chart coming soon</p>
                 </div>
                 
-                <div class="chart-placeholder">
-                    <h3>Workflow Execution</h3>
-                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <polyline points="12,6 12,12 16,14"></polyline>
-                    </svg>
-                    <p>Chart coming soon</p>
-                </div>
             </div>
         </div>
         </div>
@@ -949,35 +889,6 @@
         </div>
     </div>
 
-    <!-- Create Workflow Modal -->
-    <div class="modal" id="create-workflow-modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Create New Workflow</h2>
-                <button class="modal-close" onclick="hideCreateWorkflowModal()">×</button>
-            </div>
-            <form id="create-workflow-form">
-                <div class="form-group">
-                    <label for="workflow-name">Workflow Name</label>
-                    <input type="text" id="workflow-name" name="name" required placeholder="e.g., customer-inquiry-process">
-                </div>
-                <div class="form-group">
-                    <label for="workflow-description">Description</label>
-                    <textarea id="workflow-description" name="description" rows="3" placeholder="What does this workflow do?"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="workflow-agent">Default Agent</label>
-                    <select id="workflow-agent" name="agent_name">
-                        <option value="">No default agent</option>
-                    </select>
-                </div>
-                <div class="form-actions">
-                    <button type="button" class="btn-secondary" onclick="hideCreateWorkflowModal()">Cancel</button>
-                    <button type="submit" class="btn-primary">Create Workflow</button>
-                </div>
-            </form>
-        </div>
-    </div>
 
     <!-- Agent Details Modal -->
     <div class="modal" id="agent-details-modal">
@@ -995,21 +906,6 @@
         </div>
     </div>
 
-    <!-- Workflow Details Modal -->
-    <div class="modal" id="workflow-details-modal">
-        <div class="modal-content large">
-            <div class="modal-header">
-                <h2 id="workflow-details-title">Workflow Details</h2>
-                <button class="modal-close" onclick="hideWorkflowDetailsModal()">×</button>
-            </div>
-            <div class="modal-body" id="workflow-details-content">
-                <div class="loading-state">
-                    <div class="loading-spinner"></div>
-                    <p>Loading workflow details...</p>
-                </div>
-            </div>
-        </div>
-    </div>
 
     <!-- Delete Confirmation Modal -->
     <div class="modal" id="delete-confirmation-modal">
@@ -1056,7 +952,7 @@
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M12 9v4M12 17h.01"/>
                                 </svg>
-                                <span>All associated workflows will be affected</span>
+                                <span>Chat history and sessions will remain accessible</span>
                             </div>
                         </div>
                     </div>

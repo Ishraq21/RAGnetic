@@ -188,7 +188,7 @@ async def get_current_user_from_websocket(
 class PermissionChecker:
     """
     FastAPI dependency to check if the current user has the required permissions.
-    Usage: Depends(PermissionChecker(["agent:create", "workflow:trigger"]))
+    Usage: Depends(PermissionChecker(["agent:create"]))
     """
 
     def __init__(self, required_permissions: List[str]):
@@ -201,7 +201,6 @@ class PermissionChecker:
                 "lambda:read_run_details",
                 "analytics:read_lambda_runs",
                 # CRUD-style perms
-                "read:workflows", "create:workflows", "update:workflows", "delete:workflows",
                 "read:agents", "create:agents", "update:agents", "delete:agents",
                 "read:users", "create:users", "update:users", "delete:users",
                 "read:roles", "create:roles", "update:roles", "delete:roles",
@@ -216,7 +215,6 @@ class PermissionChecker:
                 "lambda:execute",
                 "lambda:read_run_details",
                 "analytics:read_lambda_runs",
-                "read:workflows", "create:workflows", "update:workflows",
                 "read:agents", "create:agents", "update:agents",
                 "session:create", "document:upload",
                 "history:read", "sessions:read", "sessions:update", "sessions:delete",
@@ -224,7 +222,6 @@ class PermissionChecker:
             "viewer": [
                 "lambda:read_run_details",
                 "analytics:read_lambda_runs",
-                "read:workflows",
                 "read:agents",
                 "session:create", "document:upload",
                 "history:read", "sessions:read",

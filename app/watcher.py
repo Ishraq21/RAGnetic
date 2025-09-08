@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 _APP_PATHS = get_path_settings()
 _PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
 _CONFIG_FILE = _APP_PATHS["CONFIG_FILE_PATH"]
-_WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
 _DATA_DIR = _APP_PATHS["DATA_DIR"]
 
 # Helper function to get file extension safely
@@ -32,8 +31,7 @@ def _get_file_extension(filepath: str) -> str:
 
 
 class AgentDataEventHandler(FileSystemEventHandler):
-    """Handles file system events and triggers re-embedding for affected agents,
-       and now also triggers workflow sync for workflow definition changes."""
+    """Handles file system events and triggers re-embedding for affected agents."""
 
     def __init__(self):
         super().__init__()
@@ -42,7 +40,6 @@ class AgentDataEventHandler(FileSystemEventHandler):
         self.server_url = self._get_server_url()
         self.api_key = self._get_api_key()
         self.last_event_time = {} # To debounce events
-        self.workflows_dir = _WORKFLOWS_DIR # Ensure _WORKFLOWS_DIR is accessible as an attribute
         self.uploaded_temp_dir = _DATA_DIR / "uploaded_temp"
 
         self._initialize_db_for_watcher()
@@ -63,7 +60,7 @@ class AgentDataEventHandler(FileSystemEventHandler):
         """Retrieves the first server API key for authentication."""
         keys = get_server_api_keys()
         if not keys:
-            logger.warning("No RAGNETIC_API_KEYS found. Webhook syncs will likely fail with 401 Unauthorized errors.")
+            logger.warning("No RAGNETIC_API_KEYS found. API calls will likely fail with 401 Unauthorized errors.")
             return ""
         return keys[0]
 
@@ -104,17 +101,7 @@ class AgentDataEventHandler(FileSystemEventHandler):
             return
         self.last_event_time[str(src_path)] = current_time
 
-        # --- Check for workflow YAML file changes and trigger sync ---
-        if src_path.is_file() and src_path.suffix in ['.yaml', '.yml']:
-            try:
-                src_path.relative_to(self.workflows_dir)
-                logger.info(f"Workflow definition file changed: {src_path}. Triggering workflow sync API.")
-                self._trigger_workflow_sync_api()
-                return
-            except ValueError:
-                pass
-
-        # --- Agent re-deployment logic for non-workflow and non-temp-upload files ---
+        # --- Agent re-deployment logic ---
         affected_agents = self._find_affected_agents(str(src_path))
         if not affected_agents:
             return
@@ -159,40 +146,6 @@ class AgentDataEventHandler(FileSystemEventHandler):
                         affected.append(config)
                         break
         return affected
-
-    def _trigger_workflow_on_new_file(self, file_path: Path):
-        """
-        Triggers a configured workflow for a new file.
-        This is a placeholder for a more robust configuration system.
-        """
-        workflow_name = "file_ingestion"
-
-        try:
-            url = f"{self.server_url}/workflows/{workflow_name}/trigger"
-            payload = {
-                "initial_input": {
-                    "file_path": str(file_path.relative_to(_PROJECT_ROOT))
-                }
-            }
-            # NEW: Add headers with the API key
-            headers = {"X-API-Key": self.api_key}
-            response = requests.post(url, json=payload, headers=headers, timeout=5)
-            response.raise_for_status()
-            logger.info(f"Successfully triggered workflow '{workflow_name}' for new file: {file_path}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to trigger workflow '{workflow_name}' for file {file_path}: {e}")
-
-    def _trigger_workflow_sync_api(self):
-        """Calls the API endpoint to sync workflow definitions from files to database."""
-        try:
-            url = f"{self.server_url}/workflows/sync"
-            # NEW: Add headers with the API key
-            headers = {"X-API-Key": self.api_key}
-            response = requests.post(url, headers=headers, timeout=5)
-            response.raise_for_status()
-            logger.info(f"Successfully triggered workflow sync API. Response: {response.json()}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to trigger workflow sync API: {e}", exc_info=True)
 
 
 def start_watcher(directories: list[str]):

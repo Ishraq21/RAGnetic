@@ -120,12 +120,12 @@ print(f"\\nAnalysis complete! Processed {{len(results['analysis_results'])}} fil
     
     return execute_lambda(payload)
 
-def test_end_to_end_workflow():
-    """Test complete workflow with file staging and processing"""
-    print("=== Testing End-to-End Workflow ===")
+def test_end_to_end_pipeline():
+    """Test complete pipeline with file staging and processing"""
+    print("=== Testing End-to-End Pipeline ===")
     
     # Create a more complex analysis that combines multiple data sources
-    workflow_code = """
+    pipeline_code = """
 import pandas as pd
 import json
 import numpy as np
@@ -134,7 +134,7 @@ from datetime import datetime
 print("=== End-to-End Data Processing Workflow ===")
 
 # Initialize results container
-workflow_results = {
+pipeline_results = {
     "timestamp": datetime.now().isoformat(),
     "processed_files": [],
     "insights": {}
@@ -156,8 +156,8 @@ try:
         }
     }
     
-    workflow_results["insights"]["sales"] = sales_insights
-    workflow_results["processed_files"].append("sales_data.csv")
+    pipeline_results["insights"]["sales"] = sales_insights
+    pipeline_results["processed_files"].append("sales_data.csv")
     print("Sales data processed successfully")
     
 except Exception as e:
@@ -187,40 +187,40 @@ try:
             }
         }
         
-        workflow_results["insights"]["sensors"] = sensor_insights
-        workflow_results["processed_files"].append("sensor_readings.json")
+        pipeline_results["insights"]["sensors"] = sensor_insights
+        pipeline_results["processed_files"].append("sensor_readings.json")
         print("Sensor data processed successfully")
     
 except Exception as e:
     print(f"Sensor data processing failed: {e}")
 
 # Generate comprehensive report
-print("\\n=== WORKFLOW SUMMARY ===")
-print(f"Processed files: {workflow_results['processed_files']}")
+print("\\n=== PIPELINE SUMMARY ===")
+print(f"Processed files: {pipeline_results['processed_files']}")
 
-for category, insights in workflow_results["insights"].items():
+for category, insights in pipeline_results["insights"].items():
     print(f"\\n{category.upper()} INSIGHTS:")
     for key, value in insights.items():
         print(f"  {key}: {value}")
 
-# Save final workflow results
-with open("workflow_results.json", "w") as f:
-    json.dump(workflow_results, f, indent=2, default=str)
+# Save final pipeline results
+with open("pipeline_results.json", "w") as f:
+    json.dump(pipeline_results, f, indent=2, default=str)
 
-print("\\n=== WORKFLOW COMPLETE ===")
-print(f"Results saved to workflow_results.json")
+print("\\n=== PIPELINE COMPLETE ===")
+print(f"Results saved to pipeline_results.json")
 """
     
     # Use our test data files as inputs
     payload = {
         "mode": "code", 
-        "code": workflow_code,
+        "code": pipeline_code,
         "inputs": [
             {"file_name": "sales_data.csv"},
             {"file_name": "sensor_readings.json"}
         ],
         "user_id": 1,
-        "thread_id": "test-end-to-end-workflow"
+        "thread_id": "test-end-to-end-pipeline"
     }
     
     return execute_lambda(payload)
@@ -291,13 +291,13 @@ def execute_lambda(payload):
     return False
 
 def main():
-    """Run document upload and workflow tests"""
-    print("Starting RAGnetic Document and Workflow Tests")
+    """Run document upload and pipeline tests"""
+    print("Starting RAGnetic Document and Pipeline Tests")
     print("=" * 50)
     
     tests = [
         ("Document Upload and Analysis", test_document_upload_and_analysis),
-        ("End-to-End Workflow", test_end_to_end_workflow),
+        ("End-to-End Pipeline", test_end_to_end_pipeline),
     ]
     
     results = []
@@ -326,7 +326,7 @@ def main():
     print(f"\\nOverall: {passed}/{total} tests passed ({passed/total*100:.1f}%)")
     
     if passed == total:
-        print("ALL TESTS PASSED! Document processing and workflows working perfectly!")
+        print("ALL TESTS PASSED! Document processing and pipelines working perfectly!")
     else:
         print("Some tests failed. Check the logs above for details.")
 
