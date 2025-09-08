@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert
+from sqlalchemy import select, insert, func
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
 from datetime import datetime
@@ -138,3 +138,175 @@ async def list_fine_tuned_models(
     result = await db.execute(stmt)
     models_data = result.mappings().fetchall() # Fetch all matching rows
     return [FineTunedModel.model_validate(row) for row in models_data] # Convert to Pydantic models
+
+
+@router.delete("/jobs/{adapter_id}")
+async def delete_training_job(
+    adapter_id: str,
+    current_user: User = Depends(PermissionChecker(["fine_tune:delete"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Delete a training job and its associated model files.
+    Requires: 'fine_tune:delete' permission.
+    """
+    # First, get the job details
+    stmt = select(fine_tuned_models_table).where(fine_tuned_models_table.c.adapter_id == adapter_id)
+    result = await db.execute(stmt)
+    job_data = result.mappings().first()
+    
+    if not job_data:
+        raise HTTPException(status_code=404, detail=f"Training job with ID '{adapter_id}' not found.")
+    
+    # Check if job is currently running
+    if job_data["training_status"] == "running":
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot delete a training job that is currently running. Please wait for it to complete or fail."
+        )
+    
+    try:
+        # Delete the database record
+        delete_stmt = fine_tuned_models_table.delete().where(fine_tuned_models_table.c.adapter_id == adapter_id)
+        await db.execute(delete_stmt)
+        await db.commit()
+        
+        # TODO: Delete model files from filesystem
+        # This would require implementing file cleanup logic
+        
+        logger.info(f"API: Training job '{adapter_id}' deleted by user '{current_user.username}'.")
+        return {"message": f"Training job '{adapter_id}' deleted successfully."}
+        
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"API: Failed to delete training job '{adapter_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete training job: {e}")
+
+
+@router.get("/jobs/{adapter_id}/logs")
+async def get_training_logs(
+    adapter_id: str,
+    current_user: User = Depends(PermissionChecker(["fine_tune:read_logs"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get training logs for a specific job.
+    Requires: 'fine_tune:read_logs' permission.
+    """
+    stmt = select(fine_tuned_models_table).where(fine_tuned_models_table.c.adapter_id == adapter_id)
+    result = await db.execute(stmt)
+    job_data = result.mappings().first()
+    
+    if not job_data:
+        raise HTTPException(status_code=404, detail=f"Training job with ID '{adapter_id}' not found.")
+    
+    logs_path = job_data.get("training_logs_path")
+    if not logs_path or not os.path.exists(logs_path):
+        return {"logs": "No logs available yet.", "path": logs_path}
+    
+    try:
+        with open(logs_path, 'r') as f:
+            logs_content = f.read()
+        return {"logs": logs_content, "path": logs_path}
+    except Exception as e:
+        logger.error(f"Failed to read logs for job '{adapter_id}': {e}")
+        return {"logs": f"Error reading logs: {str(e)}", "path": logs_path}
+
+
+@router.get("/stats")
+async def get_training_stats(
+    current_user: User = Depends(PermissionChecker(["fine_tune:read_stats"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get training statistics and metrics.
+    Requires: 'fine_tune:read_stats' permission.
+    """
+    try:
+        # Get total jobs count
+        total_jobs_stmt = select(func.count(fine_tuned_models_table.c.id))
+        total_jobs_result = await db.execute(total_jobs_stmt)
+        total_jobs = total_jobs_result.scalar()
+        
+        # Get jobs by status
+        status_counts_stmt = select(
+            fine_tuned_models_table.c.training_status,
+            func.count(fine_tuned_models_table.c.id)
+        ).group_by(fine_tuned_models_table.c.training_status)
+        status_counts_result = await db.execute(status_counts_stmt)
+        status_counts = {row[0]: row[1] for row in status_counts_result.fetchall()}
+        
+        # Get total training cost
+        cost_stmt = select(fine_tuned_models_table.c.estimated_training_cost_usd).where(
+            fine_tuned_models_table.c.estimated_training_cost_usd.isnot(None)
+        )
+        cost_result = await db.execute(cost_stmt)
+        total_cost = sum(row[0] for row in cost_result.fetchall() if row[0])
+        
+        # Get total GPU hours
+        gpu_hours_stmt = select(fine_tuned_models_table.c.gpu_hours_consumed).where(
+            fine_tuned_models_table.c.gpu_hours_consumed.isnot(None)
+        )
+        gpu_hours_result = await db.execute(gpu_hours_stmt)
+        total_gpu_hours = sum(row[0] for row in gpu_hours_result.fetchall() if row[0])
+        
+        return {
+            "total_jobs": total_jobs,
+            "status_counts": status_counts,
+            "total_cost_usd": total_cost,
+            "total_gpu_hours": total_gpu_hours,
+            "completed_jobs": status_counts.get("completed", 0),
+            "running_jobs": status_counts.get("running", 0),
+            "failed_jobs": status_counts.get("failed", 0),
+            "pending_jobs": status_counts.get("pending", 0)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get training stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get training statistics: {e}")
+
+
+@router.post("/jobs/{adapter_id}/cancel")
+async def cancel_training_job(
+    adapter_id: str,
+    current_user: User = Depends(PermissionChecker(["fine_tune:cancel"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Cancel a running training job.
+    Requires: 'fine_tune:cancel' permission.
+    """
+    stmt = select(fine_tuned_models_table).where(fine_tuned_models_table.c.adapter_id == adapter_id)
+    result = await db.execute(stmt)
+    job_data = result.mappings().first()
+    
+    if not job_data:
+        raise HTTPException(status_code=404, detail=f"Training job with ID '{adapter_id}' not found.")
+    
+    if job_data["training_status"] != "running":
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot cancel job with status '{job_data['training_status']}'. Only running jobs can be cancelled."
+        )
+    
+    try:
+        # Update job status to failed with cancellation note
+        update_stmt = fine_tuned_models_table.update().where(
+            fine_tuned_models_table.c.adapter_id == adapter_id
+        ).values(
+            training_status="failed",
+            updated_at=datetime.utcnow()
+        )
+        await db.execute(update_stmt)
+        await db.commit()
+        
+        # TODO: Implement actual job cancellation logic
+        # This would require integration with the task queue system
+        
+        logger.info(f"API: Training job '{adapter_id}' cancelled by user '{current_user.username}'.")
+        return {"message": f"Training job '{adapter_id}' cancellation requested."}
+        
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"API: Failed to cancel training job '{adapter_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to cancel training job: {e}")

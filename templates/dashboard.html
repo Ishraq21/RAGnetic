@@ -21,6 +21,7 @@
         }
     </script>
     <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20241228" defer></script>
+    <script src="{{ url_for('static', path='js/training.js') }}?v=20241228" defer></script>
 </head>
 <body>
     <div id="toast-notification"></div>
@@ -72,6 +73,14 @@
                 </svg>
                 Agents
             </button>
+            <button class="tab-nav-item" data-view="training">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
+                    <path d="M2 17L12 22L22 17"></path>
+                    <path d="M2 12L12 17L22 12"></path>
+                </svg>
+                Training
+            </button>
             <button class="tab-nav-item" data-view="analytics">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <line x1="18" y1="20" x2="18" y2="10"></line>
@@ -115,6 +124,20 @@
                     <div class="stat-content">
                         <h3 id="total-runs">0</h3>
                         <p>Total Runs</p>
+                    </div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
+                            <path d="M2 17L12 22L22 17"></path>
+                            <path d="M2 12L12 17L22 12"></path>
+                        </svg>
+                    </div>
+                    <div class="stat-content">
+                        <h3 id="total-training-jobs">0</h3>
+                        <p>Training Jobs</p>
                     </div>
                 </div>
                 
@@ -172,6 +195,35 @@
         </div>
 
 
+        <!-- Training View -->
+        <div class="view-content" id="training-view">
+            
+            <div class="actions-bar">
+                <button class="btn-primary" onclick="showCreateTrainingJobModal()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    New Training Job
+                </button>
+                <div class="search-box">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <path d="M21 21L16.65 16.65"></path>
+                    </svg>
+                    <input type="text" id="training-search" placeholder="Search training jobs...">
+                </div>
+            </div>
+            
+            <div class="training-grid" id="training-grid">
+                <div class="list-header">Training Jobs</div>
+                <div class="loading-state">
+                    <div class="loading-spinner"></div>
+                    <p>Loading training jobs...</p>
+                </div>
+            </div>
+        </div>
+
         <!-- Analytics View -->
         <div class="view-content" id="analytics-view">
             
@@ -191,6 +243,278 @@
         </div>
         </div>
     </main>
+
+    <!-- Create Training Job Modal -->
+    <div class="modal" id="create-training-job-modal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <div class="header-content">
+                    <div class="header-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
+                            <path d="M2 17L12 22L22 17"></path>
+                            <path d="M2 12L12 17L22 12"></path>
+                        </svg>
+                    </div>
+                    <div class="header-text">
+                        <h2>Create Training Job</h2>
+                        <p class="modal-subtitle">Configure and start a new LoRA fine-tuning job</p>
+                    </div>
+                </div>
+                <button class="modal-close" onclick="hideCreateTrainingJobModal()">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="create-training-job-form">
+                    <!-- Basic Configuration -->
+                    <div class="form-section">
+                        <div class="section-header">
+                            <h3>Basic Configuration</h3>
+                            <p>Set up the fundamental parameters for your training job</p>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="job-name">Job Name</label>
+                                <input type="text" id="job-name" name="job_name" required placeholder="my-llama2-finetune">
+                                <small>Unique identifier for this training job</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="base-model">Base Model</label>
+                                <select id="base-model" name="base_model_name" required>
+                                    <option value="">Select a base model...</option>
+                                    <optgroup label="Small Models">
+                                        <option value="TinyLlama/TinyLlama-1.1B-Chat-v1.0">TinyLlama 1.1B Chat</option>
+                                        <option value="microsoft/DialoGPT-small">DialoGPT Small</option>
+                                    </optgroup>
+                                    <optgroup label="Medium Models">
+                                        <option value="microsoft/DialoGPT-medium">DialoGPT Medium</option>
+                                        <option value="facebook/blenderbot-400M-distill">BlenderBot 400M</option>
+                                    </optgroup>
+                                    <optgroup label="Large Models">
+                                        <option value="meta-llama/Llama-2-7b-chat-hf">Llama 2 7B Chat</option>
+                                        <option value="meta-llama/Llama-2-13b-chat-hf">Llama 2 13B Chat</option>
+                                    </optgroup>
+                                </select>
+                                <small>Choose the base model to fine-tune</small>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="dataset-path">Training Dataset</label>
+                                <input type="text" id="dataset-path" name="dataset_path" required placeholder="data/prepared_datasets/my_dataset.jsonl">
+                                <small>Path to your training dataset (JSONL format)</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="eval-dataset-path">Evaluation Dataset (Optional)</label>
+                                <input type="text" id="eval-dataset-path" name="eval_dataset_path" placeholder="data/prepared_datasets/my_eval_dataset.jsonl">
+                                <small>Path to evaluation dataset for validation</small>
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="output-dir">Output Directory</label>
+                            <input type="text" id="output-dir" name="output_base_dir" required placeholder="models/fine_tuned">
+                            <small>Directory where the fine-tuned model will be saved</small>
+                        </div>
+                    </div>
+                    
+                    <!-- LoRA Configuration -->
+                    <div class="form-section">
+                        <div class="section-header">
+                            <h3>LoRA Configuration</h3>
+                            <p>Configure LoRA (Low-Rank Adaptation) parameters</p>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="lora-rank">LoRA Rank</label>
+                                <input type="range" id="lora-rank" name="lora_rank" min="1" max="64" value="8" 
+                                       aria-label="LoRA Rank" aria-valuemin="1" aria-valuemax="64" aria-valuenow="8"
+                                       oninput="updateRangeValue('lora-rank', this.value)">
+                                <div class="range-value">
+                                    <span id="lora-rank-value">8</span>
+                                    <small>Higher rank = more parameters, better capacity but slower training</small>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="lora-alpha">LoRA Alpha</label>
+                                <input type="range" id="lora-alpha" name="lora_alpha" min="1" max="128" value="16" 
+                                       aria-label="LoRA Alpha" aria-valuemin="1" aria-valuemax="128" aria-valuenow="16"
+                                       oninput="updateRangeValue('lora-alpha', this.value)">
+                                <div class="range-value">
+                                    <span id="lora-alpha-value">16</span>
+                                    <small>Scaling factor for LoRA weights</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="lora-dropout">LoRA Dropout</label>
+                                <input type="range" id="lora-dropout" name="lora_dropout" min="0" max="0.5" step="0.01" value="0.05" oninput="updateRangeValue('lora-dropout', this.value)">
+                                <div class="range-value">
+                                    <span id="lora-dropout-value">0.05</span>
+                                    <small>Dropout rate to prevent overfitting</small>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="target-modules">Target Modules</label>
+                                <input type="text" id="target-modules" name="target_modules" placeholder="q_proj,v_proj,k_proj,o_proj">
+                                <small>Comma-separated list of modules to apply LoRA to (leave empty for auto)</small>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Training Parameters -->
+                    <div class="form-section">
+                        <div class="section-header">
+                            <h3>Training Parameters</h3>
+                            <p>Configure training hyperparameters</p>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="learning-rate">Learning Rate</label>
+                                <input type="range" id="learning-rate" name="learning_rate" min="0.0001" max="0.01" step="0.0001" value="0.0002" oninput="updateRangeValue('learning-rate', this.value)">
+                                <div class="range-value">
+                                    <span id="learning-rate-value">0.0002</span>
+                                    <small>Learning rate for the optimizer</small>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="epochs">Epochs</label>
+                                <input type="range" id="epochs" name="epochs" min="1" max="10" value="3" oninput="updateRangeValue('epochs', this.value)">
+                                <div class="range-value">
+                                    <span id="epochs-value">3</span>
+                                    <small>Number of training epochs</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="batch-size">Batch Size</label>
+                                <input type="range" id="batch-size" name="batch_size" min="1" max="16" value="4" oninput="updateRangeValue('batch-size', this.value)">
+                                <div class="range-value">
+                                    <span id="batch-size-value">4</span>
+                                    <small>Training batch size per device</small>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="gradient-accumulation">Gradient Accumulation Steps</label>
+                                <input type="range" id="gradient-accumulation" name="gradient_accumulation_steps" min="1" max="16" value="1" oninput="updateRangeValue('gradient-accumulation', this.value)">
+                                <div class="range-value">
+                                    <span id="gradient-accumulation-value">1</span>
+                                    <small>Steps to accumulate gradients before updating</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Advanced Settings -->
+                    <div class="form-section">
+                        <div class="section-header">
+                            <h3>Advanced Settings</h3>
+                            <p>Optional advanced configuration options</p>
+                            <button type="button" class="btn-text" onclick="toggleAdvancedSettings()">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="6,9 12,15 18,9"></polyline>
+                                </svg>
+                                Toggle Advanced
+                            </button>
+                        </div>
+                        
+                        <div class="advanced-settings hidden" id="advanced-settings">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="mixed-precision">Mixed Precision</label>
+                                    <select id="mixed-precision" name="mixed_precision_dtype">
+                                        <option value="no">No Mixed Precision</option>
+                                        <option value="fp16">FP16 (NVIDIA GPUs)</option>
+                                        <option value="bf16">BF16 (Newer GPUs/Apple Silicon)</option>
+                                    </select>
+                                    <small>Mixed precision training for faster training and lower memory usage</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="logging-steps">Logging Steps</label>
+                                    <input type="number" id="logging-steps" name="logging_steps" min="1" max="1000" value="10">
+                                    <small>How often to log training metrics</small>
+                                </div>
+                            </div>
+                            
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="save-steps">Save Steps</label>
+                                    <input type="number" id="save-steps" name="save_steps" min="100" max="10000" value="500">
+                                    <small>How often to save model checkpoints</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="save-total-limit">Max Checkpoints</label>
+                                    <input type="number" id="save-total-limit" name="save_total_limit" min="1" max="10" value="1">
+                                    <small>Maximum number of checkpoints to keep</small>
+                                </div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="cost-per-gpu-hour">Cost per GPU Hour (USD)</label>
+                                <input type="number" id="cost-per-gpu-hour" name="cost_per_gpu_hour" min="0" max="10" step="0.1" value="0.5">
+                                <small>Estimated cost per GPU hour for cost tracking</small>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="form-actions">
+                <button type="button" class="btn-secondary" onclick="hideCreateTrainingJobModal()">Cancel</button>
+                <button type="button" class="btn-primary" onclick="submitTrainingJob()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
+                        <path d="M2 17L12 22L22 17"></path>
+                        <path d="M2 12L12 17L22 12"></path>
+                    </svg>
+                    Start Training Job
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Training Job Details Modal -->
+    <div class="modal" id="training-job-details-modal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <div class="header-content">
+                    <div class="header-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
+                            <path d="M2 17L12 22L22 17"></path>
+                            <path d="M2 12L12 17L22 12"></path>
+                        </svg>
+                    </div>
+                    <div class="header-text">
+                        <h2 id="job-details-title">Training Job Details</h2>
+                        <p class="modal-subtitle" id="job-details-subtitle">View training progress and metrics</p>
+                    </div>
+                </div>
+                <button class="modal-close" onclick="hideTrainingJobDetailsModal()">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <div id="job-details-content">
+                    <!-- Content will be populated by JavaScript -->
+                </div>
+            </div>
+            
+            <div class="form-actions">
+                <button type="button" class="btn-secondary" onclick="hideTrainingJobDetailsModal()">Close</button>
+                <button type="button" class="btn-primary" id="job-action-button" onclick="performJobAction()">
+                    <!-- Action button content will be populated by JavaScript -->
+                </button>
+            </div>
+        </div>
+    </div>
 
     <!-- Create Agent Modal -->
     <div class="modal" id="create-agent-modal">

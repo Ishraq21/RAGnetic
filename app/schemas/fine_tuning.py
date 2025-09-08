@@ -14,18 +14,18 @@ class FineTuningStatus(str, Enum):
 
 # Pydantic model for hyperparameters defined within the fine-tuning YAML configuration
 class HyperparametersConfig(BaseModel):
-    lora_rank: int = Field(8, description="LoRA rank (dimension) for PEFT fine-tuning. Higher rank offers more capacity.")
-    learning_rate: float = Field(2e-4, description="Learning rate for the optimizer during training.")
-    epochs: int = Field(3, description="Number of full passes over the training dataset.")
-    batch_size: int = Field(4, description="Training batch size per device.")
-    lora_alpha: Optional[int] = Field(None, description="LoRA alpha parameter (scaling factor for LoRA weights).")
+    lora_rank: int = Field(8, ge=1, description="LoRA rank (dimension) for PEFT fine-tuning. Higher rank offers more capacity.")
+    learning_rate: float = Field(2e-4, gt=0, description="Learning rate for the optimizer during training.")
+    epochs: int = Field(3, ge=1, description="Number of full passes over the training dataset.")
+    batch_size: int = Field(4, ge=1, description="Training batch size per device.")
+    lora_alpha: Optional[int] = Field(None, ge=1, description="LoRA alpha parameter (scaling factor for LoRA weights).")
     target_modules: Optional[List[str]] = Field(None, description="List of target modules (e.g., attention layers) for LoRA application.")
-    lora_dropout: Optional[float] = Field(None, description="Dropout probability for LoRA layers to prevent overfitting.")
-    gradient_accumulation_steps: Optional[int] = Field(1, description="Number of updates steps to accumulate before performing a backward/update pass.")
-    logging_steps: Optional[int] = Field(10, description="How often to log training loss and metrics.")
-    save_steps: Optional[int] = Field(500, description="How often to save a model checkpoint.")
-    save_total_limit: Optional[int] = Field(1, description="Maximum number of checkpoints to keep.")
-    cost_per_gpu_hour: Optional[float] = Field(0.5, description="Estimated cost in USD per GPU hour for metrics tracking.")
+    lora_dropout: Optional[float] = Field(None, ge=0, le=1, description="Dropout probability for LoRA layers to prevent overfitting.")
+    gradient_accumulation_steps: Optional[int] = Field(1, ge=1, description="Number of updates steps to accumulate before performing a backward/update pass.")
+    logging_steps: Optional[int] = Field(10, ge=1, description="How often to log training loss and metrics.")
+    save_steps: Optional[int] = Field(500, ge=1, description="How often to save a model checkpoint.")
+    save_total_limit: Optional[int] = Field(1, ge=1, description="Maximum number of checkpoints to keep.")
+    cost_per_gpu_hour: Optional[float] = Field(0.5, ge=0, description="Estimated cost in USD per GPU hour for metrics tracking.")
 
 
     mixed_precision_dtype: Optional[Literal['no', 'fp16', 'bf16']] = Field(
