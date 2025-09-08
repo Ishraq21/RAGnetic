@@ -19,7 +19,6 @@ naming_convention = {
 metadata = MetaData(naming_convention=naming_convention)
 utc_timestamp = datetime.utcnow
 sender_enum = Enum("human", "ai", name="sender_enum")
-workflow_status_enum = Enum("running", "completed", "failed", "paused", name="workflow_status_enum")
 agent_status_enum = Enum("running", "completed", "failed", name="agent_status_enum")
 api_key_scope_enum = Enum("admin", "editor", "viewer", name="api_key_scope_enum")
 benchmark_status_enum = Enum('running', 'completed', 'failed', 'cancelled', name='benchmark_status')
@@ -57,7 +56,7 @@ role_permissions_table = Table(
     "role_permissions", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("role_id", Integer, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False),
-    Column("permission", String(255), nullable=False), # e.g., 'read:workflows', 'create:agents'
+    Column("permission", String(255), nullable=False), # e.g., 'create:agents', 'read:users'
     UniqueConstraint("role_id", "permission", name="uq_role_permission")
 )
 
@@ -208,46 +207,7 @@ agent_run_steps = Table(
 )
 
 
-workflows_table = Table(
-    "workflows", metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("name", String(255), nullable=False, unique=True),
-    Column("agent_name", String(255), nullable=True),
-    Column("description", Text, nullable=True),
-    Column("definition", JSON, nullable=False),
-    Column("last_run_at", DateTime, nullable=True),
-    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
-    Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
-)
 
-workflow_runs_table = Table(
-    "workflow_runs", metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("run_id", String(255), unique=True, nullable=False),
-    Column("workflow_id", Integer, ForeignKey("workflows.id"), nullable=False, index=True),
-    Column("parent_run_id", String(255), ForeignKey("agent_runs.run_id"), nullable=True, index=True),
-
-    Column("status", workflow_status_enum, nullable=False, default="running"), # Use the new enum here
-    Column("user_id", Integer, ForeignKey("users.id"), nullable=True, index=True),
-    Column("start_time", DateTime, default=utc_timestamp, nullable=False),
-    Column("end_time", DateTime, nullable=True),
-    Column("initial_input", JSON, nullable=True),
-    Column("final_output", JSON, nullable=True),
-    Column("last_execution_state", JSON, nullable=True) # Stores the state to support pause/resume
-)
-
-human_tasks_table = Table(
-    "human_tasks", metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("run_id", Integer, ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False),
-    Column("task_name", String(255), nullable=False),
-    Column("status", String(50), nullable=False, default="pending"), # e.g., pending, completed, cancelled
-    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
-    Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
-    Column("assigned_to_user_id", Integer, ForeignKey("users.id"), nullable=True),
-    Column("payload", JSON, nullable=True), # The data the human needs to review
-    Column("resolution_data", JSON, nullable=True), # The data submitted by the human
-)
 
 crontab_schedule_table = Table(
     "crontab_schedule", metadata,
@@ -446,6 +406,4 @@ Index("tmp_docs_exp_idx", temporary_documents_table.c.expires_at)
 
 Index("chat_messages_session_ts_idx", chat_messages_table.c.session_id, chat_messages_table.c.timestamp)
 Index("conv_metrics_session_ts_idx", conversation_metrics_table.c.session_id, conversation_metrics_table.c.timestamp)
-Index("workflow_runs_workflow_idx", workflow_runs_table.c.workflow_id)
-Index("workflow_runs_user_idx", workflow_runs_table.c.user_id)
 

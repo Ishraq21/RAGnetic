@@ -3,7 +3,6 @@ class Dashboard {
     constructor() {
         this.currentView = 'overview';
         this.agents = [];
-        this.workflows = [];
         this.init();
     }
 
@@ -41,13 +40,6 @@ class Dashboard {
             });
         }
 
-        const createWorkflowForm = document.getElementById('create-workflow-form');
-        if (createWorkflowForm) {
-            createWorkflowForm.addEventListener('submit', (e) => {
-                e.preventDefault();
-                this.createWorkflow();
-            });
-        }
 
         const editAgentForm = document.getElementById('edit-agent-form');
         if (editAgentForm) {
@@ -84,13 +76,6 @@ class Dashboard {
             });
         }
 
-        // Workflow search
-        const workflowSearch = document.getElementById('workflow-search');
-        if (workflowSearch) {
-            workflowSearch.addEventListener('input', (e) => {
-                this.filterWorkflows(e.target.value);
-            });
-        }
     }
 
     async loadUserInfo() {
@@ -111,7 +96,6 @@ class Dashboard {
         try {
             await Promise.all([
                 this.loadAgents(),
-                this.loadWorkflows(),
                 this.loadRecentActivity()
             ]);
             this.updateStats();
@@ -140,34 +124,6 @@ class Dashboard {
         }
     }
 
-    async loadWorkflows() {
-        try {
-            console.log('Loading workflows from:', `${API_BASE_URL}/workflows`);
-            const response = await fetch(`${API_BASE_URL}/workflows`, {
-                headers: { 'X-API-Key': loggedInUserToken }
-            });
-            
-            console.log('Workflows response status:', response.status);
-            
-            if (response.ok) {
-                this.workflows = await response.json();
-                console.log('Loaded workflows:', this.workflows);
-                this.renderWorkflows();
-            } else if (response.status === 404) {
-                // No workflows endpoint yet, set empty array
-                console.log('Workflows endpoint not found, setting empty array');
-                this.workflows = [];
-                this.renderWorkflows();
-            } else {
-                throw new Error(`HTTP ${response.status}`);
-            }
-        } catch (error) {
-            console.error('Failed to load workflows:', error);
-            // Don't show error toast for workflows, just set empty array
-            this.workflows = [];
-            this.renderWorkflows();
-        }
-    }
 
     async loadRecentActivity() {
         try {
@@ -191,41 +147,19 @@ class Dashboard {
                 this.renderRecentAgentActivity([]);
             }
 
-            // Load recent workflow runs from analytics API
-            const analyticsUrl = `${API_BASE_URL}/analytics/workflow-runs?limit=5`;
-            console.log('Loading recent workflow runs from:', analyticsUrl);
-            
-            const workflowRunsResponse = await fetch(analyticsUrl, {
-                headers: { 'X-API-Key': loggedInUserToken }
-            });
-            
-            console.log('Workflow runs response status:', workflowRunsResponse.status);
-            
-            if (workflowRunsResponse.ok) {
-                const workflowRuns = await workflowRunsResponse.json();
-                console.log('Loaded workflow runs:', workflowRuns);
-                this.renderRecentWorkflowActivity(workflowRuns);
-            } else {
-                // If analytics API fails, show no recent activity
-                console.log('Analytics API failed, showing no recent activity');
-                this.renderRecentWorkflowActivity([]);
-            }
         } catch (error) {
             console.error('Failed to load recent activity:', error);
             // Show no recent activity on error
             this.renderRecentAgentActivity([]);
-            this.renderRecentWorkflowActivity([]);
         }
     }
 
     updateStats() {
         const totalAgentsElement = document.getElementById('total-agents');
-        const totalWorkflowsElement = document.getElementById('total-workflows');
         const totalRunsElement = document.getElementById('total-runs');
         const successRateElement = document.getElementById('success-rate');
         
         if (totalAgentsElement) totalAgentsElement.textContent = this.agents.length;
-        if (totalWorkflowsElement) totalWorkflowsElement.textContent = this.workflows.length;
         
         // Calculate total runs and success rate (placeholder for now)
         if (totalRunsElement) totalRunsElement.textContent = '0';
@@ -304,47 +238,7 @@ class Dashboard {
         `;
     }
 
-    renderWorkflows() {
-        const container = document.getElementById('workflows-list');
-        if (!container) return;
 
-        if (this.workflows.length === 0) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="9 11 12 14 22 4"></polyline>
-                        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
-                    </svg>
-                    <h3>No workflows yet</h3>
-                    <p>Create your first automated workflow</p>
-                    <button class="btn-primary" onclick="dashboard.showCreateWorkflowModal()">Create Workflow</button>
-                </div>
-            `;
-            return;
-        }
-
-        container.innerHTML = this.workflows.map(workflow => this.renderWorkflowItem(workflow)).join('');
-    }
-
-    renderWorkflowItem(workflow) {
-        return `
-            <div class="workflow-item" onclick="dashboard.showWorkflowDetails('${workflow.name}')">
-                <div class="workflow-header">
-                    <div class="workflow-info">
-                        <h3>${workflow.name}</h3>
-                        <p>${workflow.description || 'No description'}</p>
-                    </div>
-                    <button class="btn-primary" onclick="event.stopPropagation(); dashboard.triggerWorkflow('${workflow.name}')">
-                        Run
-                    </button>
-                </div>
-                <div class="workflow-meta">
-                    <span>Steps: ${workflow.steps?.length || 0}</span>
-                    <span>Agent: ${workflow.agent_name || 'None'}</span>
-                </div>
-            </div>
-        `;
-    }
 
     renderRecentAgentActivity(runs) {
         const container = document.getElementById('recent-agent-activity');
@@ -368,27 +262,6 @@ class Dashboard {
         `).join('');
     }
 
-    renderRecentWorkflowActivity(runs) {
-        const container = document.getElementById('recent-workflow-activity');
-        if (!container) return;
-
-        if (!runs || runs.length === 0) {
-            container.innerHTML = '<p class="text-muted">No recent activity</p>';
-            return;
-        }
-
-        container.innerHTML = runs.map(run => `
-            <div class="activity-item">
-                <div class="activity-icon ${run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'warning'}">
-                    ${run.status === 'completed' ? '✓' : run.status === 'failed' ? '✗' : '⋯'}
-                </div>
-                <div class="activity-content">
-                    <div class="activity-title">${run.workflow_name}</div>
-                    <div class="activity-meta">${run.status} • ${this.formatTime(run.start_time)}</div>
-                </div>
-            </div>
-        `).join('');
-    }
 
     filterAgents(query) {
         const filtered = this.agents.filter(agent => 
@@ -403,17 +276,6 @@ class Dashboard {
         }
     }
 
-    filterWorkflows(query) {
-        const filtered = this.workflows.filter(workflow => 
-            workflow.name.toLowerCase().includes(query.toLowerCase()) ||
-            (workflow.description && workflow.description.toLowerCase().includes(query.toLowerCase()))
-        );
-        
-        const container = document.getElementById('workflows-list');
-        if (container) {
-            container.innerHTML = filtered.map(workflow => this.renderWorkflowItem(workflow)).join('');
-        }
-    }
 
     switchView(view) {
         // Update tab navigation
@@ -437,8 +299,6 @@ class Dashboard {
         // Load view-specific data
         if (view === 'agents') {
             this.loadAgents();
-        } else if (view === 'workflows') {
-            this.loadWorkflows();
         }
     }
 
@@ -471,14 +331,6 @@ class Dashboard {
         this.hideModal(document.getElementById('edit-agent-modal'));
     }
 
-    showCreateWorkflowModal() {
-        this.showModal('create-workflow-modal');
-        this.populateWorkflowAgentSelect();
-    }
-
-    hideCreateWorkflowModal() {
-        this.hideModal(document.getElementById('create-workflow-modal'));
-    }
 
     showAgentDetails(agentName) {
         this.showModal('agent-details-modal');
@@ -489,14 +341,6 @@ class Dashboard {
         this.hideModal(document.getElementById('agent-details-modal'));
     }
 
-    showWorkflowDetails(workflowName) {
-        this.showModal('workflow-details-modal');
-        this.loadWorkflowDetails(workflowName);
-    }
-
-    hideWorkflowDetailsModal() {
-        this.hideModal(document.getElementById('workflow-details-modal'));
-    }
 
     // Agent Management
     populateEditForm(agent) {
@@ -993,159 +837,6 @@ class Dashboard {
         }
     }
 
-    // Workflow Management
-    async createWorkflow() {
-        const form = document.getElementById('create-workflow-form');
-        const formData = new FormData(form);
-        
-        const workflowData = {
-            name: formData.get('name'),
-            description: formData.get('description'),
-            agent_name: formData.get('agent_name') || null,
-            steps: [
-                {
-                    name: 'start',
-                    type: 'start',
-                    description: 'Workflow start'
-                }
-            ],
-            trigger: {
-                type: 'manual',
-                description: 'Manual trigger'
-            }
-        };
-
-        try {
-            const response = await fetch(`${API_BASE_URL}/workflows`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-Key': loggedInUserToken
-                },
-                body: JSON.stringify(workflowData)
-            });
-
-            if (response.ok) {
-                this.showToast('Workflow created successfully', 'success');
-                this.hideCreateWorkflowModal();
-                form.reset();
-                await this.loadWorkflows();
-                this.updateStats();
-            } else {
-                const error = await response.json();
-                throw new Error(error.detail || 'Failed to create workflow');
-            }
-        } catch (error) {
-            console.error('Failed to create workflow:', error);
-            this.showToast(error.message, 'error');
-        }
-    }
-
-    async triggerWorkflow(workflowName) {
-        try {
-            this.showToast(`Triggering workflow ${workflowName}...`, 'info');
-            
-            const response = await fetch(`${API_BASE_URL}/workflows/${workflowName}/trigger`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-Key': loggedInUserToken
-                },
-                body: JSON.stringify({})
-            });
-
-            if (response.ok) {
-                this.showToast(`Workflow ${workflowName} triggered successfully`, 'success');
-            } else {
-                throw new Error('Failed to trigger workflow');
-            }
-        } catch (error) {
-            console.error('Failed to trigger workflow:', error);
-            this.showToast('Failed to trigger workflow', 'error');
-        }
-    }
-
-    async loadWorkflowDetails(workflowName) {
-        try {
-            const response = await fetch(`${API_BASE_URL}/workflows/${workflowName}`, {
-                headers: { 'X-API-Key': loggedInUserToken }
-            });
-
-            if (response.ok) {
-                const workflow = await response.json();
-                this.renderWorkflowDetails(workflow);
-            } else {
-                throw new Error('Failed to load workflow details');
-            }
-        } catch (error) {
-            console.error('Failed to load workflow details:', error);
-            this.showToast('Failed to load workflow details', 'error');
-        }
-    }
-
-    renderWorkflowDetails(workflow) {
-        const container = document.getElementById('workflow-details-content');
-        const title = document.getElementById('workflow-details-title');
-        
-        if (title) title.textContent = workflow.name;
-        
-        if (container) {
-            container.innerHTML = `
-                <div class="workflow-details">
-                    <div class="detail-section">
-                        <h3>Description</h3>
-                        <p>${workflow.description || 'No description provided'}</p>
-                    </div>
-                    
-                    <div class="detail-section">
-                        <h3>Configuration</h3>
-                        <div class="detail-grid">
-                            <div class="detail-item">
-                                <label>Agent:</label>
-                                <span>${workflow.agent_name || 'None'}</span>
-                            </div>
-                            <div class="detail-item">
-                                <label>Steps:</label>
-                                <span>${workflow.steps?.length || 0}</span>
-                            </div>
-                            <div class="detail-item">
-                                <label>Trigger:</label>
-                                <span>${workflow.trigger?.type || 'Manual'}</span>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="detail-section">
-                        <h3>Steps</h3>
-                        <div class="steps-list">
-                            ${(workflow.steps || []).map((step, index) => `
-                                <div class="step-item">
-                                    <div class="step-number">${index + 1}</div>
-                                    <div class="step-info">
-                                        <div class="step-name">${step.name}</div>
-                                        <div class="step-type">${step.type}</div>
-                                    </div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-    }
-
-    populateWorkflowAgentSelect() {
-        const select = document.getElementById('workflow-agent');
-        if (select) {
-            select.innerHTML = '<option value="">No default agent</option>';
-            this.agents.forEach(agent => {
-                const option = document.createElement('option');
-                option.value = agent.name;
-                option.textContent = agent.display_name || agent.name;
-                select.appendChild(option);
-            });
-        }
-    }
 
     // Utility Methods
     getAgentStatus(agent) {
@@ -1379,13 +1070,6 @@ function confirmDeleteAgent() {
     dashboard.confirmDeleteAgent();
 }
 
-function showCreateWorkflowModal() {
-    dashboard.showCreateWorkflowModal();
-}
-
-function hideCreateWorkflowModal() {
-    dashboard.hideCreateWorkflowModal();
-}
 
 function showAgentDetails(agentName) {
     dashboard.showAgentDetails(agentName);
@@ -1395,13 +1079,6 @@ function hideAgentDetailsModal() {
     dashboard.hideAgentDetailsModal();
 }
 
-function showWorkflowDetails(workflowName) {
-    dashboard.showWorkflowDetails(workflowName);
-}
-
-function hideWorkflowDetailsModal() {
-    dashboard.hideWorkflowDetailsModal();
-}
 
 function logout() {
     localStorage.removeItem('ragnetic_user_token');

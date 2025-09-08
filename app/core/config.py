@@ -82,7 +82,6 @@ def get_path_settings() -> Dict[str, Path | List[Path]]:
         "MEMORY_DIR": project_root / "memory",
         "TEMP_CLONES_DIR": project_root / ".ragnetic" / ".ragnetic_temp_clones",
         "BENCHMARK_DIR": project_root / "benchmark",
-        "WORKFLOWS_DIR": project_root / "workflows",
    #    "SKILLS_DIR": project_root / "skills",
         "TRAINING_CONFIGS_DIR": project_root / "training_configs",
         "FINE_TUNED_MODELS_BASE_DIR": project_root / "models" / "fine_tuned",

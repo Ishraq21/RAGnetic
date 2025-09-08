@@ -15,8 +15,7 @@ from sqlalchemy import select, func, join, and_
 
 from app.db import get_db
 from app.db.models import conversation_metrics_table, chat_sessions_table, users_table, citations_table, \
-    chat_messages_table, document_chunks_table, lambda_runs, benchmark_runs_table, benchmark_items_table, \
-    workflows_table, workflow_runs_table
+    chat_messages_table, document_chunks_table, lambda_runs, benchmark_runs_table, benchmark_items_table
 from app.core.security import PermissionChecker
 from app.schemas.security import User
 from pydantic import BaseModel, Field
@@ -33,20 +32,6 @@ _APP_PATHS = get_path_settings()
 _BENCHMARK_DIR = _APP_PATHS["BENCHMARK_DIR"]
 
 
-class WorkflowRunSummaryEntry(BaseModel):
-    workflow_name: str = Field(..., description="Name of the workflow.")
-    total_runs: int = Field(..., description="Total number of times the workflow has run.")
-    success_rate: float = Field(..., description="Percentage of successful workflow runs.")
-    failure_rate: float = Field(..., description="Percentage of failed workflow runs.")
-    paused_rate: float = Field(..., description="Percentage of paused workflow runs.")
-    avg_duration_s: float = Field(..., description="Average duration of workflow runs in seconds.")
-    completed_runs: int = Field(..., description="Total number of completed workflow runs.")
-    failed_runs: int = Field(..., description="Total number of failed workflow runs.")
-    paused_runs: int = Field(..., description="Total number of paused workflow runs.")
-
-    class Config:
-        from_attributes = True
-        populate_by_name = True
 
 
 class UsageSummaryEntry(BaseModel):
@@ -398,102 +383,6 @@ async def get_benchmark_summary(
                             detail="Could not retrieve benchmark summary.")
 
 
-@router.get("/workflow-runs", response_model=List[WorkflowRunSummaryEntry])
-async def get_workflow_runs_summary(
-        workflow_name: Optional[str] = Query(None, description="Filter metrics by a specific workflow name."),
-        status: Optional[str] = Query(None,
-                                      description="Filter by workflow status (running, completed, failed, paused)."),
-        start_time: Optional[datetime] = Query(None,
-                                               description="Filter metrics after this timestamp (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)."),
-        end_time: Optional[datetime] = Query(None,
-                                             description="Filter metrics before this timestamp (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)."),
-        limit: int = Query(20, ge=1, le=100, description="Limit the number of aggregated workflow results."),
-        current_user: User = Depends(PermissionChecker(["analytics:read_workflow_runs"])),  # Require permission
-        db: AsyncSession = Depends(get_db),
-):
-    """
-    Retrieves aggregated workflow run metrics.
-    Requires: 'analytics:read_workflow_runs' permission.
-    """
-    logger.info(
-        f"API: User '{current_user.username}' fetching workflow run summary with filters: {workflow_name=}, {status=}, {start_time=}, {end_time=}")
-
-    try:
-        stmt = select(
-            workflows_table.c.name.label("workflow_name"),
-            func.count(workflow_runs_table.c.run_id).label("total_runs"),
-            func.avg(
-                func.julianday(workflow_runs_table.c.end_time) - func.julianday(workflow_runs_table.c.start_time)
-            ).label("avg_duration_days"),
-            func.sum(
-                expression.case((workflow_runs_table.c.status == 'completed', 1), else_=0)
-            ).label("completed_runs"),
-            func.sum(
-                expression.case((workflow_runs_table.c.status == 'failed', 1), else_=0)
-            ).label("failed_runs"),
-            func.sum(
-                expression.case((workflow_runs_table.c.status == 'paused', 1), else_=0)
-            ).label("paused_runs")
-        ).join(
-            workflows_table, workflow_runs_table.c.workflow_id == workflows_table.c.id
-        )
-
-        filters = []
-        if workflow_name:
-            filters.append(workflows_table.c.name == workflow_name)
-        if status:
-            filters.append(workflow_runs_table.c.status == status)
-        if start_time:
-            filters.append(workflow_runs_table.c.start_time >= start_time)
-        if end_time:
-            filters.append(workflow_runs_table.c.end_time <= end_time)
-
-        if filters:
-            stmt = stmt.where(and_(*filters))
-
-        stmt = stmt.group_by(workflows_table.c.name)
-        stmt = stmt.order_by(func.count(workflow_runs_table.c.run_id).desc())
-        stmt = stmt.limit(limit)
-
-        result = await db.execute(stmt)
-        rows = result.fetchall()
-
-        if not rows:
-            return []
-
-        response_data = []
-        for row in rows:
-            total_runs = row.total_runs if row.total_runs is not None else 0
-            completed_runs = row.completed_runs if row.completed_runs is not None else 0
-            failed_runs = row.failed_runs if row.failed_runs is not None else 0
-            paused_runs = row.paused_runs if row.paused_runs is not None else 0
-
-            success_rate = completed_runs / total_runs if total_runs > 0 else 0.0
-            failure_rate = failed_runs / total_runs if total_runs > 0 else 0.0
-            paused_rate = paused_runs / total_runs if total_runs > 0 else 0.0
-
-            avg_duration_s = (row.avg_duration_days * 86400) if row.avg_duration_days is not None else 0.0
-
-            response_data.append(WorkflowRunSummaryEntry(
-                workflow_name=row.workflow_name,
-                total_runs=total_runs,
-                success_rate=success_rate,
-                failure_rate=failure_rate,
-                paused_rate=paused_rate,
-                avg_duration_s=avg_duration_s,
-                completed_runs=completed_runs,
-                failed_runs=failed_runs,
-                paused_runs=paused_runs
-            ))
-
-        return response_data
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"API: Failed to fetch workflow run summary: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="Could not retrieve workflow run summary.")
 
 
 class AgentStepSummaryEntry(BaseModel):

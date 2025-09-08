@@ -23,7 +23,7 @@ task_logger = logging.getLogger(__name__)
 
 # --- Celery App Initialization (Centralized Here) ---
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-celery_app = Celery("ragnetic_workflows", broker=REDIS_URL, backend=REDIS_URL)
+celery_app = Celery("ragnetic", broker=REDIS_URL, backend=REDIS_URL)
 
 
 def get_beat_db_uri():
@@ -51,7 +51,6 @@ celery_app.conf.update(
     task_routes={
         'app.core.tasks.cleanup_temporary_documents': {'queue': 'ragnetic_cleanup_tasks'},
         'app.training.trainer_tasks.fine_tune_llm_task': {'queue': 'ragnetic_fine_tuning_tasks'},
-        'app.workflows.tasks.run_workflow_task': {'queue': 'celery'},
     },
     beat_schedule={
         'cleanup-temporary-documents-every-hour': {
@@ -63,7 +62,6 @@ celery_app.conf.update(
     include=[
         'app.core.tasks',
         'app.training.trainer_tasks',
-        'app.workflows.tasks',
         'app.executors.docker_executor',
     ]
 )

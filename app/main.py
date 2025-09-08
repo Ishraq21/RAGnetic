@@ -36,7 +36,6 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
-from app.api.webhooks import setup_dynamic_webhooks
 # Database & Models
 from app.db.models import (chat_sessions_table,
                            chat_messages_table,
@@ -60,7 +59,6 @@ from app.core.security import get_http_api_key, get_websocket_api_key, get_curre
 from app.agents.config_manager import get_agent_configs, load_agent_config
 from app.core.serialization import _serialize_for_db
 from app.tools.api_toolkit import APIToolkit
-from app.workflows.sync import sync_workflows_from_files, is_db_configured_sync
 from app.api.security import router as security_api_router
 from app.tools.lambda_tool import LambdaTool
 
@@ -68,7 +66,7 @@ from app.tools.lambda_tool import LambdaTool
 from app.schemas.security import User
 
 # Agents & Pipelines
-from app.agents.agent_graph import get_agent_workflow, AgentState
+from app.agents.agent_graph import get_agent_graph, AgentState
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from app.core.structured_logging import get_logging_config, DatabaseLogHandler
@@ -100,22 +98,27 @@ from app.api.training import router as training_api_router
 from app.api.citations import router as citations_api_router
 from app.api.documents import router as documents_api_router
 
-from app.api import workflows
-from app.api import webhooks
 
 from app.services.temporary_document_service import TemporaryDocumentService, TemporaryDocumentUploadResult
-from app.core.config import get_debug_mode
+from app.core.config import get_debug_mode, get_memory_storage_config, get_log_storage_config
 
 # Get the main application logger after configuration is applied
 load_dotenv()
 logging.config.dictConfig(get_logging_config())
 logger = logging.getLogger("ragnetic")
 
+def is_db_configured_sync() -> bool:
+    """Checks if a database is configured for either memory or logging."""
+    mem_config = get_memory_storage_config()
+    log_config = get_log_storage_config()
+    return (mem_config.get("type") in ["db", "sqlite"] and mem_config.get("connection_name")) or \
+        (log_config.get("type") == "db" and log_config.get("connection_name"))
+
 # --- Global Settings & App Initialization ---
 _APP_PATHS = get_path_settings()
 _PROJECT_ROOT = _APP_PATHS["PROJECT_ROOT"]
 _DATA_DIR = _APP_PATHS["DATA_DIR"]
-_WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]
+# _WORKFLOWS_DIR = _APP_PATHS["WORKFLOWS_DIR"]  # Removed workflow functionality
 
 config = _get_config_parser()
 WEBSOCKET_MODE = config.get('SERVER', 'websocket_mode', fallback='memory')
@@ -361,11 +364,7 @@ async def startup_event():
             async with db_mod.AsyncSessionLocal() as db_session:
                 await create_default_roles_and_permissions(db_session)
 
-            sync_workflows_from_files()
-            setup_dynamic_webhooks(app)
-            for route in app.router.routes:
-                if "Webhooks" in getattr(route, "tags", []):
-                    logger.info(f"Registered webhook: {route.path} → {route.methods}")
+            # Webhook registration code removed - no longer needed
         except Exception as e:
             logger.critical(f"CRITICAL: Failed during database startup. Error: {e}", exc_info=True)
             raise
@@ -376,10 +375,7 @@ async def startup_event():
         logger.error(f"'{_DATA_DIR}' not found. Please run 'ragnetic init'.")
         return
 
-    if not os.path.exists(_WORKFLOWS_DIR):
-        logger.warning(f"'{_WORKFLOWS_DIR}' not found. Workflow auto-sync may not work correctly.")
-
-    monitored_dirs = [str(_DATA_DIR), str(_WORKFLOWS_DIR)]
+    monitored_dirs = [str(_DATA_DIR)]
     _watcher_process = Process(target=start_watcher, args=(monitored_dirs,))
     _watcher_process.daemon = False
     _watcher_process.start()
@@ -411,8 +407,6 @@ app.include_router(metrics_api_router)
 app.include_router(analytics_api_router)
 app.include_router(security_api_router)
 app.include_router(training_api_router)
-app.include_router(workflows.router, prefix="/api/v1")
-app.include_router(webhooks.router, prefix="/webhooks/v1")
 app.include_router(citations_api_router)
 app.include_router(evaluation_api_router)
 app.include_router(lambda_tool_router)
@@ -673,7 +667,7 @@ async def websocket_chat(ws: WebSocket,
         if "lambda_tool" in agent_config.tools:
             all_tools.append(LambdaTool(server_url=_infer_server_url(ws)))
 
-        langgraph_agent = get_agent_workflow(all_tools).compile()
+        langgraph_agent = get_agent_graph(all_tools).compile()
 
 
         # Main message loop

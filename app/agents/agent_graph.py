@@ -574,7 +574,7 @@ def should_continue(state: AgentState) -> str:
     return "end"
 
 
-def get_agent_workflow(tools: List[BaseTool]):
+def get_agent_graph(tools: List[BaseTool]):
     """Builds the tool-using agent graph."""
     workflow = StateGraph(AgentState)
     tool_node = ToolNode(tools)
