@@ -26,7 +26,7 @@ import psutil
 # Add RAGnetic to path
 sys.path.insert(0, '/Users/ishraq21/ragnetic')
 
-from app.agents.agent_graph import get_agent_workflow
+from app.agents.agent_graph import get_agent_graph
 from app.pipelines.embed import _get_chunks_from_documents, _generate_chunk_id
 from app.schemas.agent import AgentConfig, VectorStoreConfig, ChunkingConfig, DataSource
 from langchain_core.documents import Document as LangChainDocument
@@ -103,7 +103,7 @@ class TestDirectAgentGraphStress:
         )
         
         # Get agent workflow
-        workflow = get_agent_workflow(tools=[])
+        workflow = get_agent_graph(tools=[])
         runnable = workflow.compile()
         
         # Test increasing concurrency levels
@@ -545,7 +545,7 @@ def run_comprehensive_direct_stress_test():
                     break
     
     if breaking_points:
-        print(f"\n🚨 BREAKING POINTS DISCOVERED:")
+        print(f"\n BREAKING POINTS DISCOVERED:")
         for bp in breaking_points:
             print(f"   • {bp}")
     else:
@@ -556,7 +556,7 @@ def run_comprehensive_direct_stress_test():
     with open(report_filename, 'w') as f:
         json.dump(test_results, f, indent=2, default=str)
     
-    print(f"\n📄 Detailed report: {report_filename}")
+    print(f"\n Detailed report: {report_filename}")
     print("="*80)
     print("DIRECT STRESS TEST COMPLETED!")
     print("="*80)

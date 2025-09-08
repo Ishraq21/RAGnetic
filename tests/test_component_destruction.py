@@ -33,7 +33,7 @@ import psutil
 sys.path.insert(0, '/Users/ishraq21/ragnetic')
 
 from app.tools.retriever_tool import get_retriever_tool
-from app.agents.agent_graph import get_agent_workflow
+from app.agents.agent_graph import get_agent_graph
 from app.services.temporary_document_service import TemporaryDocumentService, TemporaryDocumentUploadResult
 from app.pipelines.embed import embed_agent_data, VectorStoreCreationError
 from app.schemas.agent import AgentConfig, VectorStoreConfig, ChunkingConfig, DataSource
@@ -315,7 +315,7 @@ class TestAgentGraphDestruction:
         agent_config = DestructionTestFramework.create_destruction_agent_config("concurrency_obliterator")
         
         # Get agent workflow
-        workflow = get_agent_workflow(tools=[])
+        workflow = get_agent_graph(tools=[])
         runnable = workflow.compile()
         
         # Test increasing concurrency levels until destruction
@@ -705,7 +705,7 @@ class TestCrossComponentDestruction:
             
             # Step 2: Simultaneous retrieval and agent execution
             retriever = await get_retriever_tool(agent_config, user_id=1, thread_id="final_boss")
-            workflow = get_agent_workflow(tools=[])
+            workflow = get_agent_graph(tools=[])
             runnable = workflow.compile()
             
             # Launch simultaneous operations

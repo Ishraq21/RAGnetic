@@ -33,7 +33,7 @@ sys.path.insert(0, '/Users/ishraq21/ragnetic')
 try:
     from app.workflows.engine import WorkflowEngine
     from app.schemas.workflow import Workflow, AgentCallStep, ToolCallStep, IfThenStep, LoopStep
-    from app.agents.agent_graph import get_agent_workflow
+    from app.agents.agent_graph import get_agent_graph
     from app.tools.retriever_tool import get_retriever_tool
     from app.pipelines.embed import embed_agent_data
     IMPORTS_AVAILABLE = True

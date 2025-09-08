@@ -167,7 +167,7 @@ def execute_and_check(payload, test_name, expect_failure=False):
                 
                 if status == "completed":
                     if expect_failure:
-                        print(f"⚠ {test_name}: Expected failure but got success")
+                        print(f" {test_name}: Expected failure but got success")
                         return False
                     print(f" {test_name}: Success")
                     return True
@@ -244,7 +244,7 @@ def main():
     if passed == total:
         print(" ALL FIXES VERIFIED! Lambda tool improvements are working!")
     else:
-        print("⚠  Some fixes need attention. Server restart may be required.")
+        print("  Some fixes need attention. Server restart may be required.")
 
 if __name__ == "__main__":
     main()

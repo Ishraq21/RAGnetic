@@ -39,7 +39,7 @@ async def execute_lambda_code(
         # Always enforce user_id
         payload.user_id = user.id
 
-        # ✅ Guarantee thread_id exists
+        # Guarantee thread_id exists
         if not payload.thread_id:
             new_thread_id = str(uuid.uuid4())
             agent_config = AgentConfig(name="lambda_tool", description="Lambda execution agent")
