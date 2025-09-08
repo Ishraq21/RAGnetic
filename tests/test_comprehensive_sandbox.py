@@ -26,7 +26,7 @@ import json
 import re
 from datetime import datetime, timedelta
 
-print("🔬 COMPREHENSIVE DATA ANALYSIS PIPELINE")
+print("COMPREHENSIVE DATA ANALYSIS PIPELINE")
 print("=" * 50)
 
 # Step 1: Load and analyze CSV employee data
@@ -163,7 +163,7 @@ except Exception as e:
     timeseries_analysis = {}
 
 # Step 4: Text processing and log analysis
-print("\\n📝 STEP 4: Mixed Data and Log Processing")
+print("\\n STEP 4: Mixed Data and Log Processing")
 try:
     # Process mixed format text data
     with open('mixed_data_types.txt', 'r') as f:
@@ -273,7 +273,7 @@ try:
         ]
     }
     
-    print(f"\\n📋 COMPREHENSIVE SUMMARY:")
+    print(f"\\n COMPREHENSIVE SUMMARY:")
     print(f"- Datasets Processed: {comprehensive_summary['datasets_processed']}")
     print(f"- Analysis Timestamp: {comprehensive_summary['analysis_timestamp']}")
     print(f"\\nKey Recommendations:")
@@ -594,11 +594,11 @@ import json
 import math
 from datetime import datetime
 
-print("🔬 SCIENTIFIC COMPUTING AND NUMERICAL ANALYSIS")
+print("SCIENTIFIC COMPUTING AND NUMERICAL ANALYSIS")
 print("=" * 50)
 
 # Test 1: Linear Algebra Operations
-print("\\n🧮 TEST 1: Advanced Linear Algebra")
+print("\\n TEST 1: Advanced Linear Algebra")
 
 # Create test matrices
 np.random.seed(42)
@@ -633,7 +633,7 @@ print(f"  • Largest Eigenvalue: {matrix_ops['largest_eigenvalue']:.4f}")
 print(f"  • Top 3 Singular Values: {[f'{x:.4f}' for x in matrix_ops['singular_values']]}")
 
 # Test 2: Numerical Integration and Differentiation
-print("\\n📐 TEST 2: Numerical Calculus")
+print("\\n TEST 2: Numerical Calculus")
 
 def f(x):
     return x**3 - 2*x**2 + 3*x - 1
@@ -878,15 +878,15 @@ def execute_lambda(payload):
                 if output:
                     # Show first part of output (it might be very long)
                     if len(output) > 2000:
-                        print("📄 Output (truncated):")
+                        print(" Output (truncated):")
                         print(output[:2000] + "\n... [output truncated] ...")
                     else:
-                        print("📄 Output:")
+                        print(" Output:")
                         print(output)
                 
                 artifacts = final_state.get("artifacts") or final_state.get("result_files", [])
                 if artifacts:
-                    print(f"📁 Artifacts created: {len(artifacts)} files")
+                    print(f" Artifacts created: {len(artifacts)} files")
                     for artifact in artifacts[:5]:  # Show first 5
                         print(f"  - {artifact.get('file_name', 'Unknown')}")
                 
@@ -946,10 +946,10 @@ def main():
     
     if passed == total:
         print("\\n ALL COMPREHENSIVE TESTS PASSED!")
-        print("🔬 Complex algorithms, data analysis, and scientific computing verified!")
+        print("Complex algorithms, data analysis, and scientific computing verified!")
         print(" RAGnetic Lambda Tool is performing at advanced levels!")
     else:
-        print("\\n⚠  Some complex tests failed. Check logs for details.")
+        print("\\n  Some complex tests failed. Check logs for details.")
 
 if __name__ == "__main__":
     main()

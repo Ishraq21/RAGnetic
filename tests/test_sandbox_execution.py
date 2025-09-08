@@ -211,12 +211,12 @@ def execute_lambda(payload):
                 final_state = status_data.get("final_state", {})
                 output = final_state.get("output", "")
                 if output:
-                    print("📄 Output:")
+                    print(" Output:")
                     print(output)
                 
                 artifacts = final_state.get("artifacts") or final_state.get("result_files", [])
                 if artifacts:
-                    print(f"📁 Artifacts created: {artifacts}")
+                    print(f" Artifacts created: {artifacts}")
                 
                 return True
                 
@@ -273,7 +273,7 @@ def main():
     if passed == total:
         print(" ALL TESTS PASSED! Lambda tool is working perfectly!")
     else:
-        print("⚠  Some tests failed. Check the logs above for details.")
+        print("  Some tests failed. Check the logs above for details.")
 
 if __name__ == "__main__":
     main()

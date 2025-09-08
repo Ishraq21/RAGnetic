@@ -35,7 +35,7 @@ sys.path.insert(0, '/Users/ishraq21/ragnetic')
 try:
     from app.workflows.engine import WorkflowEngine
     from app.schemas.workflow import Workflow, AgentCallStep, ToolCallStep
-    from app.agents.agent_graph import get_agent_workflow
+    from app.agents.agent_graph import get_agent_graph
     from app.tools.retriever_tool import get_retriever_tool
     from app.pipelines.embed import embed_agent_data
     from app.services.temporary_document_service import TemporaryDocumentService
@@ -154,7 +154,7 @@ class TestEndToEndWorkflowAnnihilation:
         
         print(f" CONCURRENT WORKFLOW ANNIHILATION: {successful_workflows}/{len(workflow_definitions)} workflows succeeded")
         print(f" Performance: {workflows_per_second:.2f} workflows/second")
-        print(f"💀 Total execution time: {total_time:.2f} seconds")
+        print(f" Total execution time: {total_time:.2f} seconds")
     
     @pytest.mark.asyncio
     async def test_extreme_workflow_complexity_limits(self):
@@ -225,7 +225,7 @@ class TestEndToEndWorkflowAnnihilation:
                 if scenario["expected_success"]:
                     pytest.fail(f"Complex workflow with {scenario['steps']} steps should succeed but failed: {e}")
                 else:
-                    print(f"💀 EXPECTED COMPLEXITY FAILURE: {scenario['steps']} steps failed as expected: {e}")
+                    print(f" EXPECTED COMPLEXITY FAILURE: {scenario['steps']} steps failed as expected: {e}")
     
     @pytest.mark.asyncio
     async def test_workflow_state_management_destruction(self):
@@ -311,11 +311,11 @@ class TestEndToEndWorkflowAnnihilation:
                 f"Should achieve at least 100 state operations/second, got {operations_per_second:.2f}"
             
             print(f" STATE DESTRUCTION: {successful_workflows}/{scenario['concurrent_workflows']} workflows")
-            print(f"💀 State operations/second: {operations_per_second:.2f}")
+            print(f" State operations/second: {operations_per_second:.2f}")
 
 
 class TestDatabasePipelineIntegrationDevastation:
-    """💀 Test database → embedding → retrieval → agent pipeline to complete devastation 💀"""
+    """ Test database → embedding → retrieval → agent pipeline to complete devastation """
     
     @pytest.mark.asyncio
     async def test_massive_document_processing_pipeline(self):
@@ -409,7 +409,7 @@ class TestDatabasePipelineIntegrationDevastation:
             assert embeddings_per_second >= 50, \
                 f"Should generate at least 50 embeddings/second, got {embeddings_per_second:.2f}"
             
-            print(f"💀 PIPELINE DEVASTATION: {successful_pipelines}/{scenario['concurrent_pipelines']} pipelines succeeded")
+            print(f" PIPELINE DEVASTATION: {successful_pipelines}/{scenario['concurrent_pipelines']} pipelines succeeded")
             print(f" Documents/second: {documents_per_second:.2f}")
             print(f" Embeddings/second: {embeddings_per_second:.2f}")
     
@@ -483,7 +483,7 @@ class TestDatabasePipelineIntegrationDevastation:
                 f"Should achieve at least 500 DB operations/second, got {operations_per_second:.2f}"
             
             print(f" DB CONNECTION ANNIHILATION: {successful_connections}/{scenario['concurrent_connections']} connections")
-            print(f"💀 DB operations/second: {operations_per_second:.2f}")
+            print(f" DB operations/second: {operations_per_second:.2f}")
 
 
 class TestAPIWorkflowIntegrationDestruction:
@@ -570,11 +570,11 @@ class TestAPIWorkflowIntegrationDestruction:
             
             print(f" API BOMBARDMENT: {successful_requests}/{scenario['concurrent_requests']} requests succeeded")
             print(f" Requests/second: {requests_per_second:.2f}")
-            print(f"💀 Avg response time: {avg_response_time*1000:.2f}ms")
+            print(f" Avg response time: {avg_response_time*1000:.2f}ms")
 
 
 class TestCrossComponentIntegrationDestruction:
-    """💀 Test cross-component integration destruction 💀"""
+    """ Test cross-component integration destruction """
     
     @pytest.mark.asyncio
     async def test_shared_resource_coordination_annihilation(self):
@@ -659,7 +659,7 @@ class TestCrossComponentIntegrationDestruction:
                 assert operations_per_second >= 100, \
                     f"Registry should handle >=100 ops/second, got {operations_per_second:.2f}"
             
-            print(f"💀 RESOURCE COORDINATION DESTRUCTION: {successful_accessors}/{scenario['concurrent_accessors']} accessors")
+            print(f" RESOURCE COORDINATION DESTRUCTION: {successful_accessors}/{scenario['concurrent_accessors']} accessors")
             print(f" {scenario['resource']} ops/second: {operations_per_second:.2f}")
     
     @pytest.mark.asyncio
@@ -734,7 +734,7 @@ class TestCrossComponentIntegrationDestruction:
                     f"Error message should contain boundary info: {error_msg}"
             
             print(f" ERROR PROPAGATION: {scenario['boundary']} - {failed_operations}/{num_operations} errors propagated")
-            print(f"💀 Error rate: {actual_error_rate:.2%} (expected: {scenario['error_rate']:.2%})")
+            print(f" Error rate: {actual_error_rate:.2%} (expected: {scenario['error_rate']:.2%})")
 
 
 if __name__ == "__main__":

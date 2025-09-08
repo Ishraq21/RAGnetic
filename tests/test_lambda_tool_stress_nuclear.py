@@ -228,7 +228,7 @@ time.sleep(0.1)
         expected_total = num_processes * requests_per_process
         actual_total = len(all_results) + len(all_errors)
         
-        print(f"💀 MULTIPROCESS RESULTS:")
+        print(f" MULTIPROCESS RESULTS:")
         print(f"   Processes: {num_processes}")
         print(f"   Expected total requests: {expected_total}")
         print(f"   Actual total requests: {actual_total}")
@@ -702,7 +702,7 @@ print(f'Long operation {{operation_id}} completed in {{duration:.2f}}s')
         """STRESS: Test file descriptor limits"""
         # Get current file descriptor limit
         soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
-        print(f"📁 File descriptor limits: soft={soft_limit}, hard={hard_limit}")
+        print(f" File descriptor limits: soft={soft_limit}, hard={hard_limit}")
         
         # Try to exhaust file descriptors
         file_handles = []
@@ -756,7 +756,7 @@ print(f'Created file {{temp_file}}')
                 except:
                     pass
         
-        print(f"📁 FD STRESS RESULTS:")
+        print(f" FD STRESS RESULTS:")
         print(f"   Created {len(file_handles)} file descriptors")
         print(f"   System handled FD stress gracefully")
         
