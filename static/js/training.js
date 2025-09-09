@@ -392,7 +392,7 @@ class TrainingDashboard {
             case 'running':
                 return `<button class="btn-danger" onclick="event.stopPropagation(); trainingDashboard.cancelJob('${job.adapter_id}')">Cancel</button>`;
             case 'completed':
-                return `<button class="btn-primary" onclick="event.stopPropagation(); trainingDashboard.downloadModel('${job.adapter_id}')">Download</button>`;
+                return `<button class="btn-danger" onclick="event.stopPropagation(); trainingDashboard.deleteJob('${job.adapter_id}')">Delete</button>`;
             case 'failed':
                 return `<button class="btn-danger" onclick="event.stopPropagation(); trainingDashboard.deleteJob('${job.adapter_id}')">Delete</button>`;
             default:
@@ -636,7 +636,7 @@ class TrainingDashboard {
                 await this.cancelJob(job.adapter_id);
                 break;
             case 'completed':
-                await this.downloadModel(job.adapter_id);
+                await this.deleteJob(job.adapter_id);
                 break;
             case 'failed':
                 await this.deleteJob(job.adapter_id);
