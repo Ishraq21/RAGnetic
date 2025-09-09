@@ -438,9 +438,12 @@ class TrainingDashboard {
         document.getElementById('job-details-title').textContent = job.job_name;
         document.getElementById('job-details-subtitle').textContent = `${job.base_model_name} • ${status}`;
 
+        // Action button removed - no longer needed
         const actionButton = document.getElementById('job-action-button');
-        actionButton.innerHTML = this.getActionButton(job);
-        actionButton.onclick = () => this.performJobAction(job);
+        if (actionButton) {
+            actionButton.innerHTML = this.getActionButton(job);
+            actionButton.onclick = () => this.performJobAction(job);
+        }
 
         document.getElementById('job-details-content').innerHTML = `
             <div class="job-details-grid">

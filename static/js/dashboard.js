@@ -301,7 +301,11 @@ class Dashboard {
             return;
         }
 
-        container.innerHTML = this.agents.map(agent => this.renderAgentCard(agent)).join('');
+        const agentsHtml = this.agents.map(agent => this.renderAgentCard(agent)).join('');
+        container.innerHTML = `
+            <div class="list-header">Agents</div>
+            ${agentsHtml}
+        `;
     }
 
     renderAgentCard(agent) {
@@ -1250,7 +1254,7 @@ class FineTunedModelsManager {
 
         const modelsHtml = this.models.map(model => this.renderModelCard(model)).join('');
         grid.innerHTML = `
-            <div class="list-header">Fine-tuned Models (${this.models.length})</div>
+            <div class="list-header">Fine-tuned Models</div>
             ${modelsHtml}
         `;
     }
