@@ -1029,22 +1029,6 @@ class Dashboard {
         }, 5000);
     }
 
-    // Advanced Settings Toggle
-    toggleAdvancedSettings() {
-        const advancedSettings = document.getElementById('advanced-settings');
-        const toggleText = document.getElementById('advanced-toggle-text');
-        const toggleIcon = document.getElementById('advanced-toggle-icon');
-        
-        if (advancedSettings.classList.contains('hidden')) {
-            advancedSettings.classList.remove('hidden');
-            toggleText.textContent = 'Hide Advanced';
-            toggleIcon.style.transform = 'rotate(180deg)';
-        } else {
-            advancedSettings.classList.add('hidden');
-            toggleText.textContent = 'Show Advanced';
-            toggleIcon.style.transform = 'rotate(0deg)';
-        }
-    }
 
     // Data Source Management
     addDataSource() {
@@ -1607,9 +1591,6 @@ function logout() {
 // toggleSidebar function removed - no longer needed
 
 // Global functions for the form
-function toggleAdvancedSettings() {
-    dashboard.toggleAdvancedSettings();
-}
 
 function addDataSource() {
     dashboard.addDataSource();
