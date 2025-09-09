@@ -197,7 +197,7 @@ async def get_available_models_for_agents(
         model_data = FineTunedModel.model_validate(model)
         available_models.append({
             "value": f"fine_tuned:{model_data.adapter_id}",
-            "label": f"🎯 {model_data.job_name} (Fine-tuned {model_data.base_model_name})",
+            "label": f"{model_data.job_name} (Fine-tuned {model_data.base_model_name})",
             "type": "fine_tuned",
             "adapter_id": model_data.adapter_id,
             "base_model": model_data.base_model_name,

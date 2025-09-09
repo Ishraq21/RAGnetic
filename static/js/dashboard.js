@@ -245,7 +245,7 @@ class Dashboard {
         
         // Add fine-tuned models first
         if (fineTunedModels.length > 0) {
-            html += '<optgroup label="🎯 Fine-tuned Models">';
+            html += '<optgroup label="Fine-tuned Models">';
             fineTunedModels.forEach(model => {
                 html += `<option value="${model.value}">${model.label}</option>`;
             });
