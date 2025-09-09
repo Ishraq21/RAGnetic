@@ -40,6 +40,42 @@ os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 logger = logging.getLogger(__name__)
 
 
+def log_to_file(file_path: str, message: str, level: str = "INFO") -> None:
+    """
+    Direct file writing function with forced disk sync to ensure logs are written
+    even in Celery worker processes where standard logging may not work properly.
+    
+    Args:
+        file_path: Path to the log file
+        message: Log message to write
+        level: Log level (INFO, WARNING, ERROR, DEBUG)
+    """
+    try:
+        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        log_entry = f"{timestamp} [{level}] TRAINING: {message}\n"
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        # Write to file with forced sync
+        with open(file_path, "a", encoding="utf-8") as f:
+            f.write(log_entry)
+            f.flush()  # Force write to buffer
+            os.fsync(f.fileno())  # Force write to disk
+            
+    except Exception as e:
+        # Fallback: try to write to a backup location
+        try:
+            backup_path = "/tmp/ragnetic_training_logs_backup.txt"
+            with open(backup_path, "a", encoding="utf-8") as f:
+                f.write(f"{datetime.utcnow().isoformat()} ERROR: Failed to write to {file_path}: {e}\n")
+                f.write(f"{datetime.utcnow().isoformat()} ORIGINAL_MESSAGE: {message}\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception:
+            pass  # If even backup fails, silently continue
+
+
 
 class DbProgressCallback(TrainerCallback):
     """
@@ -138,6 +174,16 @@ class LLMFineTuner:
         logger.info(f"Dataset: {dataset_path_str}, Model Output Path: {adapter_path}")
         logger.info(f"Configured Hyperparameters: {hyperparameters}")
         logger.info(f"Seed fixed to: {seed}")
+        
+        # Log training start with direct file writing
+        log_to_file(training_logs_path, f"=== TRAINING JOB STARTED ===", "INFO")
+        log_to_file(training_logs_path, f"Job Name: {job_name}", "INFO")
+        log_to_file(training_logs_path, f"Adapter ID: {adapter_id}", "INFO")
+        log_to_file(training_logs_path, f"Base Model: {base_model_name}", "INFO")
+        log_to_file(training_logs_path, f"Dataset Path: {dataset_path_str}", "INFO")
+        log_to_file(training_logs_path, f"Output Path: {adapter_path}", "INFO")
+        log_to_file(training_logs_path, f"Seed: {seed}", "INFO")
+        log_to_file(training_logs_path, f"Hyperparameters: {json.dumps(hyperparameters, indent=2)}", "INFO")
 
         # Create/ensure DB record + persist seed (if row exists from API, we update ‘seed’ here)
         created_record_row = None
@@ -230,6 +276,8 @@ class LLMFineTuner:
 
             # --- Load and prepare the dataset (NEEDED before trainer) ---
             logger.info(f"Loading training data from: {dataset_path_str}")
+            log_to_file(training_logs_path, f"Loading training data from: {dataset_path_str}", "INFO")
+            
             with open(dataset_path_str, "r", encoding="utf-8") as f:
                 first_line = f.readline()
 
@@ -242,21 +290,29 @@ class LLMFineTuner:
                 training_data = ConversationalJsonlLoader(dataset_path_str).load()
                 bad = _validate_conversation_rows(training_data)
             else:
-                raise ValueError(
-                    "Could not infer dataset format. Expected 'jsonl-instruction' or 'conversational-jsonl'.")
+                error_msg = "Could not infer dataset format. Expected 'jsonl-instruction' or 'conversational-jsonl'."
+                log_to_file(training_logs_path, error_msg, "ERROR")
+                raise ValueError(error_msg)
 
             if not training_data:
-                raise ValueError("Training dataset is empty. Check dataset_path and file contents.")
+                error_msg = "Training dataset is empty. Check dataset_path and file contents."
+                log_to_file(training_logs_path, error_msg, "ERROR")
+                raise ValueError(error_msg)
 
             total = len(training_data)
             if bad > 0:
-                logger.warning(
-                    f"Dataset validation: {bad}/{total} rows flagged invalid; they will still be included but may truncate.")
+                warning_msg = f"Dataset validation: {bad}/{total} rows flagged invalid; they will still be included but may truncate."
+                logger.warning(warning_msg)
+                log_to_file(training_logs_path, warning_msg, "WARNING")
             if total < 10:
-                logger.warning(f"Very small dataset ({total} samples). OK for smoke-test, risky for production.")
+                warning_msg = f"Very small dataset ({total} samples). OK for smoke-test, risky for production."
+                logger.warning(warning_msg)
+                log_to_file(training_logs_path, warning_msg, "WARNING")
 
             hf_dataset = Dataset.from_list(training_data)
-            logger.info(f"Loaded {len(hf_dataset)} samples in '{dataset_format}' format for fine-tuning.")
+            success_msg = f"Loaded {len(hf_dataset)} samples in '{dataset_format}' format for fine-tuning."
+            logger.info(success_msg)
+            log_to_file(training_logs_path, success_msg, "INFO")
 
             # --- Tokenizer (needed for training + saving) ---
             tokenizer = AutoTokenizer.from_pretrained(base_model_name)
@@ -282,6 +338,7 @@ class LLMFineTuner:
 
 
             logger.info(f"Training device resolved to: {actual_device}")
+            log_to_file(training_logs_path, f"Training device resolved to: {actual_device}", "INFO")
 
             # dtype preference
             dtype = torch.float32
@@ -316,13 +373,28 @@ class LLMFineTuner:
                 except Exception as e:
                     logger.info(f"bitsandbytes unavailable; running without 4-bit: {e}")
 
+            log_to_file(training_logs_path, f"Loading model: {base_model_name}", "INFO")
+            # Convert non-serializable objects to strings for logging
+            serializable_kwargs = {}
+            for key, value in model_load_kwargs.items():
+                try:
+                    # Try to serialize the value
+                    json.dumps(value)
+                    serializable_kwargs[key] = value
+                except (TypeError, ValueError):
+                    # If it fails, convert to string
+                    serializable_kwargs[key] = str(value)
+            log_to_file(training_logs_path, f"Model load kwargs: {json.dumps(serializable_kwargs, indent=2)}", "INFO")
+            
             model = AutoModelForCausalLM.from_pretrained(
                 base_model_name,
                 **model_load_kwargs
             )
+            log_to_file(training_logs_path, "Model loaded successfully", "INFO")
 
             if hasattr(model, "config") and hasattr(model.config, "use_cache"):
                 model.config.use_cache = False
+                log_to_file(training_logs_path, "Disabled model caching for training", "INFO")
 
             # For MPS/CPU, move the model explicitly (device_map is not used)
             if actual_device in ("mps", "cpu"):
@@ -343,16 +415,24 @@ class LLMFineTuner:
                 logger.info("Model prepared for gradient checkpointing (non-kbit).")
 
             # Configure LoRA
+            lora_dropout = hyperparameters.get('lora_dropout', 0.05)
+            if lora_dropout is None:
+                lora_dropout = 0.05
+                
             lora_config = LoraConfig(
                 r=hyperparameters.get('lora_rank', 8),
                 lora_alpha=hyperparameters.get('lora_alpha', 16),
                 target_modules=hyperparameters.get('target_modules', None),
-                lora_dropout=hyperparameters.get('lora_dropout', 0.05),
+                lora_dropout=lora_dropout,
                 bias="none",
                 task_type="CAUSAL_LM",
             )
+            log_to_file(training_logs_path, "Configuring LoRA adapter", "INFO")
+            log_to_file(training_logs_path, f"LoRA config: {json.dumps(lora_config.to_dict(), indent=2)}", "INFO")
+            
             peft_model = get_peft_model(model, lora_config)
             peft_model.print_trainable_parameters()
+            log_to_file(training_logs_path, "LoRA adapter configured successfully", "INFO")
 
             use_fp16 = False
             use_bf16 = False
@@ -448,6 +528,7 @@ class LLMFineTuner:
                                                     log_every_steps=max(1, hyperparameters.get("logging_steps", 10))))
 
             logger.info("Starting actual fine-tuning process...")
+            log_to_file(training_logs_path, "=== STARTING ACTUAL FINE-TUNING PROCESS ===", "INFO")
 
             def _try_train_with_args(_args: TrainingArguments, retries_left: int = 1):
                 nonlocal trainer
@@ -466,11 +547,13 @@ class LLMFineTuner:
                     return _try_train_with_args(new_args, retries_left - 1)
 
             train_output = _try_train_with_args(training_args, retries_left=1)
+            log_to_file(training_logs_path, "=== TRAINING PROCESS COMPLETED ===", "INFO")
 
             # Save adapter + tokenizer
             trainer.save_model(adapter_path)
             tokenizer.save_pretrained(adapter_path)
             logger.info(f"Fine-tuned adapter saved to {adapter_path}")
+            log_to_file(training_logs_path, f"Fine-tuned adapter saved to {adapter_path}", "INFO")
 
             # Build manifest with file checksums
             def _sha256_file(p: Path) -> str:
@@ -526,6 +609,15 @@ class LLMFineTuner:
             duration_seconds = (end_time - start_time_record).total_seconds()
             estimated_gpu_hours = duration_seconds / 3600
             estimated_cost = estimated_gpu_hours * hyperparameters.get("cost_per_gpu_hour", 0.5)
+            
+            # Log comprehensive training results
+            log_to_file(training_logs_path, "=== TRAINING RESULTS ===", "INFO")
+            log_to_file(training_logs_path, f"Final Training Loss: {actual_final_loss}", "INFO")
+            log_to_file(training_logs_path, f"Validation Loss: {actual_validation_loss}", "INFO")
+            log_to_file(training_logs_path, f"Training Duration: {duration_seconds:.2f} seconds", "INFO")
+            log_to_file(training_logs_path, f"Estimated GPU Hours: {estimated_gpu_hours:.4f}", "INFO")
+            log_to_file(training_logs_path, f"Estimated Cost: ${estimated_cost:.4f}", "INFO")
+            log_to_file(training_logs_path, f"All Training Metrics: {json.dumps(final_metrics, indent=2)}", "INFO")
 
             self._update_fine_tune_job_record(
                 adapter_id,
@@ -546,21 +638,39 @@ class LLMFineTuner:
             )
             logger.info(
                 f"Fine-tuning job '{job_name}' (ID: {adapter_id}) completed successfully. Model saved to {adapter_path}")
+            log_to_file(training_logs_path, f"=== TRAINING JOB COMPLETED SUCCESSFULLY ===", "INFO")
+            log_to_file(training_logs_path, f"Job Name: {job_name}", "INFO")
+            log_to_file(training_logs_path, f"Adapter ID: {adapter_id}", "INFO")
+            log_to_file(training_logs_path, f"Model saved to: {adapter_path}", "INFO")
 
         except Exception as e:
-            logger.error(f"Fine-tuning job '{job_name}' (ID: {adapter_id}) failed: {e}", exc_info=True)
+            error_msg = f"Fine-tuning job '{job_name}' (ID: {adapter_id}) failed: {e}"
+            logger.error(error_msg, exc_info=True)
+            log_to_file(training_logs_path, f"=== TRAINING JOB FAILED ===", "ERROR")
+            log_to_file(training_logs_path, f"Job Name: {job_name}", "ERROR")
+            log_to_file(training_logs_path, f"Adapter ID: {adapter_id}", "ERROR")
+            log_to_file(training_logs_path, f"Error: {str(e)}", "ERROR")
+            log_to_file(training_logs_path, f"Error Type: {type(e).__name__}", "ERROR")
             self._update_fine_tune_job_record(adapter_id, FineTuningStatus.FAILED)
             raise
         finally:
+            # Enhanced cleanup with logging
+            log_to_file(training_logs_path, "=== CLEANING UP TRAINING SESSION ===", "INFO")
+            
             # Detach the per-run file handler
             if file_handler:
                 try:
                     logger.removeHandler(file_handler)
-                except Exception:
-                    pass
+                    log_to_file(training_logs_path, "File handler removed from logger", "INFO")
+                except Exception as e:
+                    log_to_file(training_logs_path, f"Error removing file handler: {e}", "WARNING")
                 try:
                     file_handler.close()
-                except Exception:
-                    pass
+                    log_to_file(training_logs_path, "File handler closed", "INFO")
+                except Exception as e:
+                    log_to_file(training_logs_path, f"Error closing file handler: {e}", "WARNING")
+            
+            # Final log entry to ensure file is written
+            log_to_file(training_logs_path, "=== TRAINING SESSION ENDED ===", "INFO")
 
         return initial_db_record
