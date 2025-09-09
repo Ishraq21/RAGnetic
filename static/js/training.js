@@ -4,7 +4,6 @@ class TrainingDashboard {
         this.trainingJobs = [];
         this.currentJob = null;
         this.refreshInterval = null;
-        this.searchTimeout = null;
         this.init();
     }
 
@@ -15,16 +14,6 @@ class TrainingDashboard {
     }
 
     setupEventListeners() {
-        // Search functionality
-        const searchInput = document.getElementById('training-search');
-        if (searchInput) {
-            searchInput.addEventListener('input', (e) => {
-                clearTimeout(this.searchTimeout);
-                this.searchTimeout = setTimeout(() => {
-                    this.filterJobs(e.target.value);
-                }, 300);
-            });
-        }
 
         // Modal event listeners
         document.addEventListener('click', (e) => {
@@ -41,11 +30,201 @@ class TrainingDashboard {
                 this.submitTrainingJob();
             });
         }
+
+        // File upload event listeners
+        this.setupFileUploadListeners();
+    }
+
+    setupFileUploadListeners() {
+        // Training dataset upload
+        const datasetUpload = document.getElementById('dataset-upload');
+        const datasetArea = datasetUpload?.parentElement.querySelector('.file-upload-area');
+        
+        if (datasetUpload && datasetArea) {
+            this.setupFileUpload(datasetUpload, datasetArea, 'dataset');
+        }
+
+        // Evaluation dataset upload
+        const evalDatasetUpload = document.getElementById('eval-dataset-upload');
+        const evalDatasetArea = evalDatasetUpload?.parentElement.querySelector('.file-upload-area');
+        
+        if (evalDatasetUpload && evalDatasetArea) {
+            this.setupFileUpload(evalDatasetUpload, evalDatasetArea, 'eval-dataset');
+        }
+    }
+
+    setupFileUpload(fileInput, uploadArea, type) {
+        // Click to upload
+        uploadArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        // File selection
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                this.handleFileSelection(e.target.files[0], type);
+            }
+        });
+
+        // Drag and drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                this.handleFileSelection(files[0], type);
+            }
+        });
+    }
+
+    async handleFileSelection(file, type) {
+        // Validate file type
+        if (!file.name.endsWith('.jsonl') && !file.name.endsWith('.json')) {
+            this.showToast('Please select a JSONL or JSON file', 'error');
+            return;
+        }
+
+        // Show upload progress
+        this.showFileUploadProgress(type, file.name);
+
+        try {
+            // Upload file
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const response = await fetch('/api/v1/training/upload-dataset', {
+                method: 'POST',
+                headers: {
+                    'X-API-Key': loggedInUserToken
+                },
+                body: formData
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || `Upload failed: ${response.status}`);
+            }
+
+            const result = await response.json();
+            
+            // Update UI to show selected file
+            this.showFileSelected(type, file.name, result.file_path);
+            
+            // Set hidden input value
+            const pathInput = document.getElementById(`${type}-path`);
+            if (pathInput) {
+                pathInput.value = result.file_path;
+            }
+
+            this.showToast(`Dataset uploaded successfully: ${file.name}`, 'success');
+
+        } catch (error) {
+            console.error('File upload error:', error);
+            this.showToast(`Upload failed: ${error.message}`, 'error');
+            this.resetFileUpload(type);
+        }
+    }
+
+    showFileUploadProgress(type, filename) {
+        const uploadArea = document.getElementById(`${type}-upload`).parentElement.querySelector('.file-upload-area');
+        const uploadContent = uploadArea.querySelector('.file-upload-content');
+        const uploadSelected = uploadArea.querySelector('.file-upload-selected');
+        
+        if (uploadContent) uploadContent.style.display = 'none';
+        if (uploadSelected) uploadSelected.style.display = 'none';
+
+        // Create progress indicator
+        let progressDiv = uploadArea.querySelector('.upload-progress');
+        if (!progressDiv) {
+            progressDiv = document.createElement('div');
+            progressDiv.className = 'upload-progress';
+            progressDiv.innerHTML = `
+                <div class="progress-bar">
+                    <div class="progress-fill"></div>
+                </div>
+                <div class="upload-status">Uploading ${filename}...</div>
+            `;
+            uploadArea.appendChild(progressDiv);
+        }
+        
+        progressDiv.classList.add('show');
+        
+        // Simulate progress (since we can't track real progress easily)
+        const progressFill = progressDiv.querySelector('.progress-fill');
+        let progress = 0;
+        const interval = setInterval(() => {
+            progress += Math.random() * 15;
+            if (progress > 90) progress = 90;
+            progressFill.style.width = `${progress}%`;
+        }, 200);
+
+        // Store interval for cleanup
+        uploadArea._progressInterval = interval;
+    }
+
+    showFileSelected(type, filename, filePath) {
+        const uploadArea = document.getElementById(`${type}-upload`).parentElement.querySelector('.file-upload-area');
+        const uploadContent = uploadArea.querySelector('.file-upload-content');
+        const uploadSelected = uploadArea.querySelector('.file-upload-selected');
+        const progressDiv = uploadArea.querySelector('.upload-progress');
+        
+        // Clean up progress
+        if (uploadArea._progressInterval) {
+            clearInterval(uploadArea._progressInterval);
+            delete uploadArea._progressInterval;
+        }
+        if (progressDiv) {
+            progressDiv.classList.remove('show');
+            setTimeout(() => progressDiv.remove(), 300);
+        }
+
+        // Show selected file
+        if (uploadContent) uploadContent.style.display = 'none';
+        if (uploadSelected) {
+            uploadSelected.style.display = 'flex';
+            uploadSelected.querySelector('.file-name').textContent = filename;
+        }
+    }
+
+    resetFileUpload(type) {
+        const uploadArea = document.getElementById(`${type}-upload`).parentElement.querySelector('.file-upload-area');
+        const uploadContent = uploadArea.querySelector('.file-upload-content');
+        const uploadSelected = uploadArea.querySelector('.file-upload-selected');
+        const progressDiv = uploadArea.querySelector('.upload-progress');
+        const fileInput = document.getElementById(`${type}-upload`);
+        const pathInput = document.getElementById(`${type}-path`);
+        
+        // Clean up progress
+        if (uploadArea._progressInterval) {
+            clearInterval(uploadArea._progressInterval);
+            delete uploadArea._progressInterval;
+        }
+        if (progressDiv) {
+            progressDiv.classList.remove('show');
+            setTimeout(() => progressDiv.remove(), 300);
+        }
+
+        // Reset UI
+        if (uploadContent) uploadContent.style.display = 'flex';
+        if (uploadSelected) uploadSelected.style.display = 'none';
+        if (fileInput) fileInput.value = '';
+        if (pathInput) pathInput.value = '';
     }
 
     async loadTrainingJobs() {
         try {
-            const response = await fetch('/api/v1/training/models', {
+            const response = await fetch('/api/v1/training/jobs', {
                 method: 'GET',
                 headers: {
                     'Content-Type': 'application/json',
@@ -171,11 +350,24 @@ class TrainingDashboard {
         if (job.training_status === 'failed') return 0;
         if (job.training_status === 'pending') return 0;
         
-        if (job.current_step && job.max_steps) {
-            return Math.round((job.current_step / job.max_steps) * 100);
+        if (job.current_step && job.max_steps && job.max_steps > 0) {
+            const progress = Math.round((job.current_step / job.max_steps) * 100);
+            return Math.min(progress, 99); // Cap at 99% until completed
         }
         
-        return job.training_status === 'running' ? 50 : 0;
+        // For running jobs without step info, estimate based on duration
+        if (job.training_status === 'running' && job.created_at) {
+            const startTime = new Date(job.created_at);
+            const now = new Date();
+            const durationMinutes = (now - startTime) / (1000 * 60);
+            
+            // Estimate progress based on typical training duration (adjust as needed)
+            const estimatedTotalMinutes = 30; // Default estimate
+            const estimatedProgress = Math.min((durationMinutes / estimatedTotalMinutes) * 100, 95);
+            return Math.round(estimatedProgress);
+        }
+        
+        return 0;
     }
 
     formatDuration(job) {
@@ -208,42 +400,6 @@ class TrainingDashboard {
         }
     }
 
-    filterJobs(searchTerm) {
-        if (!searchTerm) {
-            this.renderTrainingJobs();
-            return;
-        }
-
-        const filtered = this.trainingJobs.filter(job => 
-            job.job_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            job.base_model_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            job.training_status.toLowerCase().includes(searchTerm.toLowerCase())
-        );
-
-        const grid = document.getElementById('training-grid');
-        if (!grid) return;
-
-        if (filtered.length === 0) {
-            grid.innerHTML = `
-                <div class="list-header">Training Jobs</div>
-                <div class="empty-state">
-                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="11" cy="11" r="8"></circle>
-                        <path d="M21 21L16.65 16.65"></path>
-                    </svg>
-                    <h3>No Results Found</h3>
-                    <p>No training jobs match your search criteria</p>
-                </div>
-            `;
-            return;
-        }
-
-        const jobsHtml = filtered.map(job => this.renderTrainingJobCard(job)).join('');
-        grid.innerHTML = `
-            <div class="list-header">Training Jobs (${filtered.length} of ${this.trainingJobs.length})</div>
-            ${jobsHtml}
-        `;
-    }
 
     async showJobDetails(adapterId) {
         try {
@@ -555,7 +711,7 @@ class TrainingDashboard {
         if (!form) return;
 
         // Validate required fields
-        const requiredFields = ['job_name', 'base_model_name', 'dataset_path', 'output_base_dir'];
+        const requiredFields = ['job_name', 'base_model_name', 'output_base_dir'];
         const missingFields = [];
         
         for (const fieldName of requiredFields) {
@@ -563,6 +719,13 @@ class TrainingDashboard {
             if (!field || !field.value.trim()) {
                 missingFields.push(fieldName.replace('_', ' '));
             }
+        }
+        
+        // Check if training dataset is uploaded
+        const datasetPath = form.querySelector('[name="dataset_path"]').value.trim();
+        if (!datasetPath) {
+            this.showToast('Please upload a training dataset file', 'error');
+            return;
         }
         
         if (missingFields.length > 0) {
@@ -611,6 +774,7 @@ class TrainingDashboard {
             dataset_path: jobConfig.dataset_path,
             eval_dataset_path: jobConfig.eval_dataset_path || null,
             output_base_dir: jobConfig.output_base_dir,
+            device: jobConfig.device || 'auto',
             hyperparameters: hyperparameters
         };
 
@@ -660,10 +824,6 @@ class TrainingDashboard {
     cleanup() {
         // Clean up intervals and timeouts
         this.stopAutoRefresh();
-        if (this.searchTimeout) {
-            clearTimeout(this.searchTimeout);
-            this.searchTimeout = null;
-        }
         
         // Clear current job data
         this.currentJob = null;
@@ -753,6 +913,85 @@ class TrainingDashboard {
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#x27;');
     }
+
+    async saveTrainingConfig(jobConfig) {
+        try {
+            // Create YAML config structure matching CLI format
+            const yamlConfig = {
+                job_name: jobConfig.job_name,
+                base_model_name: jobConfig.base_model_name,
+                dataset_path: jobConfig.dataset_path,
+                eval_dataset_path: jobConfig.eval_dataset_path || null,
+                output_base_dir: jobConfig.output_base_dir,
+                device: jobConfig.device || 'auto',
+                hyperparameters: {
+                    lora_rank: parseInt(jobConfig.lora_rank) || 8,
+                    learning_rate: parseFloat(jobConfig.learning_rate) || 0.0002,
+                    epochs: parseInt(jobConfig.epochs) || 3,
+                    batch_size: parseInt(jobConfig.batch_size) || 4,
+                    lora_alpha: parseInt(jobConfig.lora_alpha) || 16,
+                    lora_dropout: parseFloat(jobConfig.lora_dropout) || 0.05,
+                    gradient_accumulation_steps: parseInt(jobConfig.gradient_accumulation_steps) || 1,
+                    logging_steps: parseInt(jobConfig.logging_steps) || 10,
+                    save_steps: parseInt(jobConfig.save_steps) || 500,
+                    save_total_limit: parseInt(jobConfig.save_total_limit) || 1,
+                    cost_per_gpu_hour: parseFloat(jobConfig.cost_per_gpu_hour) || 0.5,
+                    mixed_precision_dtype: jobConfig.mixed_precision_dtype || 'no'
+                }
+            };
+
+            // Save to training_configs directory
+            const response = await fetch('/api/v1/training/save-config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': loggedInUserToken
+                },
+                body: JSON.stringify({
+                    config: yamlConfig,
+                    filename: `${jobConfig.job_name.replace(/[^a-zA-Z0-9-_]/g, '_')}_config.yaml`
+                })
+            });
+
+            if (!response.ok) {
+                console.warn('Failed to save training config file:', response.status);
+            }
+        } catch (error) {
+            console.warn('Failed to save training config file:', error);
+        }
+    }
+
+    async loadTrainingConfigs() {
+        try {
+            const response = await fetch('/api/v1/training/configs', {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': loggedInUserToken
+                }
+            });
+
+            if (response.ok) {
+                const configs = await response.json();
+                this.populateConfigDropdown(configs);
+            }
+        } catch (error) {
+            console.error('Failed to load training configs:', error);
+        }
+    }
+
+    populateConfigDropdown(configs) {
+        const configSelect = document.getElementById('load-config-select');
+        if (!configSelect) return;
+
+        configSelect.innerHTML = '<option value="">Load from existing config...</option>';
+        configs.forEach(config => {
+            const option = document.createElement('option');
+            option.value = config.filename;
+            option.textContent = config.job_name || config.filename;
+            configSelect.appendChild(option);
+        });
+    }
 }
 
 // Global functions for modal interactions
@@ -794,6 +1033,13 @@ function updateRangeValue(id, value) {
         } else {
             valueElement.textContent = value;
         }
+    }
+}
+
+// Global functions for file upload
+function removeUploadedFile(type) {
+    if (trainingDashboard) {
+        trainingDashboard.resetFileUpload(type);
     }
 }
 

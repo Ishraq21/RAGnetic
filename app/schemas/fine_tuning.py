@@ -32,6 +32,10 @@ class HyperparametersConfig(BaseModel):
         'no', # Default to 'no' mixed precision for widest compatibility
         description="Type of mixed precision to use ('no', 'fp16', or 'bf16'). 'fp16' is for most NVIDIA GPUs, 'bf16' for newer NVIDIA and some Apple Silicon. 'no' for full float32."
     )
+    device: Optional[Literal['auto', 'cuda', 'mps', 'cpu']] = Field(
+        'auto',
+        description="Training device preference. 'auto' for automatic detection, 'cuda' for NVIDIA GPU, 'mps' for Apple Silicon, 'cpu' for CPU-only."
+    )
 
 
 # Pydantic model representing the structure of a fine-tuning job YAML configuration file

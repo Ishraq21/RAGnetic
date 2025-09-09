@@ -1,4 +1,6 @@
 // Dashboard JavaScript functionality
+console.log('Dashboard.js loaded successfully');
+
 class Dashboard {
     constructor() {
         this.currentView = 'overview';
@@ -196,6 +198,88 @@ class Dashboard {
         }
     }
 
+    async loadAvailableModels() {
+        try {
+            const response = await fetch('/api/v1/training/models/available', {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': loggedInUserToken
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const models = await response.json();
+            this.populateModelDropdowns(models);
+        } catch (error) {
+            console.error('Failed to load available models:', error);
+        }
+    }
+
+    populateModelDropdowns(models) {
+        const createDropdown = document.getElementById('agent-llm-model');
+        const editDropdown = document.getElementById('edit-agent-llm-model');
+        
+        if (!createDropdown && !editDropdown) return;
+
+        // Group models by type
+        const fineTunedModels = models.filter(m => m.type === 'fine_tuned');
+        const baseModels = models.filter(m => m.type === 'base');
+
+        const createDropdownHTML = this.buildModelDropdownHTML(fineTunedModels, baseModels);
+        const editDropdownHTML = this.buildModelDropdownHTML(fineTunedModels, baseModels);
+
+        if (createDropdown) {
+            createDropdown.innerHTML = createDropdownHTML;
+        }
+        if (editDropdown) {
+            editDropdown.innerHTML = editDropdownHTML;
+        }
+    }
+
+    buildModelDropdownHTML(fineTunedModels, baseModels) {
+        let html = '';
+        
+        // Add fine-tuned models first
+        if (fineTunedModels.length > 0) {
+            html += '<optgroup label="🎯 Fine-tuned Models">';
+            fineTunedModels.forEach(model => {
+                html += `<option value="${model.value}">${model.label}</option>`;
+            });
+            html += '</optgroup>';
+        }
+
+        // Add base models
+        html += '<optgroup label="OpenAI Models">';
+        baseModels.filter(m => m.value.startsWith('gpt')).forEach(model => {
+            html += `<option value="${model.value}">${model.label}</option>`;
+        });
+        html += '</optgroup>';
+
+        html += '<optgroup label="Anthropic Models">';
+        baseModels.filter(m => m.value.startsWith('claude')).forEach(model => {
+            html += `<option value="${model.value}">${model.label}</option>`;
+        });
+        html += '</optgroup>';
+
+        html += '<optgroup label="Google Models">';
+        baseModels.filter(m => m.value.startsWith('gemini')).forEach(model => {
+            html += `<option value="${model.value}">${model.label}</option>`;
+        });
+        html += '</optgroup>';
+
+        html += '<optgroup label="Ollama Models">';
+        baseModels.filter(m => m.value.startsWith('ollama')).forEach(model => {
+            html += `<option value="${model.value}">${model.label}</option>`;
+        });
+        html += '</optgroup>';
+
+        return html;
+    }
+
     renderAgents() {
         const container = document.getElementById('agents-grid');
         if (!container) return;
@@ -345,6 +429,17 @@ class Dashboard {
                 // Clear interval after 5 seconds to prevent infinite checking
                 setTimeout(() => clearInterval(checkTrainingDashboard), 5000);
             }
+        } else if (view === 'models') {
+            // Load fine-tuned models when the models view is activated
+            console.log('Switching to models view, loading models...');
+            if (window.fineTunedModelsManager) {
+                console.log('FineTunedModelsManager found, loading models...');
+                fineTunedModelsManager.loadModels();
+            } else {
+                console.error('FineTunedModelsManager not found!');
+            }
+        } else if (view === 'overview') {
+            this.loadOverviewData();
         }
     }
 
@@ -1083,6 +1178,378 @@ class Dashboard {
     }
 }
 
+// Fine-tuned Models Management
+console.log('About to define FineTunedModelsManager class');
+
+class FineTunedModelsManager {
+    constructor() {
+        console.log('FineTunedModelsManager constructor called');
+        this.models = [];
+        this.init();
+    }
+
+    init() {
+        this.setupEventListeners();
+        // Don't load models immediately - wait for the view to be activated
+    }
+
+    setupEventListeners() {
+        // No search or filter functionality needed
+    }
+
+    async loadModels() {
+        console.log('Loading fine-tuned models...');
+        try {
+            const response = await fetch('/api/v1/training/models?status_filter=completed', {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': loggedInUserToken
+                }
+            });
+
+            console.log('Response status:', response.status);
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            this.models = await response.json();
+            console.log('Loaded models:', this.models);
+            this.renderModels();
+        } catch (error) {
+            console.error('Failed to load fine-tuned models:', error);
+            this.showError('Failed to load fine-tuned models');
+        }
+    }
+
+    renderModels() {
+        console.log('Rendering models...', this.models);
+        const grid = document.getElementById('models-grid');
+        if (!grid) {
+            console.error('models-grid element not found!');
+            return;
+        }
+
+        if (this.models.length === 0) {
+            grid.innerHTML = `
+                <div class="list-header">Fine-tuned Models</div>
+                <div class="empty-state">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
+                        <path d="M2 17L12 22L22 17"></path>
+                        <path d="M2 12L12 17L22 12"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    <h3>No Fine-tuned Models</h3>
+                    <p>Create your first training job to get started with fine-tuning</p>
+                </div>
+            `;
+            return;
+        }
+
+        const modelsHtml = this.models.map(model => this.renderModelCard(model)).join('');
+        grid.innerHTML = `
+            <div class="list-header">Fine-tuned Models (${this.models.length})</div>
+            ${modelsHtml}
+        `;
+    }
+
+    renderModelCard(model) {
+        const status = this.getModelStatus(model);
+        const statusClass = this.getStatusClass(status);
+        const createdDate = new Date(model.created_at).toLocaleDateString();
+        const size = this.formatModelSize(model);
+
+        return `
+            <div class="model-card" onclick="fineTunedModelsManager.showModelDetails('${model.adapter_id}')">
+                <div class="model-header">
+                    <div class="model-info">
+                        <h3>${model.job_name}</h3>
+                        <p>${model.base_model_name}</p>
+                    </div>
+                    <span class="model-status ${statusClass}">${status}</span>
+                </div>
+                
+                <div class="model-meta">
+                    <span>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12,6 12,12 16,14"></polyline>
+                        </svg>
+                        ${createdDate}
+                    </span>
+                    <span>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                            <line x1="8" y1="21" x2="16" y2="21"></line>
+                            <line x1="12" y1="17" x2="12" y2="21"></line>
+                        </svg>
+                        ${size}
+                    </span>
+                    ${model.final_loss ? `
+                        <span>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 3v18h18"></path>
+                                <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"></path>
+                            </svg>
+                            Loss: ${model.final_loss.toFixed(4)}
+                        </span>
+                    ` : ''}
+                </div>
+                
+                <div class="model-actions">
+                    <button class="btn-secondary" onclick="event.stopPropagation(); fineTunedModelsManager.showModelDetails('${model.adapter_id}')">
+                        View Details
+                    </button>
+                    ${this.getActionButton(model)}
+                </div>
+            </div>
+        `;
+    }
+
+    getModelStatus(model) {
+        return model.training_status || 'unknown';
+    }
+
+    getStatusClass(status) {
+        const statusClasses = {
+            'pending': 'pending',
+            'running': 'running',
+            'completed': 'completed',
+            'failed': 'failed',
+            'paused': 'paused'
+        };
+        return statusClasses[status] || 'unknown';
+    }
+
+    formatModelSize(model) {
+        // This would need to be implemented based on actual model size calculation
+        return 'N/A';
+    }
+
+    getActionButton(model) {
+        const status = model.training_status;
+        
+        switch (status) {
+            case 'completed':
+                return `<button class="btn-primary" onclick="event.stopPropagation(); fineTunedModelsManager.useModelInAgent('${model.adapter_id}')">Use in Agent</button>`;
+            case 'failed':
+                return `<button class="btn-danger" onclick="event.stopPropagation(); fineTunedModelsManager.deleteModel('${model.adapter_id}')">Delete</button>`;
+            default:
+                return `<button class="btn-text" onclick="event.stopPropagation(); fineTunedModelsManager.deleteModel('${model.adapter_id}')">Delete</button>`;
+        }
+    }
+
+
+    async showModelDetails(adapterId) {
+        try {
+            const response = await fetch(`/api/v1/training/jobs/${adapterId}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': loggedInUserToken
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const model = await response.json();
+            this.renderModelDetailsModal(model);
+            this.showModal('model-details-modal');
+        } catch (error) {
+            console.error('Failed to load model details:', error);
+            this.showError('Failed to load model details');
+        }
+    }
+
+    renderModelDetailsModal(model) {
+        const status = this.getModelStatus(model);
+        const statusClass = this.getStatusClass(status);
+        const createdDate = new Date(model.created_at).toLocaleString();
+        const updatedDate = new Date(model.updated_at).toLocaleString();
+
+        document.getElementById('model-details-title').textContent = model.job_name;
+        document.getElementById('model-details-subtitle').textContent = `${model.base_model_name} • ${status}`;
+
+        document.getElementById('model-details-content').innerHTML = `
+            <div class="model-details-grid">
+                <div class="detail-section">
+                    <h3>Model Information</h3>
+                    <div class="detail-grid">
+                        <div class="detail-item">
+                            <label>Job Name</label>
+                            <span>${model.job_name}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Base Model</label>
+                            <span>${model.base_model_name}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Status</label>
+                            <span class="model-status ${statusClass}">${status}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Adapter ID</label>
+                            <span class="code-text">${model.adapter_id}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Created</label>
+                            <span>${createdDate}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Last Updated</label>
+                            <span>${updatedDate}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="detail-section">
+                    <h3>Training Metrics</h3>
+                    <div class="detail-grid">
+                        <div class="detail-item">
+                            <label>Final Loss</label>
+                            <span>${model.final_loss ? model.final_loss.toFixed(4) : 'N/A'}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Validation Loss</label>
+                            <span>${model.validation_loss ? model.validation_loss.toFixed(4) : 'N/A'}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>GPU Hours</label>
+                            <span>${model.gpu_hours_consumed ? model.gpu_hours_consumed.toFixed(2) : 'N/A'}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Estimated Cost</label>
+                            <span>${model.estimated_training_cost_usd ? `$${model.estimated_training_cost_usd.toFixed(2)}` : 'N/A'}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Device</label>
+                            <span>${model.device || 'CPU'}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Mixed Precision</label>
+                            <span>${model.mixed_precision || 'None'}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="detail-section">
+                    <h3>Hyperparameters</h3>
+                    <div class="hyperparameters-grid">
+                        ${model.hyperparameters ? Object.entries(model.hyperparameters).map(([key, value]) => `
+                            <div class="hyperparameter-item">
+                                <label>${this.formatHyperparameterName(key)}</label>
+                                <span>${value}</span>
+                            </div>
+                        `).join('') : '<p>No hyperparameters available</p>'}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    formatHyperparameterName(key) {
+        return key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    }
+
+    async deleteModel(adapterId) {
+        if (!confirm('Are you sure you want to delete this fine-tuned model? This action cannot be undone.')) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/v1/training/jobs/${adapterId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': loggedInUserToken
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            this.showSuccess('Fine-tuned model deleted successfully');
+            this.loadModels(); // Reload the models list
+        } catch (error) {
+            console.error('Failed to delete model:', error);
+            this.showError('Failed to delete fine-tuned model');
+        }
+    }
+
+    useModelInAgent(adapterId) {
+        // Switch to agents view and pre-select this model
+        dashboard.switchView('agents');
+        // You could also open the create agent modal with this model pre-selected
+        setTimeout(() => {
+            dashboard.showCreateAgentModal();
+            // Pre-select the fine-tuned model in the dropdown
+            const modelSelect = document.getElementById('agent-llm-model');
+            if (modelSelect) {
+                modelSelect.value = `fine_tuned:${adapterId}`;
+            }
+        }, 100);
+    }
+
+    showModal(modalId) {
+        const modal = document.getElementById(modalId);
+        if (modal) {
+            modal.classList.add('show');
+            document.body.style.overflow = 'hidden';
+        }
+    }
+
+    hideModal(modalId) {
+        const modal = document.getElementById(modalId);
+        if (modal) {
+            modal.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+    }
+
+    showSuccess(message) {
+        this.showToast(message, 'success');
+    }
+
+    showError(message) {
+        this.showToast(message, 'error');
+    }
+
+    showToast(message, type = 'info') {
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.innerHTML = `
+            <div class="toast-icon">
+                ${this.getToastIcon(type)}
+            </div>
+            <div class="toast-message">${message}</div>
+        `;
+
+        const container = document.getElementById('toast-notification');
+        if (container) {
+            container.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.remove();
+            }, 5000);
+        }
+    }
+
+    getToastIcon(type) {
+        const icons = {
+            success: '✓',
+            error: '✕',
+            warning: '⚠',
+            info: 'ℹ'
+        };
+        return icons[type] || icons.info;
+    }
+}
+
 // Global functions for onclick handlers
 function switchView(view) {
     dashboard.switchView(view);
@@ -1144,8 +1611,19 @@ function addDataSource() {
     dashboard.addDataSource();
 }
 
+// Global functions for fine-tuned models
+function hideModelDetailsModal() {
+    fineTunedModelsManager.hideModal('model-details-modal');
+}
+
 // Initialize dashboard when DOM is loaded
+console.log('Setting up DOMContentLoaded event listener');
 document.addEventListener('DOMContentLoaded', function() {
     dashboard = new Dashboard();
     dashboard.initializeFormListeners();
+    dashboard.loadAvailableModels(); // Load fine-tuned models for agent configuration
+    
+    // Initialize fine-tuned models manager
+    console.log('Initializing FineTunedModelsManager...');
+    fineTunedModelsManager = new FineTunedModelsManager();
 });

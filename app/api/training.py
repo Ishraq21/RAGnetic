@@ -3,12 +3,14 @@ import os
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, func
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
 from datetime import datetime
+import os
+import shutil
 
 from app.schemas.fine_tuning import FineTuningJobConfig, FineTuningStatus, FineTunedModel
 from app.db import get_db
@@ -108,6 +110,38 @@ async def get_fine_tune_job_status(
         raise HTTPException(status_code=404, detail=f"Fine-tuning job with ID '{adapter_id}' not found.")
     return FineTunedModel.model_validate(job_data) # Convert SQLAlchemy row to Pydantic model
 
+@router.get("/jobs", response_model=List[FineTunedModel])
+async def list_training_jobs(
+    status_filter: Optional[FineTuningStatus] = Query(None, description="Filter jobs by training status (e.g., 'running', 'pending')."),
+    base_model_name: Optional[str] = Query(None, description="Filter jobs by the base LLM model name (e.g., 'ollama/llama2')."),
+    job_name: Optional[str] = Query(None, description="Filter jobs by the user-defined job name."),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of jobs to return."),
+    offset: int = Query(0, ge=0, description="Number of jobs to skip (for pagination)."),
+    current_user: User = Depends(PermissionChecker(["fine_tune:list_models"])), # Requires 'fine_tune:list_models' permission
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Lists all training jobs (including pending, running, completed, and failed) with their metadata.
+    Requires: 'fine_tune:list_models' permission.
+    """
+    stmt = select(fine_tuned_models_table).order_by(fine_tuned_models_table.c.created_at.desc())
+
+    # Apply filters based on query parameters
+    if status_filter:
+        stmt = stmt.where(fine_tuned_models_table.c.training_status == status_filter.value)
+    if base_model_name:
+        stmt = stmt.where(fine_tuned_models_table.c.base_model_name.ilike(f"%{base_model_name}%")) # Case-insensitive search
+    if job_name:
+        stmt = stmt.where(fine_tuned_models_table.c.job_name.ilike(f"%{job_name}%"))
+
+    # Apply pagination
+    stmt = stmt.limit(limit).offset(offset)
+
+    result = await db.execute(stmt)
+    jobs_data = result.mappings().fetchall() # Fetch all matching rows
+    return [FineTunedModel.model_validate(row) for row in jobs_data] # Convert to Pydantic models
+
+
 @router.get("/models", response_model=List[FineTunedModel])
 async def list_fine_tuned_models(
     status_filter: Optional[FineTuningStatus] = Query(None, description="Filter models by training status (e.g., 'completed')."),
@@ -138,6 +172,254 @@ async def list_fine_tuned_models(
     result = await db.execute(stmt)
     models_data = result.mappings().fetchall() # Fetch all matching rows
     return [FineTunedModel.model_validate(row) for row in models_data] # Convert to Pydantic models
+
+
+@router.get("/models/available", response_model=List[Dict[str, Any]])
+async def get_available_models_for_agents(
+    current_user: User = Depends(PermissionChecker(["fine_tune:list_models"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns a list of available models for agent configuration, including fine-tuned models.
+    Format: [{"value": "model_id", "label": "display_name", "type": "fine_tuned|base"}]
+    """
+    # Get completed fine-tuned models
+    stmt = select(fine_tuned_models_table).where(
+        fine_tuned_models_table.c.training_status == FineTuningStatus.COMPLETED.value
+    ).order_by(fine_tuned_models_table.c.created_at.desc())
+    
+    result = await db.execute(stmt)
+    fine_tuned_models = result.mappings().fetchall()
+    
+    # Format fine-tuned models
+    available_models = []
+    for model in fine_tuned_models:
+        model_data = FineTunedModel.model_validate(model)
+        available_models.append({
+            "value": f"fine_tuned:{model_data.adapter_id}",
+            "label": f"🎯 {model_data.job_name} (Fine-tuned {model_data.base_model_name})",
+            "type": "fine_tuned",
+            "adapter_id": model_data.adapter_id,
+            "base_model": model_data.base_model_name,
+            "job_name": model_data.job_name
+        })
+    
+    # Add common base models
+    base_models = [
+        {"value": "gpt-4o", "label": "GPT-4o", "type": "base"},
+        {"value": "gpt-4o-mini", "label": "GPT-4o Mini", "type": "base"},
+        {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo", "type": "base"},
+        {"value": "claude-3-5-sonnet-20241022", "label": "Claude 3.5 Sonnet", "type": "base"},
+        {"value": "claude-3-haiku-20240307", "label": "Claude 3 Haiku", "type": "base"},
+        {"value": "gemini-1.5-pro", "label": "Gemini 1.5 Pro", "type": "base"},
+        {"value": "gemini-1.5-flash", "label": "Gemini 1.5 Flash", "type": "base"},
+        {"value": "ollama/llama3.1", "label": "Ollama Llama 3.1", "type": "base"},
+        {"value": "ollama/mistral", "label": "Ollama Mistral", "type": "base"},
+    ]
+    
+    # Combine fine-tuned models first, then base models
+    return available_models + base_models
+
+
+@router.get("/configs", response_model=List[Dict[str, Any]])
+async def list_training_configs(
+    current_user: User = Depends(PermissionChecker(["fine_tune:list_models"])),
+):
+    """
+    Lists available training configuration files in the training_configs directory.
+    """
+    import yaml
+    from pathlib import Path
+    
+    configs_dir = Path("training_configs")
+    configs = []
+    
+    if configs_dir.exists():
+        for config_file in configs_dir.glob("*.yaml"):
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config_data = yaml.safe_load(f)
+                    configs.append({
+                        "filename": config_file.name,
+                        "job_name": config_data.get("job_name", config_file.stem),
+                        "base_model_name": config_data.get("base_model_name", "Unknown"),
+                        "created_at": config_file.stat().st_mtime
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to read config file {config_file}: {e}")
+    
+    return sorted(configs, key=lambda x: x["created_at"], reverse=True)
+
+
+@router.post("/save-config")
+async def save_training_config(
+    config_data: Dict[str, Any] = Body(...),
+    current_user: User = Depends(PermissionChecker(["fine_tune:initiate"])),
+):
+    """
+    Saves a training configuration to a YAML file in the training_configs directory.
+    """
+    import yaml
+    from pathlib import Path
+    
+    configs_dir = Path("training_configs")
+    configs_dir.mkdir(exist_ok=True)
+    
+    config = config_data.get("config", {})
+    filename = config_data.get("filename", "training_config.yaml")
+    
+    # Ensure filename has .yaml extension
+    if not filename.endswith('.yaml'):
+        filename += '.yaml'
+    
+    config_path = configs_dir / filename
+    
+    try:
+        with open(config_path, 'w', encoding='utf-8') as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        
+        return {"message": f"Configuration saved to {config_path}", "filename": filename}
+    except Exception as e:
+        logger.error(f"Failed to save config file {config_path}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save configuration: {e}")
+
+
+@router.get("/configs/{filename}")
+async def get_training_config(
+    filename: str,
+    current_user: User = Depends(PermissionChecker(["fine_tune:list_models"])),
+):
+    """
+    Retrieves a specific training configuration file.
+    """
+    import yaml
+    from pathlib import Path
+    
+    configs_dir = Path("training_configs")
+    config_path = configs_dir / filename
+    
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail="Configuration file not found")
+    
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config_data = yaml.safe_load(f)
+        return config_data
+    except Exception as e:
+        logger.error(f"Failed to read config file {config_path}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to read configuration: {e}")
+
+
+@router.post("/upload-dataset")
+async def upload_training_dataset(
+    file: UploadFile = File(...),
+    current_user: User = Depends(PermissionChecker(["fine_tune:initiate"])),
+):
+    """
+    Upload a training dataset file (JSONL format).
+    """
+    # Validate file type
+    if not file.filename.endswith(('.jsonl', '.json')):
+        raise HTTPException(
+            status_code=400, 
+            detail="Only JSONL and JSON files are supported for training datasets"
+        )
+    
+    # Create uploads directory
+    uploads_dir = Path("data/uploaded_temp")
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique filename
+    file_id = str(uuid4())
+    file_extension = Path(file.filename).suffix
+    safe_filename = f"{file_id}{file_extension}"
+    file_path = uploads_dir / safe_filename
+    
+    try:
+        # Save uploaded file
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Validate JSONL format
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                if lines:
+                    # Try to parse first line as JSON
+                    import json
+                    json.loads(lines[0].strip())
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            # Clean up invalid file
+            file_path.unlink()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid JSONL format: {str(e)}"
+            )
+        
+        return {
+            "message": "Dataset uploaded successfully",
+            "file_path": str(file_path),
+            "filename": file.filename,
+            "file_id": file_id,
+            "size": file_path.stat().st_size,
+            "lines": len(lines) if 'lines' in locals() else 0
+        }
+        
+    except Exception as e:
+        # Clean up on error
+        if file_path.exists():
+            file_path.unlink()
+        logger.error(f"Failed to upload dataset file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload dataset: {e}")
+
+
+@router.get("/uploaded-datasets")
+async def list_uploaded_datasets(
+    current_user: User = Depends(PermissionChecker(["fine_tune:list_models"])),
+):
+    """
+    List all uploaded dataset files.
+    """
+    uploads_dir = Path("data/uploaded_temp")
+    datasets = []
+    
+    if uploads_dir.exists():
+        for file_path in uploads_dir.glob("*.jsonl"):
+            try:
+                stat = file_path.stat()
+                datasets.append({
+                    "file_path": str(file_path),
+                    "filename": file_path.name,
+                    "size": stat.st_size,
+                    "created_at": stat.st_mtime,
+                    "file_id": file_path.stem
+                })
+            except Exception as e:
+                logger.warning(f"Failed to read file info for {file_path}: {e}")
+    
+    return sorted(datasets, key=lambda x: x["created_at"], reverse=True)
+
+
+@router.delete("/uploaded-datasets/{file_id}")
+async def delete_uploaded_dataset(
+    file_id: str,
+    current_user: User = Depends(PermissionChecker(["fine_tune:delete"])),
+):
+    """
+    Delete an uploaded dataset file.
+    """
+    uploads_dir = Path("data/uploaded_temp")
+    file_path = uploads_dir / f"{file_id}.jsonl"
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Dataset file not found")
+    
+    try:
+        file_path.unlink()
+        return {"message": "Dataset file deleted successfully"}
+    except Exception as e:
+        logger.error(f"Failed to delete dataset file {file_path}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete dataset: {e}")
 
 
 @router.delete("/jobs/{adapter_id}")

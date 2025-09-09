@@ -20,7 +20,7 @@
             window.location.href = '/login';
         }
     </script>
-    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20241228" defer></script>
+    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20241229" defer></script>
     <script src="{{ url_for('static', path='js/training.js') }}?v=20241228" defer></script>
 </head>
 <body>
@@ -80,6 +80,15 @@
                     <path d="M2 12L12 17L22 12"></path>
                 </svg>
                 Training
+            </button>
+            <button class="tab-nav-item" data-view="models">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
+                    <path d="M2 17L12 22L22 17"></path>
+                    <path d="M2 12L12 17L22 12"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+                Fine-tuned Models
             </button>
             <button class="tab-nav-item" data-view="analytics">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -206,13 +215,6 @@
                     </svg>
                     New Training Job
                 </button>
-                <div class="search-box">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="11" cy="11" r="8"></circle>
-                        <path d="M21 21L16.65 16.65"></path>
-                    </svg>
-                    <input type="text" id="training-search" placeholder="Search training jobs...">
-                </div>
             </div>
             
             <div class="training-grid" id="training-grid">
@@ -220,6 +222,17 @@
                 <div class="loading-state">
                     <div class="loading-spinner"></div>
                     <p>Loading training jobs...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Fine-tuned Models View -->
+        <div class="view-content" id="models-view">
+            <div class="models-grid" id="models-grid">
+                <div class="list-header">Fine-tuned Models</div>
+                <div class="loading-state">
+                    <div class="loading-spinner"></div>
+                    <p>Loading fine-tuned models...</p>
                 </div>
             </div>
         </div>
@@ -302,14 +315,58 @@
                         
                         <div class="form-row">
                             <div class="form-group">
-                                <label for="dataset-path">Training Dataset</label>
-                                <input type="text" id="dataset-path" name="dataset_path" required placeholder="data/prepared_datasets/my_dataset.jsonl">
-                                <small>Path to your training dataset (JSONL format)</small>
+                                <label for="dataset-upload">Training Dataset *</label>
+                                <div class="file-upload-container">
+                                    <input type="file" id="dataset-upload" name="dataset_file" accept=".jsonl,.json" style="display: none;">
+                                    <div class="file-upload-area" onclick="document.getElementById('dataset-upload').click()">
+                                        <div class="file-upload-content">
+                                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                                <polyline points="7,10 12,15 17,10"></polyline>
+                                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                                            </svg>
+                                            <span class="file-upload-text">Click to upload training dataset</span>
+                                            <small>JSONL or JSON format</small>
+                                        </div>
+                                        <div class="file-upload-selected" style="display: none;">
+                                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                                <polyline points="14,2 14,8 20,8"></polyline>
+                                            </svg>
+                                            <span class="file-name"></span>
+                                            <button type="button" class="file-remove" onclick="event.stopPropagation(); removeUploadedFile('dataset')">×</button>
+                                        </div>
+                                    </div>
+                                    <input type="hidden" id="dataset-path" name="dataset_path">
+                                </div>
+                                <small>Upload a JSONL or JSON training dataset file</small>
                             </div>
                             <div class="form-group">
-                                <label for="eval-dataset-path">Evaluation Dataset (Optional)</label>
-                                <input type="text" id="eval-dataset-path" name="eval_dataset_path" placeholder="data/prepared_datasets/my_eval_dataset.jsonl">
-                                <small>Path to evaluation dataset for validation</small>
+                                <label for="eval-dataset-upload">Evaluation Dataset</label>
+                                <div class="file-upload-container">
+                                    <input type="file" id="eval-dataset-upload" name="eval_dataset_file" accept=".jsonl,.json" style="display: none;">
+                                    <div class="file-upload-area" onclick="document.getElementById('eval-dataset-upload').click()">
+                                        <div class="file-upload-content">
+                                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                                <polyline points="7,10 12,15 17,10"></polyline>
+                                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                                            </svg>
+                                            <span class="file-upload-text">Click to upload evaluation dataset</span>
+                                            <small>Optional - JSONL or JSON format</small>
+                                        </div>
+                                        <div class="file-upload-selected" style="display: none;">
+                                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                                <polyline points="14,2 14,8 20,8"></polyline>
+                                            </svg>
+                                            <span class="file-name"></span>
+                                            <button type="button" class="file-remove" onclick="event.stopPropagation(); removeUploadedFile('eval-dataset')">×</button>
+                                        </div>
+                                    </div>
+                                    <input type="hidden" id="eval-dataset-path" name="eval_dataset_path">
+                                </div>
+                                <small>Optional evaluation dataset for validation</small>
                             </div>
                         </div>
                         
@@ -461,6 +518,17 @@
                                 <label for="cost-per-gpu-hour">Cost per GPU Hour (USD)</label>
                                 <input type="number" id="cost-per-gpu-hour" name="cost_per_gpu_hour" min="0" max="10" step="0.1" value="0.5">
                                 <small>Estimated cost per GPU hour for cost tracking</small>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="device">Device</label>
+                                <select id="device" name="device">
+                                    <option value="auto">Auto-detect</option>
+                                    <option value="cuda">CUDA (NVIDIA GPU)</option>
+                                    <option value="mps">MPS (Apple Silicon)</option>
+                                    <option value="cpu">CPU</option>
+                                </select>
+                                <small>Training device preference</small>
                             </div>
                         </div>
                     </div>
@@ -1294,6 +1362,50 @@
                         <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M10 11v6M14 11v6"/>
                     </svg>
                     Delete Agent
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Model Details Modal -->
+    <div class="modal" id="model-details-modal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <div class="header-content">
+                    <div class="header-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
+                            <path d="M2 17L12 22L22 17"></path>
+                            <path d="M2 12L12 17L22 12"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                    </div>
+                    <div class="header-text">
+                        <h2 id="model-details-title">Model Details</h2>
+                        <p id="model-details-subtitle">Loading...</p>
+                    </div>
+                </div>
+                <button type="button" class="modal-close" onclick="hideModelDetailsModal()">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="model-details-content">
+                    <div class="loading-state">
+                        <div class="loading-spinner"></div>
+                        <p>Loading model details...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" onclick="hideModelDetailsModal()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                    Close
                 </button>
             </div>
         </div>
