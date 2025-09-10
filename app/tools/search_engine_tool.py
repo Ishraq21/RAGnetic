@@ -3,7 +3,9 @@ import os
 import requests
 import json
 import asyncio
+import time
 from typing import List, Dict, Any, Optional, Type
+from threading import Lock
 
 from langchain_core.tools import BaseTool, ToolException
 from pydantic import Field, BaseModel
@@ -18,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 SEARCH_API_PROVIDER = os.environ.get("SEARCH_API_PROVIDER", "BRAVE")
 MAX_SNIPPET_LENGTH = 300
+
+# Enhanced rate limiting for search API - matches Brave's free tier limits
+_last_search_time = 0
+_min_search_interval = 1.0  # 1 request per second (Brave free tier limit)
+_rate_limit_lock = Lock()  # Thread-safe locking for rate limiting
 
 
 class SearchTool(BaseTool):
@@ -57,6 +64,27 @@ class SearchTool(BaseTool):
         query = tool_input.query
         num_results = tool_input.num_results
         time_period = tool_input.time_period
+        
+        # Validate query input
+        if not query or not query.strip():
+            logger.warning("Empty or whitespace-only query provided to search tool")
+            return "No search results found. Please provide a valid search query."
+        
+        # Enhanced rate limiting to prevent 429 errors - matches Brave's free tier (1 req/sec)
+        global _last_search_time, _rate_limit_lock
+        
+        # Use thread-safe locking to prevent concurrent requests
+        with _rate_limit_lock:
+            current_time = time.time()
+            time_since_last_search = current_time - _last_search_time
+            
+            if time_since_last_search < _min_search_interval:
+                wait_time = _min_search_interval - time_since_last_search
+                logger.info(f"Rate limiting: waiting {wait_time:.2f}s before search (Brave free tier: 1 req/sec, last search was {time_since_last_search:.2f}s ago)")
+                await asyncio.sleep(wait_time)
+            
+            _last_search_time = time.time()
+            logger.info(f"Rate limiting: search allowed, updating last search time to {_last_search_time}")
         region = tool_input.region
 
         logger.info(f"SearchTool._arun called for query: '{query[:80]}...'")
@@ -120,8 +148,13 @@ class SearchTool(BaseTool):
             logger.error(f"Tool execution error: {e}")
             raise e
         except requests.exceptions.RequestException as e:
-            logger.error(f"HTTP/Network error during web search for '{query}': {e}", exc_info=True)
-            raise ToolException(f"Failed to perform web search due to network issue: {e}")
+            # Handle rate limiting (429 errors) with retry logic
+            if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
+                logger.warning(f"Rate limit hit for query '{query}'. Attempting graceful fallback.")
+                return "I apologize, but I'm currently experiencing high search volume and have hit rate limits. Please try again in a moment, or I can help you with other tasks that don't require web search."
+            else:
+                logger.error(f"HTTP/Network error during web search for '{query}': {e}", exc_info=True)
+                raise ToolException(f"Failed to perform web search due to network issue: {e}")
         except json.JSONDecodeError as e:
             logger.error(f"Error decoding JSON response from search API for '{query}': {e}", exc_info=True)
             raise ToolException("Failed to parse search API response.")
