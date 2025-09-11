@@ -370,7 +370,7 @@ class Dashboard {
         container.innerHTML = runs.map(run => `
             <div class="activity-item">
                 <div class="activity-icon ${run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'warning'}">
-                    ${run.status === 'completed' ? '✓' : run.status === 'failed' ? '✗' : '⋯'}
+                    ${run.status === 'completed' ? '' : run.status === 'failed' ? '' : '⋯'}
                 </div>
                 <div class="activity-content">
                     <div class="activity-title">${run.agent_name || 'Unknown Agent'}</div>
@@ -1014,7 +1014,7 @@ class Dashboard {
         toast.className = `toast ${type}`;
         toast.innerHTML = `
             <div class="toast-icon">
-                ${type === 'success' ? '✓' : type === 'error' ? '✗' : type === 'warning' ? '⚠' : 'ℹ'}
+                ${type === 'success' ? '' : type === 'error' ? '' : type === 'warning' ? '' : 'ℹ'}
             </div>
             <div class="toast-message">${message}</div>
         `;
@@ -1529,9 +1529,9 @@ class FineTunedModelsManager {
 
     getToastIcon(type) {
         const icons = {
-            success: '✓',
-            error: '✕',
-            warning: '⚠',
+            success: '',
+            error: '',
+            warning: '',
             info: 'ℹ'
         };
         return icons[type] || icons.info;
