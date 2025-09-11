@@ -882,9 +882,9 @@ class TrainingDashboard {
 
     getToastIcon(type) {
         const icons = {
-            success: '✓',
-            error: '✕',
-            warning: '⚠',
+            success: '',
+            error: '',
+            warning: '',
             info: 'ℹ'
         };
         return icons[type] || icons.info;

@@ -6,7 +6,7 @@ RAGnetic is an open-source, highly configurable, compliance-first AI framework f
 
 One of RAGnetic’s core philosophies is to give developers and organizations complete ownership of their on-premise AI while eliminating infrastructure overhead and reducing development time and cost. 
 
-> 🚧 **Work in Progress:** This documentation is under active development. More tutorials, guides, and official documentation website are coming soon!
+>  **Work in Progress:** This documentation is under active development. More tutorials, guides, and official documentation website are coming soon!
 > 
 ---
 
@@ -136,7 +136,7 @@ RAGnetic is built with security, compliance, and scalability in mind, making it 
 pip install ragnetic
 ```
 
-**📖 For detailed installation options, see [INSTALL.md](INSTALL.md)**
+** For detailed installation options, see [INSTALL.md](INSTALL.md)**
 
 ### 5-Minute Setup
 
