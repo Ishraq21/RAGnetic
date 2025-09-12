@@ -2973,6 +2973,126 @@ input[type="range"]::-moz-range-thumb:hover {
     }
 }
 
+/* File Upload Styles */
+.file-upload-area {
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    background: var(--card-background);
+}
+
+.file-upload-area:hover {
+    border-color: var(--accent-color);
+    background: var(--card-hover);
+}
+
+.file-upload-area.drag-over {
+    border-color: var(--accent-color);
+    background: var(--accent-glow);
+    transform: scale(1.02);
+}
+
+.file-upload-content h4 {
+    margin: 0.5rem 0;
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: var(--font-size-lg);
+}
+
+.file-upload-content p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+.file-list {
+    background: var(--card-background);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    margin-top: 1rem;
+}
+
+.file-list-header {
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.file-list-header h5 {
+    margin: 0;
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: var(--font-size-base);
+}
+
+.file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem;
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    margin-bottom: 0.5rem;
+    transition: all 0.2s ease;
+}
+
+.file-item:last-child {
+    margin-bottom: 0;
+}
+
+.file-item:hover {
+    background: var(--card-hover);
+    border-color: var(--border-hover);
+}
+
+.file-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.file-icon {
+    color: var(--accent-color);
+    display: flex;
+    align-items: center;
+}
+
+.file-details {
+    display: flex;
+    flex-direction: column;
+}
+
+.file-name {
+    font-weight: 500;
+    color: var(--text-primary);
+    font-size: var(--font-size-sm);
+}
+
+.file-size {
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary);
+}
+
+.remove-file {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: var(--radius-sm);
+    transition: all 0.2s ease;
+}
+
+.remove-file:hover {
+    color: var(--error-color);
+    background: rgba(239, 68, 68, 0.1);
+}
+
 /* Utility Classes */
 .hidden {
     display: none !important;

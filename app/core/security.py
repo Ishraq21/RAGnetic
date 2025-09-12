@@ -225,6 +225,10 @@ class PermissionChecker:
                 "read:agents",
                 "session:create", "document:upload",
                 "history:read", "sessions:read",
+                "audit:read_agent_runs",
+                "fine_tune:read_status", "fine_tune:list_models",
+                "agent:query", "agent:read",
+                "evaluation:read_benchmarks",
             ],
         }
 
