@@ -1093,8 +1093,9 @@ async def get_history(thread_id: str, agent_name: str, user_id: int,
             (chat_sessions_table.c.user_id == user_id)
         ))).scalar_one_or_none()
         if not session_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail="Chat session not found for the given criteria.")
+            # Return empty history instead of 404 error for better UX
+            logger.info(f"No chat session found for thread {safe_thread_id}, agent {safe_agent_name}, user {user_id}. Returning empty history.")
+            return JSONResponse(content=[])
         messages_stmt = select(chat_messages_table.c.sender, chat_messages_table.c.content,
                                chat_messages_table.c.meta).where(
             chat_messages_table.c.session_id == session_id).order_by(chat_messages_table.c.timestamp.asc())

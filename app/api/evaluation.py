@@ -125,3 +125,45 @@ async def run_benchmark_api(
     # NEW: include csv_path so clients can poll for it
     return {"status": "Benchmark started.", "agent": agent_name, "run_id": run_id, "csv_path": csv_path}
 
+
+@router.get("/benchmarks")
+async def list_benchmarks(
+    current_user: User = Depends(PermissionChecker(["evaluation:read_benchmarks"])),
+):
+    """
+    List available benchmark results.
+    """
+    try:
+        benchmark_dir = _APP_PATHS["BENCHMARK_DIR"]
+        if not os.path.exists(benchmark_dir):
+            return {"benchmarks": []}
+        
+        benchmark_files = []
+        for filename in os.listdir(benchmark_dir):
+            if filename.endswith('.csv') and filename.startswith('benchmark_'):
+                # Parse filename: benchmark_{agent_name}_{run_id}.csv
+                parts = filename.replace('.csv', '').split('_')
+                if len(parts) >= 3:
+                    agent_name = parts[1]
+                    run_id = parts[2]
+                    file_path = os.path.join(benchmark_dir, filename)
+                    file_stat = os.stat(file_path)
+                    
+                    benchmark_files.append({
+                        "filename": filename,
+                        "agent_name": agent_name,
+                        "run_id": run_id,
+                        "file_path": file_path,
+                        "created_at": datetime.fromtimestamp(file_stat.st_ctime).isoformat(),
+                        "size_bytes": file_stat.st_size
+                    })
+        
+        # Sort by creation time, newest first
+        benchmark_files.sort(key=lambda x: x["created_at"], reverse=True)
+        
+        return {"benchmarks": benchmark_files}
+        
+    except Exception as e:
+        logger.error(f"Error listing benchmarks: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to list benchmarks")
+

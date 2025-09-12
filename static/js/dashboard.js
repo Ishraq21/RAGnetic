@@ -508,6 +508,29 @@ class Dashboard {
             form.querySelector('#edit-semantic-k').value = agent.vector_store.semantic_k || 5;
             form.querySelector('#edit-rerank-top-n').value = agent.vector_store.rerank_top_n || 5;
             form.querySelector('#edit-retrieval-strategy').value = agent.vector_store.retrieval_strategy || 'hybrid';
+            
+            // Populate advanced vector store settings
+            if (agent.vector_store.qdrant_host) {
+                form.querySelector('#edit-qdrant-host').value = agent.vector_store.qdrant_host;
+            }
+            if (agent.vector_store.qdrant_port) {
+                form.querySelector('#edit-qdrant-port').value = agent.vector_store.qdrant_port;
+            }
+            if (agent.vector_store.pinecone_index_name) {
+                form.querySelector('#edit-pinecone-index-name').value = agent.vector_store.pinecone_index_name;
+            }
+            if (agent.vector_store.mongodb_db_name) {
+                form.querySelector('#edit-mongodb-db-name').value = agent.vector_store.mongodb_db_name;
+            }
+            if (agent.vector_store.mongodb_collection_name) {
+                form.querySelector('#edit-mongodb-collection-name').value = agent.vector_store.mongodb_collection_name;
+            }
+            if (agent.vector_store.mongodb_index_name) {
+                form.querySelector('#edit-mongodb-index-name').value = agent.vector_store.mongodb_index_name;
+            }
+            
+            // Show relevant advanced settings
+            this.toggleVectorStoreSettings(agent.vector_store.type || 'faiss', 'edit-');
         }
 
         // Populate chunking settings
@@ -521,6 +544,16 @@ class Dashboard {
         if (agent.model_params) {
             form.querySelector('#edit-temperature').value = agent.model_params.temperature || 0.7;
             form.querySelector('#edit-max-tokens').value = agent.model_params.max_tokens || 2000;
+            form.querySelector('#edit-top-p').value = agent.model_params.top_p || 1.0;
+        }
+        
+        // Populate LLM retry and timeout settings
+        form.querySelector('#edit-llm-retries').value = agent.llm_retries || 0;
+        form.querySelector('#edit-llm-timeout').value = agent.llm_timeout || 60;
+        
+        // Populate evaluation LLM model
+        if (agent.evaluation_llm_model) {
+            form.querySelector('#edit-evaluation-llm-model').value = agent.evaluation_llm_model;
         }
 
         // Populate scaling settings
@@ -528,6 +561,17 @@ class Dashboard {
             form.querySelector('#edit-parallel-ingestion').checked = agent.scaling.parallel_ingestion || false;
             form.querySelector('#edit-ingestion-workers').value = agent.scaling.num_ingestion_workers || 4;
         }
+        
+        // Populate advanced configuration
+        if (agent.fine_tuned_model_id) {
+            form.querySelector('#edit-fine-tuned-model-id').value = agent.fine_tuned_model_id;
+        }
+        
+        if (agent.benchmark) {
+            form.querySelector('#edit-max-context-docs').value = agent.benchmark.max_context_docs || 20;
+        }
+        
+        form.querySelector('#edit-reproducible-ids').checked = agent.reproducible_ids !== false;
 
         // Populate tools
         const toolCheckboxes = form.querySelectorAll('input[name="edit-tools"]');
@@ -560,6 +604,13 @@ class Dashboard {
         const tempValue = form.querySelector('#edit-temperature-value');
         if (tempSlider && tempValue) {
             tempValue.textContent = tempSlider.value;
+        }
+        
+        // Update top-p display
+        const topPSlider = form.querySelector('#edit-top-p');
+        const topPValue = form.querySelector('#edit-top-p-value');
+        if (topPSlider && topPValue) {
+            topPValue.textContent = topPSlider.value;
         }
     }
 
@@ -626,7 +677,14 @@ class Dashboard {
                 semantic_k: parseInt(formData.get('semantic_k')) || 5,
                 rerank_top_n: parseInt(formData.get('rerank_top_n')) || 5,
                 hit_rate_k_value: 5,
-                retrieval_strategy: formData.get('retrieval_strategy') || 'hybrid'
+                retrieval_strategy: formData.get('retrieval_strategy') || 'hybrid',
+                // Advanced vector store settings
+                qdrant_host: formData.get('qdrant_host') || null,
+                qdrant_port: parseInt(formData.get('qdrant_port')) || null,
+                pinecone_index_name: formData.get('pinecone_index_name') || null,
+                mongodb_db_name: formData.get('mongodb_db_name') || null,
+                mongodb_collection_name: formData.get('mongodb_collection_name') || null,
+                mongodb_index_name: formData.get('mongodb_index_name') || null
             },
             chunking: {
                 mode: formData.get('chunking_mode') || 'default',
@@ -637,8 +695,20 @@ class Dashboard {
             model_params: {
                 temperature: parseFloat(formData.get('temperature')) || 0.7,
                 max_tokens: parseInt(formData.get('max_tokens')) || 2000,
-                top_p: null
+                top_p: parseFloat(formData.get('top_p')) || 1.0
             },
+            llm_retries: parseInt(formData.get('llm_retries')) || 0,
+            llm_timeout: parseInt(formData.get('llm_timeout')) || 60,
+            evaluation_llm_model: formData.get('evaluation_llm_model') || null,
+            fine_tuned_model_id: formData.get('fine_tuned_model_id') || null,
+            benchmark: {
+                context_window_tokens: parseInt(formData.get('context_window_tokens')) || 8000,
+                context_budget_ratio: parseFloat(formData.get('context_budget_ratio')) || 0.70,
+                answer_reserve_tokens: parseInt(formData.get('answer_reserve_tokens')) || 1024,
+                enable_doc_truncation: formData.get('enable_doc_truncation') === 'true',
+                max_context_docs: parseInt(formData.get('max_context_docs')) || 20
+            },
+            reproducible_ids: formData.get('reproducible_ids') === 'on',
             scaling: {
                 parallel_ingestion: formData.get('parallel_ingestion') === 'on',
                 num_ingestion_workers: parseInt(formData.get('ingestion_workers')) || 4
@@ -734,7 +804,14 @@ class Dashboard {
                 semantic_k: parseInt(formData.get('semantic_k')) || 5,
                 rerank_top_n: parseInt(formData.get('rerank_top_n')) || 5,
                 hit_rate_k_value: 5,
-                retrieval_strategy: formData.get('retrieval_strategy') || 'hybrid'
+                retrieval_strategy: formData.get('retrieval_strategy') || 'hybrid',
+                // Advanced vector store settings
+                qdrant_host: formData.get('qdrant_host') || null,
+                qdrant_port: parseInt(formData.get('qdrant_port')) || null,
+                pinecone_index_name: formData.get('pinecone_index_name') || null,
+                mongodb_db_name: formData.get('mongodb_db_name') || null,
+                mongodb_collection_name: formData.get('mongodb_collection_name') || null,
+                mongodb_index_name: formData.get('mongodb_index_name') || null
             },
             chunking: {
                 mode: formData.get('chunking_mode') || 'default',
@@ -745,8 +822,20 @@ class Dashboard {
             model_params: {
                 temperature: parseFloat(formData.get('temperature')) || 0.7,
                 max_tokens: parseInt(formData.get('max_tokens')) || 2000,
-                top_p: null
+                top_p: parseFloat(formData.get('top_p')) || 1.0
             },
+            llm_retries: parseInt(formData.get('llm_retries')) || 0,
+            llm_timeout: parseInt(formData.get('llm_timeout')) || 60,
+            evaluation_llm_model: formData.get('evaluation_llm_model') || null,
+            fine_tuned_model_id: formData.get('fine_tuned_model_id') || null,
+            benchmark: {
+                context_window_tokens: parseInt(formData.get('context_window_tokens')) || 8000,
+                context_budget_ratio: parseFloat(formData.get('context_budget_ratio')) || 0.70,
+                answer_reserve_tokens: parseInt(formData.get('answer_reserve_tokens')) || 1024,
+                enable_doc_truncation: formData.get('enable_doc_truncation') === 'true',
+                max_context_docs: parseInt(formData.get('max_context_docs')) || 20
+            },
+            reproducible_ids: formData.get('reproducible_ids') === 'on',
             scaling: {
                 parallel_ingestion: formData.get('parallel_ingestion') === 'on',
                 num_ingestion_workers: parseInt(formData.get('ingestion_workers')) || 4
@@ -948,6 +1037,10 @@ class Dashboard {
                                 <span>${agent.embedding_model}</span>
                             </div>
                             <div class="detail-item">
+                                <label>Evaluation Model:</label>
+                                <span>${agent.evaluation_llm_model || 'Same as main LLM'}</span>
+                            </div>
+                            <div class="detail-item">
                                 <label>Persona:</label>
                                 <span>${agent.persona_prompt || 'Not set'}</span>
                             </div>
@@ -1054,7 +1147,7 @@ class Dashboard {
                 <div class="form-row">
                     <div class="form-group">
                         <label for="source-type-${dataSourceId}">Source Type</label>
-                        <select id="source-type-${dataSourceId}" name="source_type_${dataSourceId}" required>
+                        <select id="source-type-${dataSourceId}" name="source_type_${dataSourceId}" required onchange="dashboard.toggleDataSourceInput(${dataSourceId})">
                             <option value="local">Local Files</option>
                             <option value="url">Web URL</option>
                             <option value="api">API Endpoint</option>
@@ -1070,11 +1163,29 @@ class Dashboard {
                             <option value="docx">Word Documents</option>
                         </select>
                     </div>
-                    <div class="form-group">
-                        <label for="source-path-${dataSourceId}">Path/URL</label>
-                        <input type="text" id="source-path-${dataSourceId}" name="source_path_${dataSourceId}" 
-                               placeholder="Enter file path, URL, or connection string">
+                </div>
+                <div class="form-group" id="file-upload-group-${dataSourceId}">
+                    <label>Upload Files</label>
+                    <div class="file-upload-area" id="file-upload-${dataSourceId}">
+                        <div class="file-upload-content">
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7,10 12,15 17,10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                            <h4>Drop files here or click to browse</h4>
+                            <p>Supports PDF, DOCX, TXT, CSV, Parquet, and more</p>
+                            <input type="file" id="file-input-${dataSourceId}" name="files_${dataSourceId}" multiple accept=".pdf,.docx,.txt,.csv,.parquet,.json,.md,.py,.ipynb" style="display: none;">
+                        </div>
+                        <div class="file-list" id="file-list-${dataSourceId}" style="display: none;">
+                            <!-- Uploaded files will be listed here -->
+                        </div>
                     </div>
+                </div>
+                <div class="form-group" id="path-input-group-${dataSourceId}" style="display: none;">
+                    <label for="source-path-${dataSourceId}">Path/URL</label>
+                    <input type="text" id="source-path-${dataSourceId}" name="source_path_${dataSourceId}" 
+                           placeholder="Enter file path, URL, or connection string">
                 </div>
                 <div class="form-group">
                     <label for="source-description-${dataSourceId}">Description</label>
@@ -1085,6 +1196,9 @@ class Dashboard {
         `;
         
         container.insertAdjacentHTML('beforeend', dataSourceHtml);
+        
+        // Initialize file upload functionality for this data source
+        this.initializeFileUpload(dataSourceId);
     }
 
     removeDataSource(dataSourceId) {
@@ -1112,6 +1226,138 @@ class Dashboard {
         }
     }
 
+    toggleDataSourceInput(dataSourceId) {
+        const sourceType = document.getElementById(`source-type-${dataSourceId}`).value;
+        const fileUploadGroup = document.getElementById(`file-upload-group-${dataSourceId}`);
+        const pathInputGroup = document.getElementById(`path-input-group-${dataSourceId}`);
+        
+        if (sourceType === 'local' || sourceType === 'pdf' || sourceType === 'txt' || 
+            sourceType === 'docx' || sourceType === 'csv' || sourceType === 'parquet' || 
+            sourceType === 'notebook') {
+            fileUploadGroup.style.display = 'block';
+            pathInputGroup.style.display = 'none';
+        } else {
+            fileUploadGroup.style.display = 'none';
+            pathInputGroup.style.display = 'block';
+        }
+    }
+
+    initializeFileUpload(dataSourceId) {
+        const fileUploadArea = document.getElementById(`file-upload-${dataSourceId}`);
+        const fileInput = document.getElementById(`file-input-${dataSourceId}`);
+        const fileList = document.getElementById(`file-list-${dataSourceId}`);
+        
+        // Click to browse files
+        fileUploadArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        // Drag and drop functionality
+        fileUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileUploadArea.classList.add('drag-over');
+        });
+        
+        fileUploadArea.addEventListener('dragleave', () => {
+            fileUploadArea.classList.remove('drag-over');
+        });
+        
+        fileUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileUploadArea.classList.remove('drag-over');
+            const files = e.dataTransfer.files;
+            this.handleFileSelection(dataSourceId, files);
+        });
+        
+        // File input change
+        fileInput.addEventListener('change', (e) => {
+            this.handleFileSelection(dataSourceId, e.target.files);
+        });
+    }
+
+    handleFileSelection(dataSourceId, files) {
+        const fileList = document.getElementById(`file-list-${dataSourceId}`);
+        const fileUploadContent = document.querySelector(`#file-upload-${dataSourceId} .file-upload-content`);
+        
+        if (files.length > 0) {
+            fileUploadContent.style.display = 'none';
+            fileList.style.display = 'block';
+            
+            let fileListHtml = '<div class="file-list-header"><h5>Selected Files</h5></div>';
+            
+            Array.from(files).forEach((file, index) => {
+                const fileSize = this.formatFileSize(file.size);
+                const fileIcon = this.getFileIcon(file.type, file.name);
+                
+                fileListHtml += `
+                    <div class="file-item">
+                        <div class="file-info">
+                            <div class="file-icon">${fileIcon}</div>
+                            <div class="file-details">
+                                <span class="file-name">${file.name}</span>
+                                <span class="file-size">${fileSize}</span>
+                            </div>
+                        </div>
+                        <button type="button" class="remove-file" onclick="dashboard.removeFile(${dataSourceId}, ${index})">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                            </svg>
+                        </button>
+                    </div>
+                `;
+            });
+            
+            fileList.innerHTML = fileListHtml;
+        }
+    }
+
+    removeFile(dataSourceId, fileIndex) {
+        const fileInput = document.getElementById(`file-input-${dataSourceId}`);
+        const fileList = document.getElementById(`file-list-${dataSourceId}`);
+        const fileUploadContent = document.querySelector(`#file-upload-${dataSourceId} .file-upload-content`);
+        
+        // Create new FileList without the removed file
+        const dt = new DataTransfer();
+        const files = Array.from(fileInput.files);
+        files.splice(fileIndex, 1);
+        
+        files.forEach(file => dt.items.add(file));
+        fileInput.files = dt.files;
+        
+        if (fileInput.files.length === 0) {
+            fileList.style.display = 'none';
+            fileUploadContent.style.display = 'block';
+        } else {
+            this.handleFileSelection(dataSourceId, fileInput.files);
+        }
+    }
+
+    formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    getFileIcon(type, filename) {
+        const extension = filename.split('.').pop().toLowerCase();
+        
+        const icons = {
+            'pdf': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14,2 14,8 20,8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
+            'docx': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14,2 14,8 20,8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
+            'txt': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14,2 14,8 20,8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
+            'csv': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14,2 14,8 20,8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
+            'json': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14,2 14,8 20,8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
+            'py': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14,2 14,8 20,8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
+            'ipynb': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14,2 14,8 20,8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
+            'md': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14,2 14,8 20,8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>'
+        };
+        
+        return icons[extension] || icons['txt'];
+    }
+
     // Initialize form event listeners
     initializeFormListeners() {
         // Temperature range input for create form
@@ -1125,6 +1371,17 @@ class Dashboard {
             });
         }
 
+        // Top-p range input for create form
+        const topPInput = document.getElementById('top-p');
+        if (topPInput) {
+            const topPValue = document.getElementById('top-p-value');
+            topPInput.addEventListener('input', (e) => {
+                if (topPValue) {
+                    topPValue.textContent = e.target.value;
+                }
+            });
+        }
+
         // Temperature range input for edit form
         const editTemperatureInput = document.getElementById('edit-temperature');
         if (editTemperatureInput) {
@@ -1132,6 +1389,17 @@ class Dashboard {
             editTemperatureInput.addEventListener('input', (e) => {
                 if (editTemperatureValue) {
                     editTemperatureValue.textContent = e.target.value;
+                }
+            });
+        }
+
+        // Top-p range input for edit form
+        const editTopPInput = document.getElementById('edit-top-p');
+        if (editTopPInput) {
+            const editTopPValue = document.getElementById('edit-top-p-value');
+            editTopPInput.addEventListener('input', (e) => {
+                if (editTopPValue) {
+                    editTopPValue.textContent = e.target.value;
                 }
             });
         }
@@ -1162,6 +1430,51 @@ class Dashboard {
                     }
                 }
             });
+        }
+
+        // Vector store type change handlers
+        this.setupVectorStoreTypeHandlers();
+    }
+
+    setupVectorStoreTypeHandlers() {
+        // Create form vector store type handler
+        const vectorStoreTypeSelect = document.getElementById('vector-store-type');
+        if (vectorStoreTypeSelect) {
+            vectorStoreTypeSelect.addEventListener('change', (e) => {
+                this.toggleVectorStoreSettings(e.target.value, '');
+            });
+        }
+
+        // Edit form vector store type handler
+        const editVectorStoreTypeSelect = document.getElementById('edit-vector-store-type');
+        if (editVectorStoreTypeSelect) {
+            editVectorStoreTypeSelect.addEventListener('change', (e) => {
+                this.toggleVectorStoreSettings(e.target.value, 'edit-');
+            });
+        }
+    }
+
+    toggleVectorStoreSettings(vectorStoreType, prefix) {
+        // Hide all advanced settings
+        const qdrantSettings = document.getElementById(prefix + 'qdrant-settings');
+        const pineconeSettings = document.getElementById(prefix + 'pinecone-settings');
+        const mongodbSettings = document.getElementById(prefix + 'mongodb-settings');
+
+        if (qdrantSettings) qdrantSettings.style.display = 'none';
+        if (pineconeSettings) pineconeSettings.style.display = 'none';
+        if (mongodbSettings) mongodbSettings.style.display = 'none';
+
+        // Show relevant settings based on vector store type
+        switch (vectorStoreType) {
+            case 'qdrant':
+                if (qdrantSettings) qdrantSettings.style.display = 'block';
+                break;
+            case 'pinecone':
+                if (pineconeSettings) pineconeSettings.style.display = 'block';
+                break;
+            case 'mongodb_atlas':
+                if (mongodbSettings) mongodbSettings.style.display = 'block';
+                break;
         }
     }
 }
@@ -1594,6 +1907,13 @@ function logout() {
 
 function addDataSource() {
     dashboard.addDataSource();
+}
+
+function updateRangeValue(id, value) {
+    const valueElement = document.getElementById(id + '-value');
+    if (valueElement) {
+        valueElement.textContent = value;
+    }
 }
 
 // Global functions for fine-tuned models
