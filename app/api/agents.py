@@ -4,6 +4,7 @@ import shutil
 import yaml
 import json
 import asyncio
+from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks, Query, File, UploadFile
@@ -347,17 +348,23 @@ async def upload_file_for_ingestion(
     current_user: User = Depends(PermissionChecker(["agent:create", "agent:update"]))
 ) -> Dict[str, str]:
     """
-    Receives a file upload, saves it to a temporary location, and returns its server path.
+    Receives a file upload, saves it to a user-specific location, and returns its server path.
     This path can then be used in the agent's data source configuration for 'local' type.
     Requires 'agent:create' or 'agent:update' permission.
+    Files are stored per-user for isolation and security.
     """
-    upload_dir = _DATA_DIR / "uploaded_temp" # Temporary directory for uploads
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    # Create user-specific upload directory
+    user_upload_dir = _DATA_DIR / "uploads" / f"user_{current_user.id}"
+    user_upload_dir.mkdir(parents=True, exist_ok=True)
 
     # Sanitize filename to prevent directory traversal
     filename = Path(file.filename).name
-    file_location = upload_dir / filename
-    print(f"Uploading {filename} to {file_location}")
+    # Add timestamp to prevent filename conflicts
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_filename = f"{timestamp}_{filename}"
+    file_location = user_upload_dir / safe_filename
+    
+    logger.info(f"Uploading {filename} to {file_location} for user {current_user.id}")
 
     try:
         with open(file_location, "wb") as buffer:

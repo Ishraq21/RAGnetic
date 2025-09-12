@@ -47,14 +47,26 @@ class AgentDataEventHandler(FileSystemEventHandler):
     def _initialize_db_for_watcher(self):
         """Initializes database connections for the watcher process."""
         try:
-            conn_name = get_memory_storage_config().get("connection_name") or get_log_storage_config().get("connection_name")
+            # Try to get connection name from memory storage config first
+            memory_config = get_memory_storage_config()
+            conn_name = memory_config.get("connection_name")
+            
+            # If not found, try log storage config
             if not conn_name:
-                logger.error("Database connection name not found for watcher DB initialization. DB-dependent features might fail.")
-                return
+                log_config = get_log_storage_config()
+                conn_name = log_config.get("connection_name")
+            
+            # If still not found, use default
+            if not conn_name:
+                logger.warning("No database connection name found in config. Using default 'ragnetic_db'.")
+                conn_name = "ragnetic_db"
+            
+            logger.info(f"Watcher: Initializing database with connection name: {conn_name}")
             initialize_db_connections(conn_name)
-            logger.info("Watcher: Database connections initialized.")
+            logger.info("Watcher: Database connections initialized successfully.")
         except Exception as e:
             logger.error(f"Watcher: Failed to initialize database connections: {e}", exc_info=True)
+            # Don't return here - let the watcher continue even if DB init fails
 
     def _get_api_key(self) -> str:
         """Retrieves the first server API key for authentication."""
