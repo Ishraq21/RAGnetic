@@ -579,6 +579,9 @@ class Dashboard {
             checkbox.checked = agent.tools && agent.tools.includes(checkbox.value);
         });
 
+        // Populate data sources
+        this.populateEditDataSources(agent.sources || []);
+
         // Populate data policies
         if (agent.data_policies && agent.data_policies.length > 0) {
             const piiPolicy = agent.data_policies.find(p => p.type === 'pii_redaction');
@@ -625,6 +628,9 @@ class Dashboard {
             selectedTools.push(checkbox.value);
         });
         
+        // Process data sources (file uploads and other sources)
+        const dataSources = await this.processDataSources(form);
+        
         // Get PII redaction settings
         const piiRedaction = formData.get('pii_redaction');
         let dataPolicies = [];
@@ -670,7 +676,7 @@ class Dashboard {
             llm_model: formData.get('llm_model'),
             embedding_model: formData.get('embedding_model'),
             tools: selectedTools,
-            sources: [], // Keep existing sources for now
+            sources: dataSources,
             vector_store: {
                 type: formData.get('vector_store_type') || 'faiss',
                 bm25_k: parseInt(formData.get('bm25_k')) || 5,
@@ -752,6 +758,9 @@ class Dashboard {
             selectedTools.push(checkbox.value);
         });
         
+        // Process data sources (file uploads and other sources)
+        const dataSources = await this.processDataSources(form);
+        
         // Get PII redaction settings
         const piiRedaction = formData.get('pii_redaction');
         let dataPolicies = [];
@@ -797,7 +806,7 @@ class Dashboard {
             llm_model: formData.get('llm_model'),
             embedding_model: formData.get('embedding_model'),
             tools: selectedTools,
-            sources: [], // Will be populated when data sources are added
+            sources: dataSources,
             vector_store: {
                 type: formData.get('vector_store_type') || 'faiss',
                 bm25_k: parseInt(formData.get('bm25_k')) || 5,
@@ -1277,11 +1286,16 @@ class Dashboard {
 
     handleFileSelection(dataSourceId, files) {
         const fileList = document.getElementById(`file-list-${dataSourceId}`);
-        const fileUploadContent = document.querySelector(`#file-upload-${dataSourceId} .file-upload-content`);
+        const fileUploadArea = document.getElementById(`file-upload-${dataSourceId}`);
+        const fileUploadContent = fileUploadArea ? fileUploadArea.querySelector('.file-upload-content') : null;
         
         if (files.length > 0) {
-            fileUploadContent.style.display = 'none';
-            fileList.style.display = 'block';
+            if (fileUploadContent) {
+                fileUploadContent.style.display = 'none';
+            }
+            if (fileList) {
+                fileList.style.display = 'block';
+            }
             
             let fileListHtml = '<div class="file-list-header"><h5>Selected Files</h5></div>';
             
@@ -1315,7 +1329,8 @@ class Dashboard {
     removeFile(dataSourceId, fileIndex) {
         const fileInput = document.getElementById(`file-input-${dataSourceId}`);
         const fileList = document.getElementById(`file-list-${dataSourceId}`);
-        const fileUploadContent = document.querySelector(`#file-upload-${dataSourceId} .file-upload-content`);
+        const fileUploadArea = document.getElementById(`file-upload-${dataSourceId}`);
+        const fileUploadContent = fileUploadArea ? fileUploadArea.querySelector('.file-upload-content') : null;
         
         // Create new FileList without the removed file
         const dt = new DataTransfer();
@@ -1326,8 +1341,12 @@ class Dashboard {
         fileInput.files = dt.files;
         
         if (fileInput.files.length === 0) {
-            fileList.style.display = 'none';
-            fileUploadContent.style.display = 'block';
+            if (fileList) {
+                fileList.style.display = 'none';
+            }
+            if (fileUploadContent) {
+                fileUploadContent.style.display = 'block';
+            }
         } else {
             this.handleFileSelection(dataSourceId, fileInput.files);
         }
@@ -1356,6 +1375,347 @@ class Dashboard {
         };
         
         return icons[extension] || icons['txt'];
+    }
+
+    async processDataSources(form) {
+        const dataSources = [];
+        
+        // Find all data source forms (both create and edit)
+        const dataSourceForms = form.querySelectorAll('.data-source-form');
+        
+        for (const dataSourceForm of dataSourceForms) {
+            const sourceTypeSelect = dataSourceForm.querySelector('select[name*="source_type"]');
+            const descriptionInput = dataSourceForm.querySelector('input[name*="source_description"]');
+            
+            if (!sourceTypeSelect || !descriptionInput) continue;
+            
+            const sourceType = sourceTypeSelect.value;
+            const description = descriptionInput.value;
+            
+            if (sourceType === 'local' || sourceType === 'pdf' || sourceType === 'txt' || 
+                sourceType === 'docx' || sourceType === 'csv' || sourceType === 'parquet' || 
+                sourceType === 'notebook') {
+                // Handle file uploads
+                const fileInput = dataSourceForm.querySelector('input[type="file"]');
+                if (fileInput && fileInput.files.length > 0) {
+                    // Upload files and create data sources
+                    for (const file of fileInput.files) {
+                        try {
+                            const uploadedPath = await this.uploadFile(file);
+                            dataSources.push({
+                                type: 'local',
+                                path: uploadedPath,
+                                description: description || file.name
+                            });
+                        } catch (error) {
+                            console.error('Failed to upload file:', error);
+                            this.showToast(`Failed to upload ${file.name}: ${error.message}`, 'error');
+                        }
+                    }
+                }
+            } else {
+                // Handle other source types (URL, API, etc.)
+                const pathInput = dataSourceForm.querySelector('input[name*="source_path"]');
+                if (pathInput && pathInput.value.trim()) {
+                    const sourceConfig = {
+                        type: sourceType,
+                        description: description || `${sourceType} source`
+                    };
+                    
+                    // Add appropriate field based on source type
+                    if (sourceType === 'url') {
+                        sourceConfig.url = pathInput.value.trim();
+                    } else if (sourceType === 'api') {
+                        sourceConfig.url = pathInput.value.trim();
+                    } else if (sourceType === 'db') {
+                        sourceConfig.db_connection = pathInput.value.trim();
+                    } else if (sourceType === 'gdoc') {
+                        sourceConfig.folder_id = pathInput.value.trim();
+                    } else {
+                        sourceConfig.path = pathInput.value.trim();
+                    }
+                    
+                    dataSources.push(sourceConfig);
+                }
+            }
+        }
+        
+        return dataSources;
+    }
+
+    async uploadFile(file) {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const response = await fetch(`${API_BASE_URL}/agents/upload-file`, {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-API-Key': loggedInUserToken
+            }
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Upload failed');
+        }
+        
+        const result = await response.json();
+        return result.file_path;
+    }
+
+    populateEditDataSources(sources) {
+        const container = document.getElementById('edit-data-sources-container');
+        if (!container) return;
+
+        // Clear existing data sources
+        container.innerHTML = '';
+
+        if (sources.length === 0) {
+            // Show empty state
+            container.innerHTML = `
+                <div class="empty-state">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14,2 14,8 20,8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10,9 9,9 8,9"></polyline>
+                    </svg>
+                    <p>No data sources configured</p>
+                    <small>Your agent will start with general knowledge only</small>
+                </div>
+            `;
+            return;
+        }
+
+        // Add each data source
+        sources.forEach((source, index) => {
+            this.addEditDataSource(source, index + 1);
+        });
+    }
+
+    addEditDataSource(source = null, sourceNumber = null) {
+        const container = document.getElementById('edit-data-sources-container');
+        const emptyState = container.querySelector('.empty-state');
+        
+        if (emptyState) {
+            emptyState.remove();
+        }
+        
+        const dataSourceId = Date.now() + Math.floor(Math.random() * 1000);
+        const sourceType = source ? source.type : 'local';
+        const sourcePath = source ? (source.path || source.url || source.db_connection || source.folder_id || '') : '';
+        const sourceDescription = source ? source.description : '';
+        
+        const dataSourceHtml = `
+            <div class="data-source-form" id="edit-data-source-${dataSourceId}">
+                <div class="data-source-header">
+                    <h4>Data Source ${sourceNumber || container.children.length + 1}</h4>
+                    <button type="button" class="remove-data-source" onclick="dashboard.removeEditDataSource(${dataSourceId})">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-source-type-${dataSourceId}">Source Type</label>
+                        <select id="edit-source-type-${dataSourceId}" name="edit_source_type_${dataSourceId}" required onchange="dashboard.toggleEditDataSourceInput(${dataSourceId})">
+                            <option value="local" ${sourceType === 'local' ? 'selected' : ''}>Local Files</option>
+                            <option value="url" ${sourceType === 'url' ? 'selected' : ''}>Web URL</option>
+                            <option value="api" ${sourceType === 'api' ? 'selected' : ''}>API Endpoint</option>
+                            <option value="db" ${sourceType === 'db' ? 'selected' : ''}>Database</option>
+                            <option value="code_repository" ${sourceType === 'code_repository' ? 'selected' : ''}>Code Repository</option>
+                            <option value="gdoc" ${sourceType === 'gdoc' ? 'selected' : ''}>Google Docs</option>
+                            <option value="web_crawler" ${sourceType === 'web_crawler' ? 'selected' : ''}>Web Crawler</option>
+                            <option value="notebook" ${sourceType === 'notebook' ? 'selected' : ''}>Jupyter Notebook</option>
+                            <option value="parquet" ${sourceType === 'parquet' ? 'selected' : ''}>Parquet Files</option>
+                            <option value="csv" ${sourceType === 'csv' ? 'selected' : ''}>CSV Files</option>
+                            <option value="pdf" ${sourceType === 'pdf' ? 'selected' : ''}>PDF Documents</option>
+                            <option value="txt" ${sourceType === 'txt' ? 'selected' : ''}>Text Files</option>
+                            <option value="docx" ${sourceType === 'docx' ? 'selected' : ''}>Word Documents</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group" id="edit-file-upload-group-${dataSourceId}" style="display: ${sourceType === 'local' || sourceType === 'pdf' || sourceType === 'txt' || sourceType === 'docx' || sourceType === 'csv' || sourceType === 'parquet' || sourceType === 'notebook' ? 'block' : 'none'}">
+                    <label>Upload Files</label>
+                    <div class="file-upload-area" id="edit-file-upload-${dataSourceId}">
+                        <div class="file-upload-content">
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7,10 12,15 17,10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                            <h4>Drop files here or click to browse</h4>
+                            <p>Supports PDF, DOCX, TXT, CSV, Parquet, and more</p>
+                            <input type="file" id="edit-file-input-${dataSourceId}" name="edit_files_${dataSourceId}" multiple accept=".pdf,.docx,.txt,.csv,.parquet,.json,.md,.py,.ipynb" style="display: none;">
+                        </div>
+                        <div class="file-list" id="edit-file-list-${dataSourceId}" style="display: none;">
+                            <!-- Uploaded files will be listed here -->
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group" id="edit-path-input-group-${dataSourceId}" style="display: ${sourceType === 'local' || sourceType === 'pdf' || sourceType === 'txt' || sourceType === 'docx' || sourceType === 'csv' || sourceType === 'parquet' || sourceType === 'notebook' ? 'none' : 'block'}">
+                    <label for="edit-source-path-${dataSourceId}">Path/URL</label>
+                    <input type="text" id="edit-source-path-${dataSourceId}" name="edit_source_path_${dataSourceId}" 
+                           placeholder="Enter file path, URL, or connection string" value="${sourcePath}">
+                </div>
+                <div class="form-group">
+                    <label for="edit-source-description-${dataSourceId}">Description</label>
+                    <input type="text" id="edit-source-description-${dataSourceId}" name="edit_source_description_${dataSourceId}" 
+                           placeholder="Brief description of this data source" value="${sourceDescription}">
+                </div>
+            </div>
+        `;
+        
+        container.insertAdjacentHTML('beforeend', dataSourceHtml);
+        
+        // Initialize file upload functionality for this data source
+        this.initializeEditFileUpload(dataSourceId);
+    }
+
+    removeEditDataSource(dataSourceId) {
+        const dataSource = document.getElementById(`edit-data-source-${dataSourceId}`);
+        if (dataSource) {
+            dataSource.remove();
+            
+            // Check if we need to show the empty state
+            const container = document.getElementById('edit-data-sources-container');
+            if (container.children.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14,2 14,8 20,8"></polyline>
+                            <line x1="16" y1="13" x2="8" y2="13"></line>
+                            <line x1="16" y1="17" x2="8" y2="17"></line>
+                            <polyline points="10,9 9,9 8,9"></polyline>
+                        </svg>
+                        <p>No data sources configured</p>
+                        <small>Your agent will start with general knowledge only</small>
+                    </div>
+                `;
+            }
+        }
+    }
+
+    toggleEditDataSourceInput(dataSourceId) {
+        const sourceType = document.getElementById(`edit-source-type-${dataSourceId}`).value;
+        const fileUploadGroup = document.getElementById(`edit-file-upload-group-${dataSourceId}`);
+        const pathInputGroup = document.getElementById(`edit-path-input-group-${dataSourceId}`);
+        
+        if (sourceType === 'local' || sourceType === 'pdf' || sourceType === 'txt' || 
+            sourceType === 'docx' || sourceType === 'csv' || sourceType === 'parquet' || 
+            sourceType === 'notebook') {
+            fileUploadGroup.style.display = 'block';
+            pathInputGroup.style.display = 'none';
+        } else {
+            fileUploadGroup.style.display = 'none';
+            pathInputGroup.style.display = 'block';
+        }
+    }
+
+    initializeEditFileUpload(dataSourceId) {
+        const fileUploadArea = document.getElementById(`edit-file-upload-${dataSourceId}`);
+        const fileInput = document.getElementById(`edit-file-input-${dataSourceId}`);
+        const fileList = document.getElementById(`edit-file-list-${dataSourceId}`);
+        
+        // Click to browse files
+        fileUploadArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        // Drag and drop functionality
+        fileUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileUploadArea.classList.add('drag-over');
+        });
+        
+        fileUploadArea.addEventListener('dragleave', () => {
+            fileUploadArea.classList.remove('drag-over');
+        });
+        
+        fileUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileUploadArea.classList.remove('drag-over');
+            const files = e.dataTransfer.files;
+            this.handleEditFileSelection(dataSourceId, files);
+        });
+        
+        // File input change
+        fileInput.addEventListener('change', (e) => {
+            this.handleEditFileSelection(dataSourceId, e.target.files);
+        });
+    }
+
+    handleEditFileSelection(dataSourceId, files) {
+        const fileList = document.getElementById(`edit-file-list-${dataSourceId}`);
+        const fileUploadArea = document.getElementById(`edit-file-upload-${dataSourceId}`);
+        const fileUploadContent = fileUploadArea ? fileUploadArea.querySelector('.file-upload-content') : null;
+        
+        if (files.length > 0) {
+            if (fileUploadContent) {
+                fileUploadContent.style.display = 'none';
+            }
+            if (fileList) {
+                fileList.style.display = 'block';
+            }
+            
+            let fileListHtml = '<div class="file-list-header"><h5>Selected Files</h5></div>';
+            
+            Array.from(files).forEach((file, index) => {
+                const fileSize = this.formatFileSize(file.size);
+                const fileIcon = this.getFileIcon(file.type, file.name);
+                
+                fileListHtml += `
+                    <div class="file-item">
+                        <div class="file-info">
+                            <div class="file-icon">${fileIcon}</div>
+                            <div class="file-details">
+                                <span class="file-name">${file.name}</span>
+                                <span class="file-size">${fileSize}</span>
+                            </div>
+                        </div>
+                        <button type="button" class="remove-file" onclick="dashboard.removeEditFile(${dataSourceId}, ${index})">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                            </svg>
+                        </button>
+                    </div>
+                `;
+            });
+            
+            fileList.innerHTML = fileListHtml;
+        }
+    }
+
+    removeEditFile(dataSourceId, fileIndex) {
+        const fileInput = document.getElementById(`edit-file-input-${dataSourceId}`);
+        const fileList = document.getElementById(`edit-file-list-${dataSourceId}`);
+        const fileUploadArea = document.getElementById(`edit-file-upload-${dataSourceId}`);
+        const fileUploadContent = fileUploadArea ? fileUploadArea.querySelector('.file-upload-content') : null;
+        
+        // Create new FileList without the removed file
+        const dt = new DataTransfer();
+        const files = Array.from(fileInput.files);
+        files.splice(fileIndex, 1);
+        
+        files.forEach(file => dt.items.add(file));
+        fileInput.files = dt.files;
+        
+        if (fileInput.files.length === 0) {
+            if (fileList) {
+                fileList.style.display = 'none';
+            }
+            if (fileUploadContent) {
+                fileUploadContent.style.display = 'block';
+            }
+        } else {
+            this.handleEditFileSelection(dataSourceId, fileInput.files);
+        }
     }
 
     // Initialize form event listeners
@@ -1907,6 +2267,10 @@ function logout() {
 
 function addDataSource() {
     dashboard.addDataSource();
+}
+
+function addEditDataSource() {
+    dashboard.addEditDataSource();
 }
 
 function updateRangeValue(id, value) {

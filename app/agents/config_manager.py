@@ -3,6 +3,15 @@ import os
 from typing import List
 from app.schemas.agent import AgentConfig
 
+def represent_str(dumper, data):
+    """Custom string representer that quotes strings with spaces."""
+    if ' ' in data:
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='"')
+    return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+# Register the custom representer
+yaml.add_representer(str, represent_str)
+
 AGENTS_DIR = "agents"
 
 
@@ -12,9 +21,12 @@ def save_agent_config(config: AgentConfig):
         os.makedirs(AGENTS_DIR)
 
     file_path = os.path.join(AGENTS_DIR, f"{config.name}.yaml")
-    # Use model_dump() instead of dict() for modern Pydantic versions
+    
+    # Convert the config to dict
+    config_dict = config.model_dump()
+    
     with open(file_path, 'w') as f:
-        yaml.dump(config.model_dump(), f, sort_keys=False, default_flow_style=False)
+        yaml.dump(config_dict, f, sort_keys=False, default_flow_style=False, allow_unicode=True, width=float('inf'))
 
 
 def load_agent_config(agent_name: str) -> AgentConfig:
