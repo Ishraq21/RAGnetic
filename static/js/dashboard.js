@@ -1196,11 +1196,6 @@ class Dashboard {
                     <input type="text" id="source-path-${dataSourceId}" name="source_path_${dataSourceId}" 
                            placeholder="Enter file path, URL, or connection string">
                 </div>
-                <div class="form-group">
-                    <label for="source-description-${dataSourceId}">Description</label>
-                    <input type="text" id="source-description-${dataSourceId}" name="source_description_${dataSourceId}" 
-                           placeholder="Brief description of this data source">
-                </div>
             </div>
         `;
         
@@ -1385,12 +1380,10 @@ class Dashboard {
         
         for (const dataSourceForm of dataSourceForms) {
             const sourceTypeSelect = dataSourceForm.querySelector('select[name*="source_type"]');
-            const descriptionInput = dataSourceForm.querySelector('input[name*="source_description"]');
             
-            if (!sourceTypeSelect || !descriptionInput) continue;
+            if (!sourceTypeSelect) continue;
             
             const sourceType = sourceTypeSelect.value;
-            const description = descriptionInput.value;
             
             if (sourceType === 'local' || sourceType === 'pdf' || sourceType === 'txt' || 
                 sourceType === 'docx' || sourceType === 'csv' || sourceType === 'parquet' || 
@@ -1404,8 +1397,7 @@ class Dashboard {
                             const uploadedPath = await this.uploadFile(file);
                             dataSources.push({
                                 type: 'local',
-                                path: uploadedPath,
-                                description: description || file.name
+                                path: uploadedPath
                             });
                         } catch (error) {
                             console.error('Failed to upload file:', error);
@@ -1418,8 +1410,7 @@ class Dashboard {
                 const pathInput = dataSourceForm.querySelector('input[name*="source_path"]');
                 if (pathInput && pathInput.value.trim()) {
                     const sourceConfig = {
-                        type: sourceType,
-                        description: description || `${sourceType} source`
+                        type: sourceType
                     };
                     
                     // Add appropriate field based on source type
@@ -1506,7 +1497,6 @@ class Dashboard {
         const dataSourceId = Date.now() + Math.floor(Math.random() * 1000);
         const sourceType = source ? source.type : 'local';
         const sourcePath = source ? (source.path || source.url || source.db_connection || source.folder_id || '') : '';
-        const sourceDescription = source ? source.description : '';
         
         const dataSourceHtml = `
             <div class="data-source-form" id="edit-data-source-${dataSourceId}">
@@ -1561,11 +1551,6 @@ class Dashboard {
                     <label for="edit-source-path-${dataSourceId}">Path/URL</label>
                     <input type="text" id="edit-source-path-${dataSourceId}" name="edit_source_path_${dataSourceId}" 
                            placeholder="Enter file path, URL, or connection string" value="${sourcePath}">
-                </div>
-                <div class="form-group">
-                    <label for="edit-source-description-${dataSourceId}">Description</label>
-                    <input type="text" id="edit-source-description-${dataSourceId}" name="edit_source_description_${dataSourceId}" 
-                           placeholder="Brief description of this data source" value="${sourceDescription}">
                 </div>
             </div>
         `;
