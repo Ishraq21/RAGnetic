@@ -595,6 +595,9 @@ body {
     cursor: pointer;
     position: relative;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
 }
 
 .agent-card:last-child {
@@ -612,21 +615,20 @@ body {
 
 .agent-header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
-    margin-bottom: 12px;
 }
 
 .agent-info h3 {
     font-size: var(--font-size-lg);
     font-weight: 600;
-    margin-bottom: 4px;
+    margin-bottom: 6px;
 }
 
 .agent-info p {
     color: var(--text-secondary);
     font-size: var(--font-size-sm);
-    line-height: 1.4;
+    line-height: 1.5;
 }
 
 .agent-status {
@@ -656,8 +658,7 @@ body {
 .agent-meta {
     display: flex;
     align-items: center;
-    gap: 16px;
-    margin-bottom: 0;
+    gap: 20px;
     font-size: var(--font-size-sm);
     color: var(--text-muted);
 }
@@ -699,12 +700,28 @@ body {
 .agent-meta span {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
 }
 
 .agent-actions {
     display: flex;
-    gap: 8px;
+    gap: 10px;
+}
+
+/* Ensure consistent spacing between sections inside agent-card */
+.agent-card .agent-header + .agent-meta { margin-top: 2px; }
+.agent-card .agent-meta + .agent-actions { margin-top: 4px; }
+
+/* Improve status badge vertical alignment */
+.agent-status { align-self: flex-start; }
+
+/* Responsive spacing adjustments for agent cards */
+@media (max-width: 768px) {
+    .agent-card { padding: 16px 18px; gap: 12px; }
+    .agent-header { flex-direction: column; gap: 8px; }
+    .agent-status { align-self: flex-start; }
+    .agent-meta { flex-wrap: wrap; gap: 12px; }
+    .agent-actions { flex-wrap: wrap; gap: 8px; }
 }
 
 
