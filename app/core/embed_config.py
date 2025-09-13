@@ -57,7 +57,21 @@ def get_embedding_model(model_identifier: str):
             api_key = get_api_key(provider)
             embeddings = OpenAIEmbeddings(model=model_identifier, api_key=api_key)
 
-        # 5. Fallback for any other Hugging Face model from the hub (if not caught by local:)
+        # 5. Check for mock model for testing
+        elif model_identifier == "mock":
+            provider = "mock"
+            logger.info(f"Using mock embedding model for testing. No API key needed.")
+            # Create a simple mock embedding model
+            class MockEmbeddings:
+                def embed_documents(self, texts):
+                    # Return mock embeddings (1536 dimensions like OpenAI)
+                    return [[0.1] * 1536 for _ in texts]
+                
+                def embed_query(self, text):
+                    return [0.1] * 1536
+            embeddings = MockEmbeddings()
+
+        # 6. Fallback for any other Hugging Face model from the hub (if not caught by local:)
         else:
             provider = "huggingface"
             logger.info(f"Using Hugging Face Hub model '{model_identifier}'. No API key needed.")

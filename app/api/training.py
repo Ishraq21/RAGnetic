@@ -44,17 +44,26 @@ async def apply_fine_tuning_job_config(
             detail=f"Base model '{job_config.base_model_name}' not allowed. Allowed: {sorted(allowed_models)}"
         )
 
-    # --- Safe dataset path (default allow-root = ./data ) ---
-    allowed_root = Path(os.getenv("RAGNETIC_DATASET_ROOT", "data")).resolve()
+    # --- Safe dataset path with user isolation ---
+    from app.core.config import get_user_training_data_paths
+    user_paths = get_user_training_data_paths(current_user.id)
+    allowed_roots = [
+        Path(os.getenv("RAGNETIC_DATASET_ROOT", "data")).resolve(),
+        user_paths["user_training_base"].resolve(),
+        user_paths["user_uploaded_temp"].resolve()
+    ]
+    
     try:
         ds_path = Path(job_config.dataset_path).resolve(strict=False)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid dataset_path.")
 
-    if not str(ds_path).startswith(str(allowed_root)):
+    # Check if dataset path is in any allowed root (including user-specific paths)
+    is_allowed = any(str(ds_path).startswith(str(root)) for root in allowed_roots)
+    if not is_allowed:
         raise HTTPException(
             status_code=400,
-            detail=f"dataset_path must be under '{allowed_root}'. Got: '{ds_path}'"
+            detail=f"dataset_path must be under one of the allowed roots: {[str(r) for r in allowed_roots]}. Got: '{ds_path}'"
         )
 
     try:
@@ -317,6 +326,7 @@ async def upload_training_dataset(
 ):
     """
     Upload a training dataset file (JSONL format).
+    Files are stored per-user for isolation and security.
     """
     # Validate file type
     if not file.filename.endswith(('.jsonl', '.json')):
@@ -325,15 +335,16 @@ async def upload_training_dataset(
             detail="Only JSONL and JSON files are supported for training datasets"
         )
     
-    # Create uploads directory
-    uploads_dir = Path("data/uploaded_temp")
-    uploads_dir.mkdir(parents=True, exist_ok=True)
+    # Create user-specific uploads directory
+    user_upload_dir = Path("data/uploaded_temp") / f"user_{current_user.id}"
+    user_upload_dir.mkdir(parents=True, exist_ok=True)
     
-    # Generate unique filename
-    file_id = str(uuid4())
+    # Generate unique filename with timestamp
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_extension = Path(file.filename).suffix
-    safe_filename = f"{file_id}{file_extension}"
-    file_path = uploads_dir / safe_filename
+    safe_filename = f"{timestamp}_{file.filename}"
+    file_path = user_upload_dir / safe_filename
     
     try:
         # Save uploaded file
@@ -360,7 +371,7 @@ async def upload_training_dataset(
             "message": "Dataset uploaded successfully",
             "file_path": str(file_path),
             "filename": file.filename,
-            "file_id": file_id,
+            "file_id": file_path.stem,  # Use the filename without extension as file_id
             "size": file_path.stat().st_size,
             "lines": len(lines) if 'lines' in locals() else 0
         }

@@ -85,8 +85,9 @@ def get_path_settings() -> Dict[str, Path | List[Path]]:
    #    "SKILLS_DIR": project_root / "skills",
         "TRAINING_CONFIGS_DIR": project_root / "training_configs",
         "FINE_TUNED_MODELS_BASE_DIR": project_root / "models" / "fine_tuned",
-        "DATA_PREPARED_DIR": project_root / "data" / "prepared_datasets",  # For prepared datasets
-        "DATA_RAW_DIR": project_root / "data" / "raw_data",  # For raw datasets
+        "DATA_PREPARED_DIR": project_root / "data" / "prepared_datasets",  # For prepared datasets (legacy)
+        "DATA_RAW_DIR": project_root / "data" / "raw_data",  # For raw datasets (legacy)
+        "TRAINING_DATA_BASE_DIR": project_root / "data" / "training_datasets",  # Per-user training data
         "DATA_PREP_CONFIGS": project_root / "data_prep_configs",
     }
 
@@ -369,3 +370,25 @@ def get_allowed_hosts() -> List[str]:
 
     # Reasonable defaults
     return ["localhost", "127.0.0.1"]
+
+
+def get_user_training_data_paths(user_id: int) -> Dict[str, Path]:
+    """
+    Returns user-specific training data paths.
+    
+    Args:
+        user_id: The user ID for path isolation
+        
+    Returns:
+        Dictionary with user-specific training data paths
+    """
+    base_paths = _get_path_settings()
+    training_base = base_paths["TRAINING_DATA_BASE_DIR"]
+    user_dir = training_base / f"user_{user_id}"
+    
+    return {
+        "user_training_base": user_dir,
+        "user_prepared": user_dir / "prepared",
+        "user_raw": user_dir / "raw",
+        "user_uploaded_temp": base_paths["DATA_DIR"] / "uploaded_temp" / f"user_{user_id}"
+    }
