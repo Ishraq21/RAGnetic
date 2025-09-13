@@ -5,6 +5,11 @@ class Dashboard {
     constructor() {
         this.currentView = 'overview';
         this.agents = [];
+        this.agentList = [];
+        this.agentsPage = 1;
+        this.agentsPerPage = 8;
+        this.recentActivityPage = 1;
+        this.recentActivityPageSize = 5;
         this.lastDataHash = null; // Track data changes
         this.eventSource = null; // For real-time updates
         this.init();
@@ -320,6 +325,8 @@ class Dashboard {
             if (response.ok) {
                 this.agents = await response.json();
                 console.log('Loaded agents:', this.agents);
+                this.agentList = this.agents;
+                this.agentsPage = 1;
                 this.renderAgents();
             } else {
                 throw new Error(`HTTP ${response.status}`);
@@ -333,9 +340,11 @@ class Dashboard {
 
     async loadRecentActivity() {
         try {
-            // Load recent agent runs from audit API
-            const auditUrl = `${API_BASE_URL}/audit/runs?limit=5`;
-            console.log('Loading recent agent runs from:', auditUrl, '(FIXED VERSION)');
+            // Load recent agent runs from audit API with pagination
+            const limit = this.recentActivityPageSize;
+            const offset = (this.recentActivityPage - 1) * limit;
+            const auditUrl = `${API_BASE_URL}/audit/runs?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(offset)}`;
+            console.log('Loading recent agent runs from:', auditUrl, '(paginated)');
             
             const agentRunsResponse = await fetch(auditUrl, {
                 headers: { 'X-API-Key': loggedInUserToken }
@@ -592,14 +601,14 @@ class Dashboard {
         const container = document.getElementById('agents-grid');
         if (!container) return;
 
-        if (this.agents.length === 0) {
+        const list = this.agentList && this.agentList.length ? this.agentList : this.agents;
+
+        if (!list || list.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
                         <circle cx="9" cy="7" r="4"></circle>
-                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
                     </svg>
                     <h3>No agents yet</h3>
                     <p>Create your first AI agent to get started</p>
@@ -609,11 +618,34 @@ class Dashboard {
             return;
         }
 
-        const agentsHtml = this.agents.map(agent => this.renderAgentCard(agent)).join('');
+        const totalPages = Math.max(1, Math.ceil(list.length / this.agentsPerPage));
+        if (this.agentsPage > totalPages) this.agentsPage = totalPages;
+        const start = (this.agentsPage - 1) * this.agentsPerPage;
+        const end = start + this.agentsPerPage;
+        const pageAgents = list.slice(start, end);
+
+        const agentsHtml = pageAgents.map(agent => this.renderAgentCard(agent)).join('');
+        const hasPrev = this.agentsPage > 1;
+        const hasNext = this.agentsPage < totalPages;
+        
         container.innerHTML = `
             <div class="list-header">Agents</div>
             ${agentsHtml}
+            <div class="pager">
+                <button class="pager-btn" onclick="dashboard.changeAgentsPage(-1)" ${hasPrev ? '' : 'disabled'} aria-label="Previous page">‹</button>
+                <span class="pager-info">Page ${this.agentsPage} / ${totalPages}</span>
+                <button class="pager-btn" onclick="dashboard.changeAgentsPage(1)" ${hasNext ? '' : 'disabled'} aria-label="Next page">›</button>
+            </div>
         `;
+    }
+
+    changeAgentsPage(delta) {
+        const list = this.agentList && this.agentList.length ? this.agentList : this.agents;
+        const totalPages = Math.max(1, Math.ceil((list?.length || 0) / this.agentsPerPage));
+        const nextPage = Math.min(Math.max(1, this.agentsPage + delta), totalPages);
+        if (nextPage === this.agentsPage) return;
+        this.agentsPage = nextPage;
+        this.renderAgents();
     }
 
     renderAgentCard(agent) {
@@ -680,7 +712,6 @@ class Dashboard {
             return;
         }
 
-
         const rows = runs.map(run => `
             <tr>
                 <td>${run.agent_name || 'Unknown Agent'}</td>
@@ -691,6 +722,9 @@ class Dashboard {
                 </td>
             </tr>
         `).join('');
+
+        const hasPrev = this.recentActivityPage > 1;
+        const hasNext = runs.length === this.recentActivityPageSize;
 
         container.innerHTML = `
             <div class="table-responsive">
@@ -708,8 +742,20 @@ class Dashboard {
                     </tbody>
                 </table>
             </div>
+            <div class="pager">
+                <button class="pager-btn" onclick="dashboard.changeRecentActivityPage(-1)" ${hasPrev ? '' : 'disabled'} aria-label="Previous page">‹</button>
+                <span class="pager-info">Page ${this.recentActivityPage}</span>
+                <button class="pager-btn" onclick="dashboard.changeRecentActivityPage(1)" ${hasNext ? '' : 'disabled'} aria-label="Next page">›</button>
+            </div>
         `;
         console.log('✅ Recent activity rendered successfully');
+    }
+
+    changeRecentActivityPage(delta) {
+        const nextPage = this.recentActivityPage + delta;
+        if (nextPage < 1) return;
+        this.recentActivityPage = nextPage;
+        this.loadRecentActivity();
     }
 
     async inspectRun(runId) {
@@ -777,7 +823,9 @@ class Dashboard {
         
         const container = document.getElementById('agents-grid');
         if (container) {
-            container.innerHTML = filtered.map(agent => this.renderAgentCard(agent)).join('');
+            this.agentList = filtered;
+            this.agentsPage = 1;
+            this.renderAgents();
         }
     }
 
@@ -2277,6 +2325,8 @@ class FineTunedModelsManager {
     constructor() {
         console.log('FineTunedModelsManager constructor called');
         this.models = [];
+        this.modelsPage = 1;
+        this.modelsPerPage = 10;
         this.init();
     }
 
@@ -2328,23 +2378,43 @@ class FineTunedModelsManager {
                 <div class="list-header">Fine-tuned Models</div>
                 <div class="empty-state">
                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
-                        <path d="M2 17L12 22L22 17"></path>
-                        <path d="M2 12L12 17L22 12"></path>
-                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
                     </svg>
-                    <h3>No Fine-tuned Models</h3>
-                    <p>Create your first training job to get started with fine-tuning</p>
+                    <h3>No models yet</h3>
+                    <p>Fine-tune a model to see it here</p>
                 </div>
             `;
             return;
         }
 
-        const modelsHtml = this.models.map(model => this.renderModelCard(model)).join('');
+        const totalPages = Math.max(1, Math.ceil(this.models.length / this.modelsPerPage));
+        if (this.modelsPage > totalPages) this.modelsPage = totalPages;
+        const start = (this.modelsPage - 1) * this.modelsPerPage;
+        const end = start + this.modelsPerPage;
+        const pageModels = this.models.slice(start, end);
+
+        const cards = pageModels.map(m => this.renderModelCard(m)).join('');
+        const hasPrev = this.modelsPage > 1;
+        const hasNext = this.modelsPage < totalPages;
+
         grid.innerHTML = `
             <div class="list-header">Fine-tuned Models</div>
-            ${modelsHtml}
+            ${cards}
+            <div class="pager">
+                <button class="pager-btn" onclick="fineTunedModelsManager.changeModelsPage(-1)" ${hasPrev ? '' : 'disabled'} aria-label="Previous page">‹</button>
+                <span class="pager-info">Page ${this.modelsPage} / ${totalPages}</span>
+                <button class="pager-btn" onclick="fineTunedModelsManager.changeModelsPage(1)" ${hasNext ? '' : 'disabled'} aria-label="Next page">›</button>
+            </div>
         `;
+    }
+
+    changeModelsPage(delta) {
+        const totalPages = Math.max(1, Math.ceil(this.models.length / this.modelsPerPage));
+        const nextPage = Math.min(Math.max(1, this.modelsPage + delta), totalPages);
+        if (nextPage === this.modelsPage) return;
+        this.modelsPage = nextPage;
+        this.renderModels();
     }
 
     renderModelCard(model) {
