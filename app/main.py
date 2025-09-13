@@ -440,7 +440,12 @@ class CreateSessionRequest(BaseModel):
     agent_name: str
     user_id: int
 
-@app.post("/api/v1/sessions/create", status_code=status.HTTP_201_CREATED, tags=["Memory"])
+@app.post(
+    "/api/v1/sessions/create",
+    status_code=status.HTTP_201_CREATED,
+    tags=["Memory"],
+    dependencies=[Depends(rate_limiter("session_create", 10, 60))]
+)
 async def create_new_session(
     request: CreateSessionRequest,
     current_user: User = Depends(PermissionChecker(["session:create"])),
@@ -1078,7 +1083,11 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
 
 # Corrected endpoint for get_history
-@app.get("/history/{thread_id}", tags=["Memory"])
+@app.get(
+    "/history/{thread_id}",
+    tags=["Memory"],
+    dependencies=[Depends(rate_limiter("history", 120, 60))]
+)
 async def get_history(thread_id: str, agent_name: str, user_id: int,
                       current_user: User = Depends(PermissionChecker(["history:read"])),
                       db: AsyncSession = Depends(get_db)):
@@ -1110,7 +1119,11 @@ async def get_history(thread_id: str, agent_name: str, user_id: int,
 
 
 # Corrected endpoint for list_sessions
-@app.get("/sessions", tags=["Memory"])
+@app.get(
+    "/sessions",
+    tags=["Memory"],
+    dependencies=[Depends(rate_limiter("sessions", 60, 60))]
+)
 async def list_sessions(agent_name: str, user_id: int,
                         current_user: User = Depends(PermissionChecker(["sessions:read"])),
                         db: AsyncSession = Depends(get_db)):
@@ -1132,7 +1145,12 @@ async def list_sessions(agent_name: str, user_id: int,
                             detail="An unexpected error occurred while loading chat sessions. Please check server logs for details.")
 
 
-@app.put("/sessions/{thread_id}/rename", tags=["Memory"], status_code=status.HTTP_200_OK)
+@app.put(
+    "/sessions/{thread_id}/rename",
+    tags=["Memory"],
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(rate_limiter("sessions_update", 20, 60))]
+)
 async def rename_session(thread_id: str, request: RenameRequest, agent_name: str, user_id: int,
                          current_user: User = Depends(PermissionChecker(["sessions:update"])),
                          db: AsyncSession = Depends(get_db)):
@@ -1161,7 +1179,12 @@ async def rename_session(thread_id: str, request: RenameRequest, agent_name: str
                             detail="A database error occurred while renaming the session. Please try again or create a GitHub issue.")
 
 
-@app.delete("/sessions/{thread_id}", tags=["Memory"], status_code=status.HTTP_200_OK)
+@app.delete(
+    "/sessions/{thread_id}",
+    tags=["Memory"],
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(rate_limiter("sessions_delete", 10, 60))]
+)
 async def delete_session(
         thread_id: str,
         agent_name: str,

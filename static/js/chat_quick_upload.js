@@ -7,7 +7,7 @@ window.quickUploads = (function() {
     // Constants for client-side file validation.
     const MAX_FILE_SIZE_MB = 25;
     const SUPPORTED_FILE_TYPES = [
-        '.pdf', '.docx', '.txt', '.csv', '.json', '.yaml', '.yml', '.hcl', '.tf', '.ipynb', '.md', '.log, .html'
+        '.pdf', '.docx', '.txt', '.csv', '.json', '.yaml', '.yml', '.hcl', '.tf', '.ipynb', '.md', '.log', '.html'
     ];
 
     /**
@@ -18,6 +18,7 @@ window.quickUploads = (function() {
         console.log("Quick Uploads module initialized.");
         // Re-render to ensure display state is correct on load (e.g., if files were somehow persisted - though they aren't yet)
         renderAttachedFiles();
+        enableDragAndDrop();
     }
 
     /**
@@ -85,21 +86,17 @@ window.quickUploads = (function() {
      * Renders the current list of `attachedFiles` in the UI (`quickUploadFileList`).
      */
     function renderAttachedFiles() {
-        // `quickUploadFileList` is a global element from `agent_interface.html`
-        // It's accessed directly here because this module is designed to interact with that specific UI.
-        if (!window.quickUploadFileList) {
-            console.error("quickUploadFileList element not found in the DOM.");
+        const listEl = document.getElementById('quickUploadFileList');
+        if (!listEl) {
+            console.error("#quickUploadFileList element not found in the DOM.");
             return;
         }
 
-        window.quickUploadFileList.innerHTML = ''; // Clear previous entries
+        listEl.innerHTML = ''; // Clear previous entries
 
         // Show/hide the attachment list container based on whether there are files.
-        if (attachedFiles.length === 0) {
-            window.quickUploadFileList.style.display = 'none';
-        } else {
-            window.quickUploadFileList.style.display = 'flex'; // Use flex display for styling
-        }
+        if (attachedFiles.length === 0) { listEl.style.display = 'none'; }
+        else { listEl.style.display = 'flex'; }
 
         // Create and append a visual item for each attached file.
         attachedFiles.forEach((file, index) => {
@@ -120,7 +117,7 @@ window.quickUploads = (function() {
 
             fileItem.appendChild(fileNameSpan);
             fileItem.appendChild(removeButton);
-            window.quickUploadFileList.appendChild(fileItem);
+            listEl.appendChild(fileItem);
         });
     }
 
@@ -132,9 +129,9 @@ window.quickUploads = (function() {
      * @param {string[]} errors - Array of validation error messages.
      */
     function displayInvalidFile(file, errors) {
-        if (!window.quickUploadFileList) return;
-
-        window.quickUploadFileList.style.display = 'flex'; // Ensure the list is visible
+        const listEl = document.getElementById('quickUploadFileList');
+        if (!listEl) return;
+        listEl.style.display = 'flex';
 
         const fileItem = document.createElement('div');
         fileItem.className = 'attachment-item error'; // Apply error styling
@@ -159,7 +156,7 @@ window.quickUploads = (function() {
 
         fileItem.appendChild(fileNameSpan);
         fileItem.appendChild(removeButton);
-        window.quickUploadFileList.appendChild(fileItem);
+        listEl.appendChild(fileItem);
     }
 
     /**
@@ -171,6 +168,39 @@ window.quickUploads = (function() {
         // Filter out the file at the specified index.
         attachedFiles = attachedFiles.filter((_, index) => index !== indexToRemove);
         renderAttachedFiles(); // Update the UI.
+    }
+
+    // --- Drag & Drop Support ---
+    function enableDragAndDrop() {
+        const inputForm = document.getElementById('input-form');
+        const listEl = document.getElementById('quickUploadFileList');
+        if (!inputForm) return;
+
+        function showDragState() {
+            inputForm.classList.add('drag-over');
+            if (listEl) listEl.classList.add('drag-over');
+        }
+        function hideDragState() {
+            inputForm.classList.remove('drag-over');
+            if (listEl) listEl.classList.remove('drag-over');
+        }
+
+        ;['dragenter','dragover'].forEach(evt => inputForm.addEventListener(evt, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showDragState();
+        }));
+        ;['dragleave','drop'].forEach(evt => inputForm.addEventListener(evt, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (evt === 'drop') {
+                const dt = e.dataTransfer;
+                if (dt && dt.files && dt.files.length) {
+                    handleFileSelection(dt.files);
+                }
+            }
+            hideDragState();
+        }));
     }
 
     /**
@@ -255,7 +285,8 @@ window.quickUploads = (function() {
         handleFileSelection: handleFileSelection,
         getAttachedFiles: getAttachedFiles,
         clearAttachedFiles: clearAttachedFiles,
-        uploadFileToBackend: uploadFileToBackend // EXPOSED: This was the missing piece causing the TypeError
+        uploadFileToBackend: uploadFileToBackend, // EXPOSED: This was the missing piece causing the TypeError
+        enableDragAndDrop: enableDragAndDrop
     };
 })();
 

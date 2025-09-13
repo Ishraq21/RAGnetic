@@ -382,7 +382,7 @@ def get_user_training_data_paths(user_id: int) -> Dict[str, Path]:
     Returns:
         Dictionary with user-specific training data paths
     """
-    base_paths = _get_path_settings()
+    base_paths = get_path_settings()
     training_base = base_paths["TRAINING_DATA_BASE_DIR"]
     user_dir = training_base / f"user_{user_id}"
     
