@@ -1229,12 +1229,6 @@ function showTestSetDetailsModal(testSetData) {
                     </div>
                 </div>
             </div>
-            <div class="modal-footer">
-                <button class="btn-secondary" onclick="closeModal(this)">Close</button>
-                <button class="btn-primary" onclick="useTestSetForBenchmark('${testSetData.filename}'); closeModal(this);">
-                    Use for Benchmark
-                </button>
-            </div>
         </div>
     `;
     

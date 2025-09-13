@@ -920,7 +920,7 @@ body {
     display: flex;
     justify-content: flex-end;
     gap: 12px;
-    padding: 20px 0 0 0;
+    padding: 20px 24px 0 24px;
     border-top: 1px solid var(--border-color);
     margin-top: 20px;
 }
@@ -1726,6 +1726,11 @@ body {
     overflow-y: auto;
 }
 
+/* Provide comfortable bottom padding inside large modals */
+.modal-content.large .modal-body {
+    padding: 0 24px 24px;
+}
+
 .details-header {
     margin-bottom: 24px;
     padding-bottom: 16px;
@@ -1742,6 +1747,9 @@ body {
 .details-meta {
     display: flex;
     gap: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+    row-gap: 8px;
 }
 
 .meta-item {
@@ -1759,14 +1767,14 @@ body {
 .questions-list {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 20px;
 }
 
 .question-item {
     background: var(--card-background);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    padding: 16px;
+    padding: 18px;
 }
 
 .question-header {
@@ -1796,13 +1804,22 @@ body {
 .question-content {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
 }
 
 .question-text,
 .answer-text {
     font-size: var(--font-size-sm);
-    line-height: 1.5;
+    line-height: 1.6;
+}
+
+/* Slight spacing above the questions block */
+.test-set-content { margin-top: 8px; }
+
+@media (max-width: 768px) {
+    .modal-content.large .modal-body { padding: 0 16px 16px; }
+    .questions-list { gap: 14px; }
+    .question-item { padding: 16px; }
 }
 
 .question-text strong,
