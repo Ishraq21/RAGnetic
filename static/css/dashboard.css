@@ -4074,8 +4074,9 @@ input[type="range"]::-moz-range-thumb:hover {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
+    gap: 8px;
+    flex-wrap: nowrap;
+    white-space: nowrap;
     margin-bottom: 16px;
 }
 
@@ -4123,16 +4124,17 @@ input[type="range"]::-moz-range-thumb:hover {
     color: var(--text-primary);
     border: 1px solid var(--border-color);
     border-radius: 8px;
-    padding: 6px 10px;
-    height: 32px;
-    line-height: 32px;
+    padding: 4px 8px;
+    height: 28px;
+    line-height: 28px;
+    font-size: var(--font-size-sm);
 }
 
 .overview-controls .auto-refresh {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    margin-right: 12px;
+    margin-right: 8px;
 }
 
 .overview-controls .last-updated {
@@ -4146,7 +4148,8 @@ input[type="range"]::-moz-range-thumb:hover {
 .overview-controls .controls-right {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
+    flex-wrap: nowrap;
 }
 
 .overview-controls input[type="checkbox"] {
