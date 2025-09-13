@@ -4069,6 +4069,142 @@ input[type="range"]::-moz-range-thumb:hover {
     display: none !important;
 }
 
+/* Overview controls */
+.overview-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+/* Overview table */
+.overview-table .table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--card-background);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.overview-table thead th {
+    text-align: left;
+    padding: 12px 16px;
+    background: var(--surface-color);
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: var(--font-size-sm);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.overview-table tbody td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.overview-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.overview-table tbody tr:hover td {
+    background: var(--card-hover);
+}
+
+.overview-controls label {
+    color: var(--text-secondary);
+    font-size: var(--font-size-xs);
+    margin: 0;
+}
+
+.overview-controls select {
+    background: var(--surface-color);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 6px 10px;
+    height: 32px;
+    line-height: 32px;
+}
+
+.overview-controls .auto-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 12px;
+}
+
+.overview-controls .last-updated {
+    color: var(--text-secondary);
+    font-size: var(--font-size-xs);
+    padding-left: 12px;
+    border-left: 1px solid var(--border-color);
+}
+
+.overview-controls .controls-left,
+.overview-controls .controls-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.overview-controls input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-color);
+}
+
+/* Health tiles */
+.health-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.health-tile {
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.health-name {
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+.health-status {
+    font-weight: 600;
+}
+
+.health-ok { color: #16a34a; }
+.health-warn { color: #f59e0b; }
+.health-err { color: #ef4444; }
+
+/* Status badges */
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 9999px;
+    font-size: var(--font-size-xs);
+    border: 1px solid var(--border-color);
+}
+
+.status-completed { color: #16a34a; }
+.status-running { color: #f59e0b; }
+.status-failed { color: #ef4444; }
+
+.table-responsive { width: 100%; overflow-x: auto; }
+.table-compact { width: 100%; border-collapse: collapse; }
+.table-compact th, .table-compact td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); text-align: left; }
+.table-compact thead th { background: var(--surface-color); color: var(--text-secondary); font-weight: 600; font-size: var(--font-size-sm); }
+.table-compact tbody tr:hover td { background: var(--card-hover); }
+
 /* Minimal UI overrides (Cursor/Supabase-inspired) */
 .tab-nav-item,
 .tab-button,
