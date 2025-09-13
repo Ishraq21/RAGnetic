@@ -99,6 +99,7 @@ class Dashboard {
     }
 
     async loadOverviewData() {
+        console.log('🔄 Starting to load overview data...');
         try {
             await Promise.all([
                 this.loadAgents(),
@@ -110,10 +111,23 @@ class Dashboard {
             ]);
             this.updateStats();
             this.updateLastUpdated();
+            console.log('✅ Overview data loaded successfully');
         } catch (error) {
-            console.error('Failed to load overview data:', error);
+            console.error('❌ Failed to load overview data:', error);
             this.showToast('Failed to load dashboard data', 'error');
+            // Ensure loading states are cleared even on error
+            this.clearLoadingStates();
         }
+    }
+
+    clearLoadingStates() {
+        // Clear any remaining loading states
+        const loadingStates = document.querySelectorAll('.loading-state');
+        loadingStates.forEach(state => {
+            if (state.parentElement && state.parentElement.id === 'recent-agent-activity') {
+                state.parentElement.innerHTML = '<p class="text-muted">Failed to load recent activity</p>';
+            }
+        });
     }
 
     initOverviewControls() {
@@ -653,10 +667,15 @@ class Dashboard {
 
 
     renderRecentAgentActivity(runs) {
+        console.log('🎯 Rendering recent agent activity with', runs?.length || 0, 'runs');
         const container = document.getElementById('recent-agent-activity');
-        if (!container) return;
+        if (!container) {
+            console.warn('❌ Recent activity container not found!');
+            return;
+        }
 
         if (!runs || runs.length === 0) {
+            console.log('📭 No recent activity to display');
             container.innerHTML = '<p class="text-muted">No recent activity</p>';
             return;
         }
@@ -690,6 +709,7 @@ class Dashboard {
                 </table>
             </div>
         `;
+        console.log('✅ Recent activity rendered successfully');
     }
 
     async inspectRun(runId) {
@@ -810,9 +830,8 @@ class Dashboard {
                 console.error('FineTunedModelsManager not found!');
             }
         } else if (view === 'overview') {
+            // Load overview data immediately when switching to overview
             this.loadOverviewData();
-            // Check for updates when returning to overview
-            setTimeout(() => this.checkForUpdates(), 100);
         }
     }
 
