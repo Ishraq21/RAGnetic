@@ -273,7 +273,7 @@ async function loadBenchmarksData() {
             // API returns either { benchmarks: [...] } or raw array
             const list = Array.isArray(body) ? body : (body && body.benchmarks) ? body.benchmarks : [];
 
-            // Ensure every item has a run_id; fallback to derive from filename
+            // Ensure every item has a run_id and status; fallback to derive from filename
             const normalized = list.map(item => {
                 if (!item.run_id && item.filename) {
                     const nameWithoutExt = item.filename.replace('.csv', '');
@@ -285,6 +285,10 @@ async function loadBenchmarksData() {
                         }
                         item.run_id = rid;
                     }
+                }
+                // Ensure status is set - CSV files exist only when benchmarks are completed
+                if (!item.status) {
+                    item.status = 'completed';
                 }
                 return item;
             });
@@ -1109,10 +1113,10 @@ function downloadBenchmarkResults() {
  */
 function getStatusClass(status) {
     switch (status) {
-        case 'COMPLETED': return 'status-completed';
-        case 'RUNNING': return 'status-running';
-        case 'FAILED': return 'status-failed';
-        case 'ABORTED': return 'status-aborted';
+        case 'completed': return 'status-completed';
+        case 'running': return 'status-running';
+        case 'failed': return 'status-failed';
+        case 'cancelled': return 'status-aborted';
         default: return 'status-unknown';
     }
 }
@@ -1122,10 +1126,10 @@ function getStatusClass(status) {
  */
 function getStatusText(status) {
     switch (status) {
-        case 'COMPLETED': return 'Completed';
-        case 'RUNNING': return 'Running';
-        case 'FAILED': return 'Failed';
-        case 'ABORTED': return 'Aborted';
+        case 'completed': return 'Completed';
+        case 'running': return 'Running';
+        case 'failed': return 'Failed';
+        case 'cancelled': return 'Cancelled';
         default: return 'Unknown';
     }
 }

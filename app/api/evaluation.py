@@ -274,7 +274,8 @@ async def list_benchmarks(
                         "run_id": run_id,
                         "file_path": file_path,
                         "created_at": datetime.fromtimestamp(file_stat.st_ctime).isoformat(),
-                        "size_bytes": file_stat.st_size
+                        "size_bytes": file_stat.st_size,
+                        "status": "completed"  # CSV files exist only when benchmark is completed
                     })
         
         # Sort by creation time, newest first
