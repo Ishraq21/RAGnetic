@@ -1,6 +1,7 @@
 # app/api/documents.py
 
 import logging
+import os
 from typing import Dict, Any
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
@@ -25,13 +26,13 @@ def _get_default_agent_config():
         else:
             # Create minimal config if no agents exist
             class DefaultConfig:
-                embedding_model = "text-embedding-3-small"
+                embedding_model = os.getenv("RAGNETIC_EMBEDDING_MODEL", "text-embedding-3-small")
             return DefaultConfig()
     except Exception as e:
         logger.warning(f"Could not get default agent config: {e}")
         # Fallback minimal config
         class DefaultConfig:
-            embedding_model = "text-embedding-3-small"
+            embedding_model = os.getenv("RAGNETIC_EMBEDDING_MODEL", "text-embedding-3-small")
         return DefaultConfig()
 
 
