@@ -22,6 +22,7 @@
     --font-size-2xl: 1.5rem;
     --font-size-3xl: 1.875rem;
     --font-size-4xl: 2.25rem;
+    --top-nav-height: 24px;
     
     /* Dashboard-compatible variables for logout button */
     --text-primary: #ffffff;
@@ -132,7 +133,7 @@ body.login-body {
     font-size: var(--font-size-lg);
     font-weight: 600;
     cursor: pointer;
-    transition: background-color 0.2s, transform: 0.2s;
+    transition: background-color 0.2s, transform 0.2s;
 }
 
 #login-form button:hover {
@@ -143,8 +144,8 @@ body.login-body {
 /* === SIDEBAR === */
 #chat-history-sidebar {
     position: sticky;
-    top: 0;
-    height: 100vh;
+    top: 0; /* Start from very top since no visual top bar */
+    height: 100vh; /* Full viewport height */
     background: rgba(0, 0, 0, 0.95);
     backdrop-filter: blur(24px);
     padding: 2.5rem 0.75rem 1.5rem;
@@ -367,8 +368,162 @@ body.login-body {
     background: radial-gradient(ellipse at top, rgba(139, 92, 246, 0.05) 0%, transparent 50%), 
                 radial-gradient(ellipse at bottom, rgba(168, 85, 247, 0.03) 0%, transparent 50%);
     border-radius: 16px;
-    margin: 2rem auto;
+    margin: 2rem auto 2rem auto; /* Add top margin for spacing from nav buttons */
+    margin-top: 3rem; /* Extra top margin to clear the floating nav buttons */
 }
+
+/* Collapsed sidebar mode */
+body.sidebar-collapsed {
+    grid-template-columns: 0 1fr;
+}
+
+body.sidebar-collapsed #chat-history-sidebar {
+    width: 0;
+    padding: 0;
+    border-right: none;
+    overflow: hidden;
+}
+
+/* === TOP NAV === */
+#top-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 0; /* remove visual top bar height */
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0; /* no internal padding since bar is removed */
+    background: transparent; /* remove background */
+    backdrop-filter: none; /* remove blur */
+    border-bottom: none; /* remove divider */
+    z-index: 1500;
+}
+
+#top-nav .brand {
+    display: none; /* hide brand/wordmark to remove top bar visuals */
+}
+
+#top-nav .brand .logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: linear-gradient(135deg, var(--accent-color), rgba(99,93,255,0.35));
+    box-shadow: 0 0 12px rgba(99,93,255,0.35);
+}
+
+#top-nav .brand .wordmark {
+    font-size: var(--font-size-lg);
+}
+
+#top-nav .controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    position: fixed; /* float buttons at the top-right */
+    top: 8px;
+    right: 16px;
+}
+
+.status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #777;
+    box-shadow: 0 0 0 0 rgba(0,0,0,0);
+}
+
+.status-connecting .status-dot { background: #f59e0b; }
+.status-connected .status-dot { background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,0.6); }
+.status-disconnected .status-dot { background: #ef4444; }
+
+.palette-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.04);
+    color: var(--text-color);
+}
+
+.kbd-hint {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: var(--font-size-xs);
+    color: var(--muted-text);
+    border: 1px solid var(--border-color);
+    background: rgba(0,0,0,0.35);
+    padding: 2px 6px;
+    border-radius: 6px;
+}
+
+/* === COMMAND PALETTE === */
+#cmd-palette-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 12vh;
+    z-index: 2000;
+}
+
+#cmd-palette-overlay.open { display: flex; }
+
+#cmd-palette {
+    width: min(720px, 92vw);
+    background: var(--card-background);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: 0 15px 45px rgba(0,0,0,0.5), var(--futuristic-glow);
+}
+
+#cmd-palette .search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+#cmd-palette .search input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-color);
+    font-size: var(--font-size-lg);
+}
+
+#cmd-list { max-height: 50vh; overflow-y: auto; padding: 8px 0; }
+
+.cmd-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    cursor: pointer;
+}
+
+.cmd-item:hover, .cmd-item.active { background: rgba(139, 92, 246, 0.10); }
+
+.cmd-item .cmd-title { flex: 1; }
+.cmd-item .cmd-desc { color: var(--muted-text); font-size: var(--font-size-sm); }
 
 .sidebar-dashboard-btn {
     width: 100%;
@@ -630,6 +785,17 @@ body.login-body {
     box-shadow: var(--futuristic-glow);
 }
 
+/* Drag & Drop visual state */
+#input-form.drag-over {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 2px rgba(99, 93, 255, 0.25), var(--futuristic-glow);
+}
+
+#quickUploadFileList.drag-over {
+    border-color: var(--accent-color);
+    box-shadow: inset 0 0 10px rgba(99, 93, 255, 0.15);
+}
+
 /* New: Style for Quick Upload button within the input form */
 #quickUploadBtn {
     background: transparent; /* Match input-form background */
@@ -678,7 +844,7 @@ body.login-body {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.2s, transform: 0.2s;
+    transition: background-color 0.2s, transform 0.2s;
 }
 
 #send-stop-btn:hover {
@@ -1206,6 +1372,7 @@ body.login-body {
 body:not(.login-body) {
     grid-template-columns: 280px 1fr;
     display: grid; /* Revert to grid for chat layout */
+    padding-top: 0; /* Remove padding to prevent scroll issues */
 }
 
 

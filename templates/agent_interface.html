@@ -25,6 +25,47 @@
     <script src="{{ url_for('static', path='js/citation_renderer.js') }}" defer></script>
 </head>
 <body>
+    <nav id="top-nav">
+        <div class="brand">
+            <div class="logo" aria-hidden="true"></div>
+            <div class="wordmark">RAG<span style="color: var(--accent-color)">netic</span></div>
+        </div>
+        <div class="controls">
+            <button id="sidebar-toggle" class="palette-btn" title="Toggle sidebar" aria-label="Toggle sidebar">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h18M3 12h18M3 19h18"/></svg>
+            </button>
+            <div id="ws-status" class="status-chip status-connecting" aria-live="polite">
+                <span class="status-dot"></span>
+                <span id="ws-status-text">Connecting</span>
+            </div>
+            <button id="open-palette" class="palette-btn" title="Command palette" aria-label="Command palette">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9 12h6"/></svg>
+                <span class="kbd-hint">⌘K</span>
+            </button>
+        </div>
+    </nav>
+    <div id="cmd-palette-overlay" role="dialog" aria-modal="true" aria-labelledby="cmd-title">
+        <div id="cmd-palette">
+            <div class="search">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>
+                <input id="cmd-input" type="text" placeholder="Type a command or search…" autocomplete="off" />
+            </div>
+            <div id="cmd-list" role="listbox" aria-label="Commands">
+                <div class="cmd-item" role="option" data-action="new-chat">
+                    <div class="cmd-title">New Chat</div>
+                    <div class="cmd-desc">Start a new conversation</div>
+                </div>
+                <div class="cmd-item" role="option" data-action="go-dashboard">
+                    <div class="cmd-title">Open Dashboard</div>
+                    <div class="cmd-desc">View metrics and activity</div>
+                </div>
+                <div class="cmd-item" role="option" data-action="toggle-sidebar">
+                    <div class="cmd-title">Toggle Sidebar</div>
+                    <div class="cmd-desc">Show or hide history</div>
+                </div>
+            </div>
+        </div>
+    </div>
     <div id="toast-notification"></div>
     <div id="confirmation-modal">
         <div class="modal-content">
@@ -123,6 +164,12 @@
     const chatContainer = document.getElementById('chat-container');
     const historyList = document.getElementById('history-list');
     const logoutBtn = document.getElementById('logout-btn');
+    const wsStatus = document.getElementById('ws-status');
+    const wsStatusText = document.getElementById('ws-status-text');
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+    const paletteOverlay = document.getElementById('cmd-palette-overlay');
+    const paletteOpenBtn = document.getElementById('open-palette');
+    const paletteInput = document.getElementById('cmd-input');
 
 
 
@@ -232,20 +279,39 @@ async function backfillCitationsForBubbles(bubbles) {
 }
 
     function openWebSocket(onOpenCallback) {
+        let retries = 0;
+        const maxRetries = 5;
+        const baseDelay = 500; // ms
         if (socket && socket.readyState !== WebSocket.CLOSED) { socket.close(1000, "Starting new session"); }
         let wsUrl = `${protocol}://${location.host}/ws`;
         if (loggedInUserToken) {
             wsUrl += `?api_key=${loggedInUserToken}`;
         }
         socket = new WebSocket(wsUrl);
-        socket.onopen = () => { sendStopButton.disabled = false; quickUploadBtn.disabled = false; if (onOpenCallback) { onOpenCallback(); } };
+        socket.onopen = () => {
+            retries = 0;
+            sendStopButton.disabled = false;
+            quickUploadBtn.disabled = false;
+            if (wsStatus) { wsStatus.className = 'status-chip status-connected'; wsStatusText.textContent = 'Connected'; }
+            if (onOpenCallback) { onOpenCallback(); }
+        };
         socket.onerror = (event) => { console.error("WebSocket error:", event); showToast("Connection error. Check console for details.", true); };
         socket.onclose = (event) => {
             sendStopButton.disabled = true;
             quickUploadBtn.disabled = true;
             if (isGenerating) setGeneratingState(false);
+            if (wsStatus) { wsStatus.className = 'status-chip status-disconnected'; wsStatusText.textContent = 'Disconnected'; }
             if (event.code === 1008) { showToast("Connection rejected: Invalid or missing API Key.", true); }
-            else if (event.code !== 1000) { showToast(`WebSocket disconnected: Code ${event.code}`, true); }
+            else if (event.code !== 1000) {
+                const delay = Math.min(3000, baseDelay * Math.pow(2, retries));
+                if (retries < maxRetries) {
+                    showToast(`Reconnecting… (${retries + 1}/${maxRetries})`, true);
+                    if (wsStatus) { wsStatus.className = 'status-chip status-connecting'; wsStatusText.textContent = 'Reconnecting…'; }
+                    setTimeout(() => { retries += 1; openWebSocket(); }, delay);
+                } else {
+                    showToast(`Unable to reconnect. Please refresh.`, true);
+                }
+            }
             else {
                 if (!loggedInUserToken || !loggedInDbUserId) {
                     window.location.href = '/login';
@@ -780,6 +846,30 @@ socket.onmessage = async (event) => {
             window.location.href = '/login';
         }
     });
+    // Sidebar toggle
+    sidebarToggle?.addEventListener('click', () => {
+        document.body.classList.toggle('sidebar-collapsed');
+    });
+    // Palette open button and keyboard shortcut
+    function openPalette() { paletteOverlay.classList.add('open'); paletteInput.value = ''; paletteInput.focus(); }
+    function closePalette() { paletteOverlay.classList.remove('open'); }
+    paletteOpenBtn?.addEventListener('click', openPalette);
+    paletteOverlay.addEventListener('click', (e) => { if (e.target === paletteOverlay) closePalette(); });
+    document.addEventListener('keydown', (e) => {
+        const metaK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k';
+        if (metaK) { e.preventDefault(); openPalette(); }
+        if (e.key === 'Escape') closePalette();
+    });
+    // Palette actions
+    document.getElementById('cmd-list').addEventListener('click', (e) => {
+        const item = e.target.closest('.cmd-item');
+        if (!item) return;
+        const action = item.dataset.action;
+        if (action === 'new-chat') { startNewSession(); }
+        if (action === 'go-dashboard') { window.location.href = '/dashboard'; }
+        if (action === 'toggle-sidebar') { document.body.classList.toggle('sidebar-collapsed'); }
+        closePalette();
+    });
     newChatButton.addEventListener('click', () => startNewSession());
     dashboardButton.addEventListener('click', () => {
         window.location.href = '/dashboard';
@@ -814,6 +904,11 @@ socket.onmessage = async (event) => {
             }
             event.target.value = '';
         });
+    }
+    // Enable drag & drop for file attachments
+    if (window.quickUploads && typeof window.quickUploads.init === 'function') {
+        // Ensure drag & drop listeners are attached after DOM ready
+        try { window.quickUploads.enableDragAndDrop?.(); } catch (e) { /* no-op */ }
     }
 </script>
 </body>
