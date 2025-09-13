@@ -527,6 +527,61 @@ class Dashboard {
         `;
     }
 
+    async inspectRun(runId) {
+        try {
+            const url = `${API_BASE_URL}/audit/runs/${encodeURIComponent(runId)}`;
+            const res = await fetch(url, { headers: { 'X-API-Key': loggedInUserToken } });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            const titleEl = document.getElementById('run-details-title');
+            const contentEl = document.getElementById('run-details-content');
+            if (titleEl) titleEl.textContent = `Run ${data.run_id} • ${data.status}`;
+            if (contentEl) {
+                const started = data.start_time ? this.formatTime(data.start_time) : '—';
+                const duration = data.duration_s ? `${Math.round(data.duration_s)}s` : '—';
+                const steps = (data.steps || []).map(step => `
+                    <tr>
+                        <td>${step.node_name}</td>
+                        <td><span class="status-badge status-${step.status}">${step.status}</span></td>
+                        <td>${step.start_time ? this.formatTime(step.start_time) : '—'}</td>
+                        <td>${step.end_time ? this.formatTime(step.end_time) : '—'}</td>
+                    </tr>
+                `).join('');
+
+                contentEl.innerHTML = `
+                    <div class="table-responsive">
+                        <table class="table table-compact">
+                            <tbody>
+                                <tr><td>Agent</td><td>${data.agent_name || '—'}</td></tr>
+                                <tr><td>Status</td><td><span class="status-badge status-${data.status}">${data.status}</span></td></tr>
+                                <tr><td>Started</td><td>${started}</td></tr>
+                                <tr><td>Duration</td><td>${duration}</td></tr>
+                                <tr><td>User</td><td>${data.user_identifier || '—'}</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="table-responsive" style="margin-top:12px;">
+                        <table class="table table-compact">
+                            <thead>
+                                <tr>
+                                    <th>Step</th>
+                                    <th>Status</th>
+                                    <th>Start</th>
+                                    <th>End</th>
+                                </tr>
+                            </thead>
+                            <tbody>${steps || ''}</tbody>
+                        </table>
+                    </div>
+                `;
+            }
+            this.showModal('run-details-modal');
+        } catch (e) {
+            console.error('Failed to load run details', e);
+            this.showToast('Failed to load run details', 'error');
+        }
+    }
+
 
     filterAgents(query) {
         const filtered = this.agents.filter(agent => 
@@ -2427,6 +2482,10 @@ function showAgentDetails(agentName) {
 
 function hideAgentDetailsModal() {
     dashboard.hideAgentDetailsModal();
+}
+
+function hideRunDetailsModal() {
+    dashboard.hideModal('run-details-modal');
 }
 
 
