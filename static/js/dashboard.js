@@ -11,6 +11,7 @@ class Dashboard {
     async init() {
         this.setupEventListeners();
         this.loadUserInfo();
+        this.initOverviewControls();
         await this.loadOverviewData();
         this.setupSearch();
     }
@@ -98,13 +99,56 @@ class Dashboard {
         try {
             await Promise.all([
                 this.loadAgents(),
-                this.loadRecentActivity()
+                this.loadRecentActivity(),
+                this.loadMetricsSummary(),
+                this.loadLatencyMetrics(),
+                this.loadUsageSummary(),
+                this.loadSystemHealth()
             ]);
             this.updateStats();
+            this.updateLastUpdated();
         } catch (error) {
             console.error('Failed to load overview data:', error);
             this.showToast('Failed to load dashboard data', 'error');
         }
+    }
+
+    initOverviewControls() {
+        this.autoRefreshInterval = null;
+        const rangeSelect = document.getElementById('overview-range');
+        const autoRefresh = document.getElementById('overview-auto-refresh');
+        if (rangeSelect) {
+            rangeSelect.addEventListener('change', () => this.reloadOverviewRange());
+        }
+        if (autoRefresh) {
+            autoRefresh.addEventListener('change', (e) => {
+                if (e.target.checked) {
+                    this.autoRefreshInterval = setInterval(() => this.loadOverviewData(), 30000);
+                } else {
+                    clearInterval(this.autoRefreshInterval);
+                    this.autoRefreshInterval = null;
+                }
+            });
+        }
+    }
+
+    updateLastUpdated() {
+        const el = document.getElementById('overview-last-updated');
+        if (el) el.textContent = new Date().toLocaleTimeString();
+    }
+
+    getRangeParams() {
+        const range = (document.getElementById('overview-range')?.value) || '24h';
+        const now = new Date();
+        let start = new Date(now);
+        if (range === '24h') start.setHours(now.getHours() - 24);
+        if (range === '7d') start.setDate(now.getDate() - 7);
+        if (range === '30d') start.setDate(now.getDate() - 30);
+        return { start: start.toISOString(), end: now.toISOString() };
+    }
+
+    async reloadOverviewRange() {
+        await this.loadOverviewData();
     }
 
     async loadAgents() {
@@ -165,11 +209,97 @@ class Dashboard {
         if (totalAgentsElement) totalAgentsElement.textContent = this.agents.length;
         
         // Calculate total runs and success rate (placeholder for now)
-        if (totalRunsElement) totalRunsElement.textContent = '0';
-        if (successRateElement) successRateElement.textContent = '0%';
+        if (totalRunsElement) totalRunsElement.textContent = String(this.metricsSummary?.total_runs ?? 0);
+        const errorRate = this.metricsSummary?.error_rate ?? 0;
+        if (successRateElement) successRateElement.textContent = `${Math.max(0, 100 - Math.round(errorRate * 100))}%`;
         
         // Load training statistics
         this.loadTrainingStats();
+    }
+
+    async loadMetricsSummary() {
+        try {
+            const response = await fetch('/api/v1/metrics/summary', {
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+            if (!response.ok) return;
+            this.metricsSummary = await response.json();
+            const reqEl = document.getElementById('requests-24h');
+            const errEl = document.getElementById('error-rate');
+            if (reqEl) reqEl.textContent = String(this.metricsSummary.total_requests || 0);
+            if (errEl) errEl.textContent = `${Math.round((this.metricsSummary.error_rate || 0) * 100)}%`;
+        } catch (e) {
+            console.warn('metrics summary failed', e);
+        }
+    }
+
+    async loadLatencyMetrics() {
+        try {
+            const response = await fetch('/api/v1/analytics/latency', {
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            const p95El = document.getElementById('p95-latency');
+            if (p95El) p95El.textContent = `${Math.round((data.p95_latency_s || 0) * 1000)}ms`;
+        } catch (e) {
+            console.warn('latency metrics failed', e);
+        }
+    }
+
+    async loadUsageSummary() {
+        try {
+            const { start, end } = this.getRangeParams();
+            const url = new URL('/api/v1/analytics/usage-summary', window.location.origin);
+            url.searchParams.set('start_time', start);
+            url.searchParams.set('end_time', end);
+            url.searchParams.set('limit', '1');
+            const response = await fetch(url.toString(), {
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+            if (!response.ok) return;
+            const rows = await response.json();
+            const totalTokens = rows.reduce((acc, r) => acc + (r.total_tokens || 0), 0);
+            const tokensEl = document.getElementById('tokens-24h');
+            const requestsEl = document.getElementById('requests-24h');
+            if (tokensEl) tokensEl.textContent = String(totalTokens);
+            if (requestsEl && rows.length) {
+                const reqs = rows.reduce((acc, r) => acc + (r.total_requests || 0), 0);
+                requestsEl.textContent = String(reqs);
+            }
+        } catch (e) {
+            console.warn('usage summary failed', e);
+        }
+    }
+
+    async loadSystemHealth() {
+        // Simple synthetic checks via lightweight endpoints
+        const checks = [
+            { id: 'health-db', url: '/api/v1/metrics/metrics' },
+            { id: 'health-queue', url: '/api/v1/audit/runs?limit=1' },
+            { id: 'health-vector', url: '/api/v1/analytics/usage-summary?limit=1' },
+            { id: 'health-storage', url: '/api/v1/analytics/benchmarks?latest=true' }
+        ];
+        await Promise.all(checks.map(async (c) => {
+            const el = document.getElementById(c.id);
+            if (!el) return;
+            try {
+                const res = await fetch(c.url, { headers: { 'X-API-Key': loggedInUserToken } });
+                if (res.ok) {
+                    el.textContent = 'OK';
+                    el.classList.remove('health-warn','health-err');
+                    el.classList.add('health-ok');
+                } else {
+                    el.textContent = 'Warn';
+                    el.classList.remove('health-ok','health-err');
+                    el.classList.add('health-warn');
+                }
+            } catch (_) {
+                el.textContent = 'Down';
+                el.classList.remove('health-ok','health-warn');
+                el.classList.add('health-err');
+            }
+        }));
     }
 
     async loadTrainingStats() {
@@ -367,17 +497,34 @@ class Dashboard {
             return;
         }
 
-        container.innerHTML = runs.map(run => `
-            <div class="activity-item">
-                <div class="activity-icon ${run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'warning'}">
-                    ${run.status === 'completed' ? '' : run.status === 'failed' ? '' : '⋯'}
-                </div>
-                <div class="activity-content">
-                    <div class="activity-title">${run.agent_name || 'Unknown Agent'}</div>
-                    <div class="activity-meta">${run.status} • ${this.formatTime(run.start_time)}</div>
-                </div>
-            </div>
+        const rows = runs.map(run => `
+            <tr>
+                <td>${run.agent_name || 'Unknown Agent'}</td>
+                <td><span class="status-badge status-${run.status}">${run.status}</span></td>
+                <td>${this.formatTime(run.start_time)}</td>
+                <td>
+                    <button class="btn-text" onclick="dashboard.inspectRun('${run.run_id}')">Details</button>
+                </td>
+            </tr>
         `).join('');
+
+        container.innerHTML = `
+            <div class="table-responsive">
+                <table class="table table-compact">
+                    <thead>
+                        <tr>
+                            <th>Agent</th>
+                            <th>Status</th>
+                            <th>Started</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            </div>
+        `;
     }
 
 

@@ -115,67 +115,96 @@
             <!-- Overview View -->
             <div class="view-content active" id="overview-view">
             
+            <div class="overview-controls">
+                <div class="controls-left">
+                    <label for="overview-range">Range</label>
+                    <select id="overview-range">
+                        <option value="24h" selected>Last 24h</option>
+                        <option value="7d">Last 7d</option>
+                        <option value="30d">Last 30d</option>
+                    </select>
+                </div>
+                <div class="controls-right">
+                    <label class="auto-refresh">
+                        <input type="checkbox" id="overview-auto-refresh">
+                        Auto-refresh
+                    </label>
+                    <span class="last-updated">Last updated: <span id="overview-last-updated">—</span></span>
+                </div>
+            </div>
+
             <div class="stats-grid">
                 <div class="list-header">System Overview</div>
-                <div class="stat-card">
-                    <div class="stat-icon">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                            <circle cx="9" cy="7" r="4"></circle>
-                            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                        </svg>
-                    </div>
-                    <div class="stat-content">
-                        <h3 id="total-agents">0</h3>
-                        <p>Active Agents</p>
-                    </div>
-                </div>
-                
-                
-                <div class="stat-card">
-                    <div class="stat-icon">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="18" y1="20" x2="18" y2="10"></line>
-                            <line x1="12" y1="20" x2="12" y2="4"></line>
-                            <line x1="6" y1="20" x2="6" y2="14"></line>
-                        </svg>
-                    </div>
-                    <div class="stat-content">
-                        <h3 id="total-runs">0</h3>
-                        <p>Total Runs</p>
-                    </div>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-icon">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
-                            <path d="M2 17L12 22L22 17"></path>
-                            <path d="M2 12L12 17L22 12"></path>
-                        </svg>
-                    </div>
-                    <div class="stat-content">
-                        <h3 id="total-training-jobs">0</h3>
-                        <p>Training Jobs</p>
-                    </div>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-icon">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <polyline points="12,6 12,12 16,14"></polyline>
-                        </svg>
-                    </div>
-                    <div class="stat-content">
-                        <h3 id="success-rate">0%</h3>
-                        <p>Success Rate</p>
-                    </div>
+                <div class="overview-table">
+                    <table class="table table-compact">
+                        <thead>
+                            <tr>
+                                <th>Metric</th>
+                                <th>Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Active Agents</td>
+                                <td id="total-agents">0</td>
+                            </tr>
+                            <tr>
+                                <td>Total Runs</td>
+                                <td id="total-runs">0</td>
+                            </tr>
+                            <tr>
+                                <td>Training Jobs</td>
+                                <td id="total-training-jobs">0</td>
+                            </tr>
+                            <tr>
+                                <td>Success Rate</td>
+                                <td id="success-rate">0%</td>
+                            </tr>
+                            <tr>
+                                <td>Requests (Range)</td>
+                                <td id="requests-24h">0</td>
+                            </tr>
+                            <tr>
+                                <td>p95 Latency</td>
+                                <td id="p95-latency">0ms</td>
+                            </tr>
+                            <tr>
+                                <td>Error Rate (Range)</td>
+                                <td id="error-rate">0%</td>
+                            </tr>
+                            <tr>
+                                <td>Tokens (Range)</td>
+                                <td id="tokens-24h">0</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
             
             <div class="overview-sections">
+                <div class="section-card">
+                    <div class="section-header">
+                        <h3>System Health</h3>
+                    </div>
+                    <div class="health-grid">
+                        <div class="health-tile">
+                            <div class="health-name">Database</div>
+                            <div class="health-status" id="health-db">—</div>
+                        </div>
+                        <div class="health-tile">
+                            <div class="health-name">Queue</div>
+                            <div class="health-status" id="health-queue">—</div>
+                        </div>
+                        <div class="health-tile">
+                            <div class="health-name">Vector Store</div>
+                            <div class="health-status" id="health-vector">—</div>
+                        </div>
+                        <div class="health-tile">
+                            <div class="health-name">Storage</div>
+                            <div class="health-status" id="health-storage">—</div>
+                        </div>
+                    </div>
+                </div>
                 <div class="section-card">
                     <div class="section-header">
                         <h3>Recent Agent Activity</h3>
