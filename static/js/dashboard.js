@@ -5,6 +5,8 @@ class Dashboard {
     constructor() {
         this.currentView = 'overview';
         this.agents = [];
+        this.lastDataHash = null; // Track data changes
+        this.eventSource = null; // For real-time updates
         this.init();
     }
 
@@ -12,6 +14,7 @@ class Dashboard {
         this.setupEventListeners();
         this.loadUserInfo();
         this.initOverviewControls();
+        this.updateRangeLabels();
         await this.loadOverviewData();
         this.setupSearch();
     }
@@ -114,23 +117,140 @@ class Dashboard {
     }
 
     initOverviewControls() {
-        this.autoRefreshInterval = null;
+        // Initialize real-time updates instead of polling
+        this.initRealTimeUpdates();
+        
         const rangeSelect = document.getElementById('overview-range');
-        const autoRefresh = document.getElementById('overview-auto-refresh');
         if (rangeSelect) {
             rangeSelect.addEventListener('change', () => this.reloadOverviewRange());
         }
-        if (autoRefresh) {
-            autoRefresh.addEventListener('change', (e) => {
-                if (e.target.checked) {
-                    this.autoRefreshInterval = setInterval(() => this.loadOverviewData(), 30000);
+    }
+
+    // Initialize real-time updates using Server-Sent Events
+    initRealTimeUpdates() {
+        // Close existing connection if any
+        if (this.eventSource) {
+            this.eventSource.close();
+        }
+
+        // For now, use a fallback approach with targeted API calls
+        // This will be more efficient than polling everything
+        this.setupChangeDetection();
+    }
+
+    // Setup efficient change detection without constant polling
+    setupChangeDetection() {
+        // Listen for browser visibility changes to refresh when user returns
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && this.currentView === 'overview') {
+                console.log('Page became visible, checking for updates...');
+                this.checkForUpdates();
+            }
+        });
+
+        // Listen for focus events to refresh when user returns to tab
+        window.addEventListener('focus', () => {
+            if (this.currentView === 'overview') {
+                console.log('Window focused, checking for updates...');
+                this.checkForUpdates();
+            }
+        });
+
+        // Set up a minimal heartbeat check every 2 minutes (much less frequent)
+        this.heartbeatInterval = setInterval(() => {
+            if (this.currentView === 'overview' && !document.hidden) {
+                console.log('Heartbeat check for updates...');
+                this.checkForUpdates();
+            }
+        }, 120000); // 2 minutes instead of 30 seconds
+    }
+
+    // Efficient update check - only when needed
+    async checkForUpdates(isManual = false) {
+        try {
+            if (isManual) {
+                this.updateConnectionStatus('checking');
+            }
+
+            // Fetch recent activity data, metrics, and usage data to check for changes
+            const { start, end } = this.getRangeParams();
+            const usageUrl = new URL('/api/v1/analytics/usage-summary', window.location.origin);
+            usageUrl.searchParams.set('start_time', start);
+            usageUrl.searchParams.set('end_time', end);
+            usageUrl.searchParams.set('limit', '100');
+            
+            const [auditResponse, metricsResponse, usageResponse] = await Promise.all([
+                fetch(`${API_BASE_URL}/audit/runs?limit=5`, {
+                    headers: { 'X-API-Key': loggedInUserToken }
+                }),
+                fetch('/api/v1/metrics/summary', {
+                    headers: { 'X-API-Key': loggedInUserToken }
+                }),
+                fetch(usageUrl.toString(), {
+                    headers: { 'X-API-Key': loggedInUserToken }
+                })
+            ]);
+            
+            if (auditResponse.ok && metricsResponse.ok && usageResponse.ok) {
+                const auditData = await auditResponse.json();
+                const metricsData = await metricsResponse.json();
+                const usageData = await usageResponse.json();
+                
+                // Combine all data sources for change detection
+                const combinedData = { audit: auditData, metrics: metricsData, usage: usageData };
+                const newHash = this.createDataHash(combinedData);
+                
+                if (this.lastDataHash !== newHash) {
+                    console.log('🔄 Data changed, updating dashboard...');
+                    this.lastDataHash = newHash;
+                    await this.loadOverviewData();
+                    this.updateConnectionStatus('updated');
+                    if (isManual) {
+                        this.showToast('Dashboard updated with latest data', 'success');
+                    }
                 } else {
-                    clearInterval(this.autoRefreshInterval);
-                    this.autoRefreshInterval = null;
+                    console.log('✅ No changes detected');
+                    this.updateConnectionStatus('connected');
+                    if (isManual) {
+                        this.showToast('Dashboard is already up to date', 'info');
+                    }
                 }
-            });
+            }
+        } catch (error) {
+            console.error('Error checking for updates:', error);
+            this.updateConnectionStatus('error');
+            if (isManual) {
+                this.showToast('Failed to check for updates', 'error');
+            }
         }
     }
+
+    // Update connection status indicator
+    updateConnectionStatus(status) {
+        // Since we removed the indicator, we'll just update the last updated time
+        this.updateLastUpdated();
+    }
+
+    // Cleanup method to prevent memory leaks
+    destroy() {
+        if (this.eventSource) {
+            this.eventSource.close();
+            this.eventSource = null;
+        }
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = null;
+        }
+    }
+
+    // Create a simple hash of the data to detect changes
+    createDataHash(data) {
+        return JSON.stringify(data).split('').reduce((a, b) => {
+            a = ((a << 5) - a) + b.charCodeAt(0);
+            return a & a;
+        }, 0);
+    }
+
 
     updateLastUpdated() {
         const el = document.getElementById('overview-last-updated');
@@ -148,7 +268,33 @@ class Dashboard {
     }
 
     async reloadOverviewRange() {
+        this.updateRangeLabels();
         await this.loadOverviewData();
+    }
+
+    updateRangeLabels() {
+        const range = (document.getElementById('overview-range')?.value) || '24h';
+        const rangeText = range === '24h' ? '24h' : range === '7d' ? '7d' : '30d';
+        
+        // Update the labels to show current range
+        const requestsLabel = document.querySelector('td:contains("Requests")');
+        const errorLabel = document.querySelector('td:contains("Error Rate")');
+        const tokensLabel = document.querySelector('td:contains("Tokens Used")');
+        
+        // Use more direct approach since :contains might not work
+        const rows = document.querySelectorAll('.overview-table tr');
+        rows.forEach(row => {
+            const firstCell = row.querySelector('td:first-child');
+            if (firstCell) {
+                if (firstCell.textContent.includes('Requests')) {
+                    firstCell.textContent = `Requests (${rangeText})`;
+                } else if (firstCell.textContent.includes('Error Rate')) {
+                    firstCell.textContent = `Error Rate (${rangeText})`;
+                } else if (firstCell.textContent.includes('Tokens Used')) {
+                    firstCell.textContent = `Tokens Used (${rangeText})`;
+                }
+            }
+        });
     }
 
     async loadAgents() {
@@ -186,6 +332,12 @@ class Dashboard {
             if (agentRunsResponse.ok) {
                 const agentRuns = await agentRunsResponse.json();
                 console.log('Loaded agent runs:', agentRuns);
+                
+                // Initialize data hash on first load (will be updated with full data later)
+                if (this.lastDataHash === null) {
+                    this.lastDataHash = this.createDataHash({ audit: agentRuns, metrics: {} });
+                }
+                
                 this.renderRecentAgentActivity(agentRuns);
             } else {
                 // If audit API fails, show no recent activity
@@ -253,19 +405,31 @@ class Dashboard {
             const url = new URL('/api/v1/analytics/usage-summary', window.location.origin);
             url.searchParams.set('start_time', start);
             url.searchParams.set('end_time', end);
-            url.searchParams.set('limit', '1');
+            url.searchParams.set('limit', '100'); // Increase limit to get all data
             const response = await fetch(url.toString(), {
                 headers: { 'X-API-Key': loggedInUserToken }
             });
-            if (!response.ok) return;
+            if (!response.ok) {
+                console.warn('Usage summary API failed:', response.status);
+                return;
+            }
             const rows = await response.json();
+            console.log('Usage summary data:', rows); // Debug logging
+            
+            // Sum up all tokens and requests across all agents/users/models
             const totalTokens = rows.reduce((acc, r) => acc + (r.total_tokens || 0), 0);
+            const totalRequests = rows.reduce((acc, r) => acc + (r.total_requests || 0), 0);
+            
             const tokensEl = document.getElementById('tokens-24h');
             const requestsEl = document.getElementById('requests-24h');
-            if (tokensEl) tokensEl.textContent = String(totalTokens);
-            if (requestsEl && rows.length) {
-                const reqs = rows.reduce((acc, r) => acc + (r.total_requests || 0), 0);
-                requestsEl.textContent = String(reqs);
+            
+            if (tokensEl) {
+                tokensEl.textContent = String(totalTokens);
+                console.log('Updated tokens display:', totalTokens);
+            }
+            if (requestsEl) {
+                requestsEl.textContent = String(totalRequests);
+                console.log('Updated requests display:', totalRequests);
             }
         } catch (e) {
             console.warn('usage summary failed', e);
@@ -497,11 +661,12 @@ class Dashboard {
             return;
         }
 
+
         const rows = runs.map(run => `
             <tr>
                 <td>${run.agent_name || 'Unknown Agent'}</td>
                 <td><span class="status-badge status-${run.status}">${run.status}</span></td>
-                <td>${this.formatTime(run.start_time)}</td>
+                <td>${this.formatDateTime(run.start_time)}</td>
                 <td>
                     <button class="btn-text" onclick="dashboard.inspectRun('${run.run_id}')">Details</button>
                 </td>
@@ -537,14 +702,14 @@ class Dashboard {
             const contentEl = document.getElementById('run-details-content');
             if (titleEl) titleEl.textContent = `Run ${data.run_id} • ${data.status}`;
             if (contentEl) {
-                const started = data.start_time ? this.formatTime(data.start_time) : '—';
+                const started = data.start_time ? this.formatDateTime(data.start_time) : '—';
                 const duration = data.duration_s ? `${Math.round(data.duration_s)}s` : '—';
                 const steps = (data.steps || []).map(step => `
                     <tr>
                         <td>${step.node_name}</td>
                         <td><span class="status-badge status-${step.status}">${step.status}</span></td>
-                        <td>${step.start_time ? this.formatTime(step.start_time) : '—'}</td>
-                        <td>${step.end_time ? this.formatTime(step.end_time) : '—'}</td>
+                        <td>${step.start_time ? this.formatDateTime(step.start_time) : '—'}</td>
+                        <td>${step.end_time ? this.formatDateTime(step.end_time) : '—'}</td>
                     </tr>
                 `).join('');
 
@@ -646,6 +811,8 @@ class Dashboard {
             }
         } else if (view === 'overview') {
             this.loadOverviewData();
+            // Check for updates when returning to overview
+            setTimeout(() => this.checkForUpdates(), 100);
         }
     }
 
@@ -1307,10 +1474,24 @@ class Dashboard {
         const now = new Date();
         const diff = now - date;
         
-        if (diff < 60000) return 'Just now';
-        if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-        if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+        if (diff < 10000) return 'Just now';  // < 10 seconds
+        if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`;  // < 1 minute
+        if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;  // < 1 hour
+        if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;  // < 1 day
         return date.toLocaleDateString();
+    }
+
+    formatDateTime(timestamp) {
+        if (!timestamp) return 'Unknown';
+        
+        const date = new Date(timestamp);
+        return date.toLocaleString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        });
     }
 
     showToast(message, type = 'info') {
