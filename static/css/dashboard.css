@@ -4068,3 +4068,160 @@ input[type="range"]::-moz-range-thumb:hover {
 .hidden {
     display: none !important;
 }
+
+/* Minimal UI overrides (Cursor/Supabase-inspired) */
+.tab-nav-item,
+.tab-button,
+.btn-primary,
+.btn-secondary,
+.btn-text,
+.sub-tab-button {
+    border-radius: 10px;
+}
+
+/* Neutralize purple gradients and heavy glows */
+:root {
+    --accent-color: #5141d4; /* RAGnetic accent */
+    --accent-hover: #4036c9;
+    --accent-glow: rgba(81, 65, 212, 0.12);
+    --gradient-primary: linear-gradient(0deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0) 100%);
+}
+
+/* Body background: remove radial purple hues */
+body {
+    background: var(--background-color);
+}
+
+/* Buttons: flat, minimal, retain spacing and layout */
+.btn-primary {
+    background: var(--surface-color) !important;
+    border: 1px solid var(--border-color) !important;
+    color: var(--text-primary) !important;
+    box-shadow: none !important;
+}
+
+.btn-primary:hover {
+    background: var(--card-hover) !important;
+    border-color: var(--border-hover) !important;
+    transform: none !important;
+}
+
+.btn-secondary {
+    background: transparent !important;
+    border: 1px solid var(--border-color) !important;
+    color: var(--text-primary) !important;
+    box-shadow: none !important;
+}
+
+.btn-secondary:hover {
+    background: var(--card-hover) !important;
+    border-color: var(--border-hover) !important;
+}
+
+.btn-text {
+    background: transparent !important;
+    color: var(--text-secondary) !important;
+}
+
+.btn-text:hover {
+    background: var(--card-hover) !important;
+    color: var(--text-primary) !important;
+}
+
+/* Evaluation header CTA should be minimal too */
+.evaluation-header .header-actions .btn-primary {
+    background: transparent !important;
+    border: 1px solid rgba(255,255,255,0.15) !important;
+    color: #fff !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+}
+
+.evaluation-header .header-actions .btn-primary:hover {
+    background: rgba(255,255,255,0.06) !important;
+    border-color: rgba(255,255,255,0.25) !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+/* Top tab navigation: flat underline active state */
+.tab-nav-item {
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    color: var(--text-secondary) !important;
+}
+
+.tab-nav-item:hover {
+    background: transparent !important;
+    color: var(--text-primary) !important;
+}
+
+.tab-nav-item.active {
+    background: transparent !important;
+    border-bottom-color: var(--accent-color) !important;
+    box-shadow: none !important;
+}
+
+.tab-nav-item.active::before { display: none !important; }
+.tab-nav-item.active svg { stroke: var(--text-primary) !important; }
+
+/* Modern tab buttons (evaluation tabs) */
+.evaluation-tabs {
+    background: transparent !important;
+    border: 1px solid var(--border-color) !important;
+    box-shadow: none !important;
+}
+
+.evaluation-tabs::before { display: none !important; }
+
+.tab-button {
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    color: var(--text-secondary) !important;
+    box-shadow: none !important;
+}
+
+.tab-button:hover {
+    background: var(--card-hover) !important;
+    color: var(--text-primary) !important;
+    transform: none !important;
+}
+
+.tab-button.active {
+    background: var(--surface-color) !important;
+    border-color: var(--border-color) !important;
+    color: var(--text-primary) !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+.tab-button.active:hover {
+    background: var(--card-hover) !important;
+}
+
+/* Sub-tabs */
+.sub-tab-button {
+    background: transparent !important;
+    border: 1px solid var(--border-color) !important;
+    color: var(--text-secondary) !important;
+}
+
+.sub-tab-button:hover {
+    background: var(--card-hover) !important;
+    color: var(--text-primary) !important;
+}
+
+.sub-tab-button.active {
+    background: var(--surface-color) !important;
+    border-color: var(--border-hover) !important;
+    color: var(--text-primary) !important;
+}
+
+/* Soften purple-tinted hovers elsewhere */
+.nav-actions .btn-text:hover,
+.nav-actions .sidebar-logout-btn:hover,
+.btn-text:hover,
+.tab-button:hover {
+    background: var(--card-hover) !important;
+}
