@@ -20,8 +20,9 @@
             window.location.href = '/login';
         }
     </script>
-    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20241229" defer></script>
+    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20241236" defer></script>
     <script src="{{ url_for('static', path='js/training.js') }}?v=20241228" defer></script>
+    <script src="{{ url_for('static', path='js/evaluation.js') }}?v=20241234" defer></script>
 </head>
 <body>
     <div id="toast-notification"></div>
@@ -97,6 +98,16 @@
                     <line x1="6" y1="20" x2="6" y2="14"></line>
                 </svg>
                 Analytics
+            </button>
+            <button class="tab-nav-item" data-view="evaluation">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 12l2 2 4-4"></path>
+                    <path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path>
+                    <path d="M3 12c1 0 3-1 3-3s-2-3-3-3-3 1-3 3 2 3 3 3"></path>
+                    <path d="M12 3c0 1-1 3-3 3s-3-2-3-3 1-3 3-3 3 2 3 3"></path>
+                    <path d="M12 21c0-1 1-3 3-3s3 2 3 3-1 3-3 3-3-2-3-3"></path>
+                </svg>
+                Evaluation
             </button>
         </div>
 
@@ -252,6 +263,87 @@
                     <p>Chart coming soon</p>
                 </div>
                 
+            </div>
+        </div>
+
+        <!-- Evaluation View -->
+        <div class="view-content" id="evaluation-view">
+            <div class="evaluation-grid">
+                <div class="list-header">Evaluation & Benchmarking</div>
+                
+                <!-- Evaluation Sub-tabs -->
+                <div class="evaluation-sub-tabs">
+                    <button class="sub-tab-button active" data-sub-tab="testing">Testing</button>
+                    <button class="sub-tab-button" data-sub-tab="benchmarking">Benchmarking</button>
+                </div>
+
+                <!-- Testing Sub-tab -->
+                <div class="sub-tab-content active" id="testing-tab">
+                    <div class="testing-section">
+                        <div class="section-header">
+                            <h3>Test Sets</h3>
+                            <div class="section-actions">
+                                <button class="btn-primary" onclick="showCreateTestSetModal()">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M12 5v14M5 12h14"></path>
+                                    </svg>
+                                    Create Test Set
+                                </button>
+                                <button class="btn-text" onclick="refreshTestSets()">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+                                        <path d="M21 3v5h-5"></path>
+                                        <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+                                        <path d="M3 21v-5h5"></path>
+                                    </svg>
+                                    Refresh
+                                </button>
+                            </div>
+                        </div>
+                        <div class="test-sets-list" id="test-sets-list">
+                            <div class="loading-state">
+                                <div class="loading-spinner"></div>
+                                <p>Loading test sets...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Benchmarking Sub-tab -->
+                <div class="sub-tab-content" id="benchmarking-tab">
+                    <div class="benchmarking-section">
+                        <div class="section-header">
+                            <h3>Benchmark Runs</h3>
+                            <div class="section-actions">
+                                <button class="btn-primary" onclick="showRunBenchmarkModal()">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M9 12l2 2 4-4"></path>
+                                        <path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path>
+                                        <path d="M3 12c1 0 3-1 3-3s-2-3-3-3-3 1-3 3 2 3 3 3"></path>
+                                        <path d="M12 3c0 1-1 3-3 3s-3-2-3-3 1-3 3-3 3 2 3 3"></path>
+                                        <path d="M12 21c0-1 1-3 3-3s3 2 3 3-1 3-3 3-3-2-3-3"></path>
+                                    </svg>
+                                    Run Benchmark
+                                </button>
+                                <button class="btn-text" onclick="refreshBenchmarks()">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+                                        <path d="M21 3v5h-5"></path>
+                                        <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+                                        <path d="M3 21v-5h5"></path>
+                                    </svg>
+                                    Refresh
+                                </button>
+                            </div>
+                        </div>
+                        <div class="benchmarks-list" id="benchmarks-list">
+                            <div class="loading-state">
+                                <div class="loading-spinner"></div>
+                                <p>Loading benchmark runs...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         </div>
@@ -763,7 +855,7 @@
                     
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="evaluation-llm-model">Evaluation LLM Model</label>
+                            <label for="evaluation-llm-model">Evaluation LLM Model (Optional)</label>
                             <select id="evaluation-llm-model" name="evaluation_llm_model">
                                 <option value="">Use same as main LLM</option>
                                 <optgroup label="OpenAI Models (Recommended for Evaluation)">
@@ -1411,7 +1503,7 @@
                     
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="edit-evaluation-llm-model">Evaluation LLM Model</label>
+                            <label for="edit-evaluation-llm-model">Evaluation LLM Model (Optional)</label>
                             <select id="edit-evaluation-llm-model" name="evaluation_llm_model">
                                 <option value="">Use same as main LLM</option>
                                 <optgroup label="OpenAI Models (Recommended for Evaluation)">
@@ -1821,6 +1913,200 @@
                 </div>
             </div>
             <div class="modal-footer">
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Test Set Modal -->
+    <div class="modal" id="create-test-set-modal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <div class="header-content">
+                    <div class="header-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 12l2 2 4-4"></path>
+                            <path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path>
+                            <path d="M3 12c1 0 3-1 3-3s-2-3-3-3-3 1-3 3 2 3 3 3"></path>
+                            <path d="M12 3c0 1-1 3-3 3s-3-2-3-3 1-3 3-3 3 2 3 3"></path>
+                            <path d="M12 21c0-1 1-3 3-3s3 2 3 3-1 3-3 3-3-2-3-3"></path>
+                        </svg>
+                    </div>
+                    <div class="header-text">
+                        <h2>Create Test Set</h2>
+                        <p class="modal-subtitle">Generate a new evaluation test set for benchmarking</p>
+                    </div>
+                </div>
+                <button class="modal-close" onclick="hideCreateTestSetModal()">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="create-test-set-form">
+                    <div class="form-section">
+                        <div class="section-header">
+                            <h3>Test Set Configuration</h3>
+                            <p>Configure the parameters for generating your test set</p>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="test-set-agent">Agent</label>
+                                <select id="test-set-agent" name="agent_name" required>
+                                    <option value="">Select an agent...</option>
+                                </select>
+                                <small>Choose the agent to generate test questions for</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="test-set-questions">Number of Questions</label>
+                                <input type="number" id="test-set-questions" name="num_questions" min="1" max="500" value="50" required>
+                                <small>Number of questions to generate (1-500)</small>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="test-set-output">Output File Name</label>
+                                <input type="text" id="test-set-output" name="output_file" value="test_set.json" required>
+                                <small>Name for the generated test set file</small>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" onclick="hideCreateTestSetModal()">Cancel</button>
+                <button type="button" class="btn-primary" onclick="createTestSet()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 12l2 2 4-4"></path>
+                        <path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path>
+                        <path d="M3 12c1 0 3-1 3-3s-2-3-3-3-3 1-3 3 2 3 3 3"></path>
+                        <path d="M12 3c0 1-1 3-3 3s-3-2-3-3 1-3 3-3 3 2 3 3"></path>
+                        <path d="M12 21c0-1 1-3 3-3s3 2 3 3-1 3-3 3-3-2-3-3"></path>
+                    </svg>
+                    Generate Test Set
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Run Benchmark Modal -->
+    <div class="modal" id="run-benchmark-modal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <div class="header-content">
+                    <div class="header-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 12l2 2 4-4"></path>
+                            <path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path>
+                            <path d="M3 12c1 0 3-1 3-3s-2-3-3-3-3 1-3 3 2 3 3 3"></path>
+                            <path d="M12 3c0 1-1 3-3 3s-3-2-3-3 1-3 3-3 3 2 3 3"></path>
+                            <path d="M12 21c0-1 1-3 3-3s3 2 3 3-1 3-3 3-3-2-3-3"></path>
+                        </svg>
+                    </div>
+                    <div class="header-text">
+                        <h2>Run Benchmark</h2>
+                        <p class="modal-subtitle">Execute a benchmark test on an agent using a test set</p>
+                    </div>
+                </div>
+                <button class="modal-close" onclick="hideRunBenchmarkModal()">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="run-benchmark-form">
+                    <div class="form-section">
+                        <div class="section-header">
+                            <h3>Benchmark Configuration</h3>
+                            <p>Select the agent and test set for benchmarking</p>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="benchmark-agent">Agent</label>
+                                <select id="benchmark-agent" name="agent_name" required>
+                                    <option value="">Select an agent...</option>
+                                </select>
+                                <small>Choose the agent to benchmark</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="benchmark-test-set">Test Set</label>
+                                <select id="benchmark-test-set" name="test_set_file" required>
+                                    <option value="">Select a test set...</option>
+                                </select>
+                                <small>Choose the test set to use for benchmarking</small>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="benchmark-run-id">Run ID (Optional)</label>
+                                <input type="text" id="benchmark-run-id" name="run_id" placeholder="Auto-generated if empty">
+                                <small>Custom identifier for this benchmark run</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="benchmark-export-csv">Export CSV (Optional)</label>
+                                <input type="text" id="benchmark-export-csv" name="export_csv" placeholder="Auto-generated if empty">
+                                <small>Custom CSV export path</small>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" onclick="hideRunBenchmarkModal()">Cancel</button>
+                <button type="button" class="btn-primary" onclick="runBenchmark()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 12l2 2 4-4"></path>
+                        <path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path>
+                        <path d="M3 12c1 0 3-1 3-3s-2-3-3-3-3 1-3 3 2 3 3 3"></path>
+                        <path d="M12 3c0 1-1 3-3 3s-3-2-3-3 1-3 3-3 3 2 3 3"></path>
+                        <path d="M12 21c0-1 1-3 3-3s3 2 3 3-1 3-3 3-3-2-3-3"></path>
+                    </svg>
+                    Start Benchmark
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Benchmark Results Modal -->
+    <div class="modal" id="benchmark-results-modal">
+        <div class="modal-content extra-large">
+            <div class="modal-header">
+                <div class="header-content">
+                    <div class="header-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="20" x2="18" y2="10"></line>
+                            <line x1="12" y1="20" x2="12" y2="4"></line>
+                            <line x1="6" y1="20" x2="6" y2="14"></line>
+                        </svg>
+                    </div>
+                    <div class="header-text">
+                        <h2>Benchmark Results</h2>
+                        <p class="modal-subtitle" id="benchmark-results-subtitle">Detailed results for benchmark run</p>
+                    </div>
+                </div>
+                <button class="modal-close" onclick="hideBenchmarkResultsModal()">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <div id="benchmark-results-content">
+                    <div class="loading-state">
+                        <div class="loading-spinner"></div>
+                        <p>Loading benchmark results...</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" onclick="hideBenchmarkResultsModal()">Close</button>
+                <button type="button" class="btn-primary" onclick="downloadBenchmarkResults()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7,10 12,15 17,10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Download CSV
+                </button>
             </div>
         </div>
     </div>
