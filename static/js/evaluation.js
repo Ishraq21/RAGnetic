@@ -1184,9 +1184,9 @@ function formatFileSize(bytes) {
  */
 function showTestSetDetailsModal(testSetData) {
     const modal = document.createElement('div');
-    modal.className = 'modal-overlay';
+    modal.className = 'modal show';
     modal.innerHTML = `
-        <div class="modal-content modal-large">
+        <div class="modal-content large">
             <div class="modal-header">
                 <h2>Test Set Details</h2>
                 <button class="btn-icon" onclick="closeModal(this)">
@@ -1239,14 +1239,13 @@ function showTestSetDetailsModal(testSetData) {
     `;
     
     document.body.appendChild(modal);
-    modal.style.display = 'flex';
 }
 
 /**
  * Close modal
  */
 function closeModal(button) {
-    const modal = button.closest('.modal-overlay');
+    const modal = button.closest('.modal');
     if (modal) {
         modal.remove();
     }
