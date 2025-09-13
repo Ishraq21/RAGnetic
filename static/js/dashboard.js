@@ -580,6 +580,12 @@ class Dashboard {
         });
 
         // Populate data sources
+        console.log('Debug: Full agent object:', agent);
+        console.log('Debug: Agent sources:', agent.sources);
+        console.log('Debug: Sources type:', typeof agent.sources);
+        console.log('Debug: Sources length:', (agent.sources || []).length);
+        console.log('Debug: Agent keys:', Object.keys(agent));
+        console.log('Debug: Agent has sources property:', 'sources' in agent);
         this.populateEditDataSources(agent.sources || []);
 
         // Populate data policies
@@ -1377,6 +1383,7 @@ class Dashboard {
         
         // Find all data source forms (both create and edit)
         const dataSourceForms = form.querySelectorAll('.data-source-form');
+        console.log('Debug: processDataSources found', dataSourceForms.length, 'data source forms');
         
         for (const dataSourceForm of dataSourceForms) {
             const sourceTypeSelect = dataSourceForm.querySelector('select[name*="source_type"]');
@@ -1384,6 +1391,7 @@ class Dashboard {
             if (!sourceTypeSelect) continue;
             
             const sourceType = sourceTypeSelect.value;
+            console.log('Debug: Processing data source with type:', sourceType);
             
             if (sourceType === 'local' || sourceType === 'pdf' || sourceType === 'txt' || 
                 sourceType === 'docx' || sourceType === 'csv' || sourceType === 'parquet' || 
@@ -1403,6 +1411,15 @@ class Dashboard {
                             console.error('Failed to upload file:', error);
                             this.showToast(`Failed to upload ${file.name}: ${error.message}`, 'error');
                         }
+                    }
+                } else {
+                    // Handle existing file-based sources (no new uploads)
+                    const pathInput = dataSourceForm.querySelector('input[name*="source_path"]');
+                    if (pathInput && pathInput.value.trim()) {
+                        dataSources.push({
+                            type: sourceType,
+                            path: pathInput.value.trim()
+                        });
                     }
                 }
             } else {
@@ -1431,6 +1448,7 @@ class Dashboard {
             }
         }
         
+        console.log('Debug: processDataSources returning', dataSources.length, 'sources:', dataSources);
         return dataSources;
     }
 
@@ -1456,13 +1474,24 @@ class Dashboard {
     }
 
     populateEditDataSources(sources) {
+        console.log('Debug: populateEditDataSources called with sources:', sources);
+        console.log('Debug: Sources type:', typeof sources);
+        console.log('Debug: Sources is array:', Array.isArray(sources));
+        console.log('Debug: Sources length:', sources ? sources.length : 'null/undefined');
+        
         const container = document.getElementById('edit-data-sources-container');
-        if (!container) return;
+        console.log('Debug: Container element found:', !!container);
+        if (!container) {
+            console.error('Debug: edit-data-sources-container not found!');
+            return;
+        }
 
         // Clear existing data sources
         container.innerHTML = '';
 
-        if (sources.length === 0) {
+        // Handle null/undefined sources
+        if (!sources || !Array.isArray(sources) || sources.length === 0) {
+            console.log('Debug: No sources to display, showing empty state');
             // Show empty state
             container.innerHTML = `
                 <div class="empty-state">
@@ -1481,12 +1510,18 @@ class Dashboard {
         }
 
         // Add each data source
+        console.log('Debug: Adding', sources.length, 'data sources');
         sources.forEach((source, index) => {
+            console.log('Debug: Adding source', index + 1, ':', source);
+            console.log('Debug: Source type:', source.type);
+            console.log('Debug: Source path/url:', source.path || source.url);
             this.addEditDataSource(source, index + 1);
         });
     }
 
     addEditDataSource(source = null, sourceNumber = null) {
+        console.log('Debug: addEditDataSource called with source:', source, 'sourceNumber:', sourceNumber);
+        
         const container = document.getElementById('edit-data-sources-container');
         const emptyState = container.querySelector('.empty-state');
         
@@ -1497,6 +1532,10 @@ class Dashboard {
         const dataSourceId = Date.now() + Math.floor(Math.random() * 1000);
         const sourceType = source ? source.type : 'local';
         const sourcePath = source ? (source.path || source.url || source.db_connection || source.folder_id || '') : '';
+        
+        console.log('Debug: Generated dataSourceId:', dataSourceId);
+        console.log('Debug: sourceType:', sourceType);
+        console.log('Debug: sourcePath:', sourcePath);
         
         const dataSourceHtml = `
             <div class="data-source-form" id="edit-data-source-${dataSourceId}">
@@ -1529,7 +1568,7 @@ class Dashboard {
                         </select>
                     </div>
                 </div>
-                <div class="form-group" id="edit-file-upload-group-${dataSourceId}" style="display: ${sourceType === 'local' || sourceType === 'pdf' || sourceType === 'txt' || sourceType === 'docx' || sourceType === 'csv' || sourceType === 'parquet' || sourceType === 'notebook' ? 'block' : 'none'}">
+                <div class="form-group" id="edit-file-upload-group-${dataSourceId}" style="display: ${sourceType === 'local' || sourceType === 'pdf' || sourceType === 'txt' || sourceType === 'docx' || sourceType === 'csv' || sourceType === 'parquet' || sourceType === 'notebook' ? 'block' : 'none'};">
                     <label>Upload Files</label>
                     <div class="file-upload-area" id="edit-file-upload-${dataSourceId}">
                         <div class="file-upload-content">
@@ -1547,7 +1586,7 @@ class Dashboard {
                         </div>
                     </div>
                 </div>
-                <div class="form-group" id="edit-path-input-group-${dataSourceId}" style="display: ${sourceType === 'local' || sourceType === 'pdf' || sourceType === 'txt' || sourceType === 'docx' || sourceType === 'csv' || sourceType === 'parquet' || sourceType === 'notebook' ? 'none' : 'block'}">
+                <div class="form-group" id="edit-path-input-group-${dataSourceId}" style="display: block;">
                     <label for="edit-source-path-${dataSourceId}">Path/URL</label>
                     <input type="text" id="edit-source-path-${dataSourceId}" name="edit_source_path_${dataSourceId}" 
                            placeholder="Enter file path, URL, or connection string" value="${sourcePath}">
@@ -1559,6 +1598,9 @@ class Dashboard {
         
         // Initialize file upload functionality for this data source
         this.initializeEditFileUpload(dataSourceId);
+        
+        // Ensure the correct input type is shown based on the source type
+        this.toggleEditDataSourceInput(dataSourceId);
     }
 
     removeEditDataSource(dataSourceId) {
@@ -1594,9 +1636,11 @@ class Dashboard {
         if (sourceType === 'local' || sourceType === 'pdf' || sourceType === 'txt' || 
             sourceType === 'docx' || sourceType === 'csv' || sourceType === 'parquet' || 
             sourceType === 'notebook') {
+            // For file-based sources, show both file upload and path input options
             fileUploadGroup.style.display = 'block';
-            pathInputGroup.style.display = 'none';
+            pathInputGroup.style.display = 'block';
         } else {
+            // For non-file sources (url, api, db, etc.), only show path input
             fileUploadGroup.style.display = 'none';
             pathInputGroup.style.display = 'block';
         }

@@ -265,9 +265,9 @@ def run_benchmark(
         else:
             logger.info(f"Resuming benchmark run_id={run_id} (completed_items={existing['completed_items']})")
 
-    def _retry(call, attempts=4, base_delay=0.7, max_delay=8.0, exc_types=(Exception,)):
+    def _retry(call, attempts=4, base_delay=0.7, max_delay=60.0, exc_types=(Exception,)):
         """
-        Exponential backoff with jitter. Slightly longer waits on 429s.
+        Exponential backoff with jitter. Enhanced rate limiting for OpenAI TPM limits.
         """
         last = None
         for i in range(attempts):
@@ -276,11 +276,23 @@ def run_benchmark(
             except exc_types as e:
                 last = e
                 delay = min(max_delay, base_delay * (2 ** i))
-                # nudge up for rate-limit-ish errors
+                
+                # Enhanced rate limit handling for OpenAI TPM limits
                 msg = str(getattr(e, "message", "")) or str(e)
                 if "429" in msg or "RateLimit" in msg or "Too Many Requests" in msg:
-                    delay = max(delay, 2.0)
-                # full jitter in [0.8x, 1.2x]
+                    # Try to extract wait time from error message
+                    import re
+                    wait_match = re.search(r'Please try again in ([\d.]+)s', msg)
+                    if wait_match:
+                        extracted_wait = float(wait_match.group(1))
+                        delay = max(delay, extracted_wait + 1.0)  # Add 1s buffer
+                        logger.warning(f"Rate limit detected. Waiting {delay:.2f}s as suggested by API")
+                    else:
+                        # For TPM limits, use longer delays
+                        delay = max(delay, 10.0)  # Minimum 10s for TPM limits
+                        logger.warning(f"Rate limit detected (likely TPM). Using extended delay: {delay:.2f}s")
+                
+                # Add jitter to prevent thundering herd
                 delay *= (0.8 + 0.4 * random.random())
                 logger.warning(f"Retry {i + 1}/{attempts} after error: {e}. Sleeping {delay:.2f}s")
                 _time.sleep(delay)
@@ -517,6 +529,14 @@ def run_benchmark(
                 .where(benchmark_runs_table.c.run_id == run_id)
                 .values(completed_items=benchmark_runs_table.c.completed_items + 1)
             )
+            
+            # Add delay between requests to prevent rate limiting
+            # For TPM limits, we need to pace requests to stay under 30K tokens/minute
+            if idx < len(test_set) - 1:  # Don't delay after the last item
+                bm = getattr(agent_config, "benchmark", None)
+                delay_seconds = bm.request_delay_seconds if bm else 2.0
+                logger.info(f"[bench] Completed item {idx + 1}/{len(test_set)}. Waiting {delay_seconds}s before next request to avoid rate limits...")
+                _time.sleep(delay_seconds)
 
 
     status = "completed"

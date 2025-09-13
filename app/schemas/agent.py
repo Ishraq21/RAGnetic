@@ -205,6 +205,7 @@ class BenchmarkConfig(BaseModel):
     answer_reserve_tokens: int = Field(1024, description="Tokens reserved for the model's answer during benchmarking.")
     enable_doc_truncation: bool = Field(True, description="If true, truncate retrieved docs to fit within the budget.")
     max_context_docs: int = Field(20, description="Hard cap on how many retrieved docs are passed into the prompt.")
+    request_delay_seconds: float = Field(2.0, ge=0.0, le=60.0, description="Delay between benchmark requests to avoid rate limiting (seconds).")
 
 
 class AgentConfig(BaseModel):

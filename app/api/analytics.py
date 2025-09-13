@@ -15,7 +15,8 @@ from sqlalchemy import select, func, join, and_
 
 from app.db import get_db
 from app.db.models import conversation_metrics_table, chat_sessions_table, users_table, citations_table, \
-    chat_messages_table, document_chunks_table, lambda_runs, benchmark_runs_table, benchmark_items_table
+    chat_messages_table, document_chunks_table, lambda_runs, benchmark_runs_table, benchmark_items_table, \
+    agent_run_steps, agent_runs
 from app.core.security import PermissionChecker
 from app.schemas.security import User
 from pydantic import BaseModel, Field
@@ -210,15 +211,13 @@ async def get_benchmark_summary(
 
     try:
         if not os.path.exists(_BENCHMARK_DIR) or not os.listdir(_BENCHMARK_DIR):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail=f"No benchmark results found in '{_BENCHMARK_DIR}'. Run 'ragnetic evaluate benchmark' first.")
+            return []  # Return empty list instead of 404
 
         bench_path = FilePath(_BENCHMARK_DIR)
         all_benchmark_files = sorted(glob.glob(str(bench_path / "*.csv")), reverse=True)
 
         if not all_benchmark_files:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail=f"No .csv benchmark files found in '{_BENCHMARK_DIR}'.")
+            return []  # Return empty list instead of 404
 
         filtered_files = []
         if agent_name:
@@ -227,8 +226,7 @@ async def get_benchmark_summary(
                 if len(filename_parts) >= 2 and filename_parts[1] == agent_name:
                     filtered_files.append(f)
             if not filtered_files:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                    detail=f"No benchmark results found for agent: '{agent_name}'.")
+                return []  # Return empty list instead of 404
             all_benchmark_files = filtered_files
 
         if latest and all_benchmark_files:
