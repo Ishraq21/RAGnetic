@@ -112,7 +112,11 @@ class Dashboard {
                 this.loadMetricsSummary(),
                 this.loadLatencyMetrics(),
                 this.loadUsageSummary(),
-                this.loadSystemHealth()
+                this.loadSystemHealth(),
+                this.loadSecurityMetrics(),
+                this.loadResourceMetrics(),
+                this.loadTrainingOverview(),
+                this.loadDataPipelineMetrics()
             ]);
             this.updateStats();
             this.updateLastUpdated();
@@ -198,7 +202,7 @@ class Dashboard {
             usageUrl.searchParams.set('end_time', end);
             usageUrl.searchParams.set('limit', '100');
             
-            const [auditResponse, metricsResponse, usageResponse] = await Promise.all([
+            const [auditResponse, metricsResponse, usageResponse, securityResponse, resourceResponse] = await Promise.all([
                 fetch(`${API_BASE_URL}/audit/runs?limit=5`, {
                     headers: { 'X-API-Key': loggedInUserToken }
                 }),
@@ -207,6 +211,12 @@ class Dashboard {
                 }),
                 fetch(usageUrl.toString(), {
                     headers: { 'X-API-Key': loggedInUserToken }
+                }),
+                fetch('/api/v1/monitoring/security', {
+                    headers: { 'X-API-Key': loggedInUserToken }
+                }),
+                fetch('/api/v1/monitoring/resources', {
+                    headers: { 'X-API-Key': loggedInUserToken }
                 })
             ]);
             
@@ -214,9 +224,17 @@ class Dashboard {
                 const auditData = await auditResponse.json();
                 const metricsData = await metricsResponse.json();
                 const usageData = await usageResponse.json();
+                const securityData = securityResponse.ok ? await securityResponse.json() : {};
+                const resourceData = resourceResponse.ok ? await resourceResponse.json() : {};
                 
                 // Combine all data sources for change detection
-                const combinedData = { audit: auditData, metrics: metricsData, usage: usageData };
+                const combinedData = { 
+                    audit: auditData, 
+                    metrics: metricsData, 
+                    usage: usageData,
+                    security: securityData,
+                    resources: resourceData
+                };
                 const newHash = this.createDataHash(combinedData);
                 
                 if (this.lastDataHash !== newHash) {
@@ -487,6 +505,108 @@ class Dashboard {
                 el.classList.add('health-err');
             }
         }));
+    }
+
+    async loadSecurityMetrics() {
+        try {
+            const response = await fetch('/api/v1/monitoring/security', {
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+            if (!response.ok) {
+                console.warn('Security metrics API failed:', response.status);
+                return;
+            }
+            const data = await response.json();
+            
+            const apiKeysEl = document.getElementById('security-api-keys');
+            const failedAuthEl = document.getElementById('security-failed-auth');
+            const rateLimitedEl = document.getElementById('security-rate-limited');
+            const activeSessionsEl = document.getElementById('security-active-sessions');
+            
+            if (apiKeysEl) apiKeysEl.textContent = String(data.active_api_keys || 0);
+            if (failedAuthEl) failedAuthEl.textContent = String(data.failed_auth_24h || 0);
+            if (rateLimitedEl) rateLimitedEl.textContent = String(data.rate_limited_24h || 0);
+            if (activeSessionsEl) activeSessionsEl.textContent = String(data.active_sessions || 0);
+        } catch (e) {
+            console.warn('Security metrics failed:', e);
+        }
+    }
+
+    async loadResourceMetrics() {
+        try {
+            const response = await fetch('/api/v1/monitoring/resources', {
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+            if (!response.ok) {
+                console.warn('Resource metrics API failed:', response.status);
+                return;
+            }
+            const data = await response.json();
+            
+            const memoryEl = document.getElementById('resource-memory');
+            const memoryDetailEl = document.getElementById('resource-memory-detail');
+            const cpuEl = document.getElementById('resource-cpu');
+            const diskEl = document.getElementById('resource-disk');
+            const diskDetailEl = document.getElementById('resource-disk-detail');
+            
+            if (memoryEl) memoryEl.textContent = `${data.memory_percent || 0}%`;
+            if (memoryDetailEl) memoryDetailEl.textContent = `${data.memory_used_mb || 0} MB / ${data.memory_total_mb || 0} MB`;
+            if (cpuEl) cpuEl.textContent = `${data.cpu_percent || 0}%`;
+            if (diskEl) diskEl.textContent = `${data.disk_percent || 0}%`;
+            if (diskDetailEl) diskDetailEl.textContent = `${data.disk_used_gb || 0} GB / ${data.disk_total_gb || 0} GB`;
+        } catch (e) {
+            console.warn('Resource metrics failed:', e);
+        }
+    }
+
+    async loadTrainingOverview() {
+        try {
+            const response = await fetch('/api/v1/monitoring/training-overview', {
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+            if (!response.ok) {
+                console.warn('Training overview API failed:', response.status);
+                return;
+            }
+            const data = await response.json();
+            
+            const runningJobsEl = document.getElementById('training-running-jobs');
+            const totalModelsEl = document.getElementById('training-total-models');
+            const gpuHoursEl = document.getElementById('training-gpu-hours');
+            const trainingCostEl = document.getElementById('training-cost');
+            
+            if (runningJobsEl) runningJobsEl.textContent = String(data.running_jobs || 0);
+            if (totalModelsEl) totalModelsEl.textContent = String(data.total_models || 0);
+            if (gpuHoursEl) gpuHoursEl.textContent = `${data.gpu_hours_24h || 0}h`;
+            if (trainingCostEl) trainingCostEl.textContent = `$${data.training_cost_24h || 0}`;
+        } catch (e) {
+            console.warn('Training overview failed:', e);
+        }
+    }
+
+    async loadDataPipelineMetrics() {
+        try {
+            const response = await fetch('/api/v1/monitoring/data-pipeline', {
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+            if (!response.ok) {
+                console.warn('Data pipeline metrics API failed:', response.status);
+                return;
+            }
+            const data = await response.json();
+            
+            const totalDocsEl = document.getElementById('pipeline-total-docs');
+            const embeddingsEl = document.getElementById('pipeline-embeddings');
+            const vsSizeEl = document.getElementById('pipeline-vs-size');
+            const failedIngestsEl = document.getElementById('pipeline-failed-ingests');
+            
+            if (totalDocsEl) totalDocsEl.textContent = String(data.total_documents || 0).toLocaleString();
+            if (embeddingsEl) embeddingsEl.textContent = String(data.embeddings_24h || 0);
+            if (vsSizeEl) vsSizeEl.textContent = `${data.vector_store_size_mb || 0} MB`;
+            if (failedIngestsEl) failedIngestsEl.textContent = String(data.failed_ingests_24h || 0);
+        } catch (e) {
+            console.warn('Data pipeline metrics failed:', e);
+        }
     }
 
     async loadTrainingStats() {

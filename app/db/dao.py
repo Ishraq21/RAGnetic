@@ -922,6 +922,7 @@ async def create_default_roles_and_permissions(db: AsyncSession) -> None:
             "fine_tune:initiate", "fine_tune:read_status", "fine_tune:list_models",
             "evaluation:generate_test_set", "evaluation:run_benchmark", "evaluation:read_benchmarks",
             "analytics:read_benchmarks", "analytics:read_conversation_metrics", "analytics:read_summary",
+            "monitoring:read_security", "monitoring:read_resources", "monitoring:read_training", "monitoring:read_pipeline",
             "security:create_user", "security:read_users", "security:update_users", "security:delete_users",
             "security:create_role", "security:read_roles", "security:delete_roles",
             "security:manage_api_keys", "security:manage_user_roles", "security:manage_role_permissions",
@@ -932,12 +933,14 @@ async def create_default_roles_and_permissions(db: AsyncSession) -> None:
             "fine_tune:initiate", "fine_tune:read_status", "fine_tune:list_models",
             "evaluation:generate_test_set", "evaluation:run_benchmark", "evaluation:read_benchmarks",
             "analytics:read_benchmarks", "analytics:read_conversation_metrics", "analytics:read_summary",
+            "monitoring:read_security", "monitoring:read_resources", "monitoring:read_training", "monitoring:read_pipeline",
         ],
         "viewer": [
             "read:workflows", "read:agents",
             "fine_tune:read_status", "fine_tune:list_models",
             "evaluation:read_benchmarks",
             "analytics:read_benchmarks", "analytics:read_conversation_metrics", "analytics:read_summary",
+            "monitoring:read_security", "monitoring:read_resources", "monitoring:read_training", "monitoring:read_pipeline",
         ]
     }
 

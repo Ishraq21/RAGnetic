@@ -97,6 +97,7 @@ from app.api.metrics import router as metrics_api_router
 from app.api.training import router as training_api_router
 from app.api.citations import router as citations_api_router
 from app.api.documents import router as documents_api_router
+from app.api.monitoring import router as monitoring_api_router
 
 
 from app.services.temporary_document_service import TemporaryDocumentService, TemporaryDocumentUploadResult
@@ -411,6 +412,7 @@ app.include_router(citations_api_router)
 app.include_router(evaluation_api_router)
 app.include_router(lambda_tool_router)
 app.include_router(documents_api_router)
+app.include_router(monitoring_api_router)
 
 
 
