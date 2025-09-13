@@ -4429,3 +4429,43 @@ body {
 .tab-button:hover {
     background: var(--card-hover) !important;
 }
+
+.pager {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 0 0 0;
+}
+
+.pager-info {
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    min-width: 90px;
+    text-align: center;
+}
+
+.pager-btn {
+    appearance: none;
+    border: 1px solid var(--border-color);
+    background: var(--surface-color);
+    color: var(--text-primary);
+    border-radius: 6px;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.pager-btn:hover:not([disabled]) {
+    background: var(--card-hover);
+    border-color: var(--border-hover);
+}
+
+.pager-btn[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

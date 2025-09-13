@@ -4,6 +4,8 @@ class TrainingDashboard {
         this.trainingJobs = [];
         this.currentJob = null;
         this.refreshInterval = null;
+        this.trainingPage = 1;
+        this.trainingPerPage = 10;
         this.init();
     }
 
@@ -253,22 +255,43 @@ class TrainingDashboard {
                 <div class="list-header">Training Jobs</div>
                 <div class="empty-state">
                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
-                        <path d="M2 17L12 22L22 17"></path>
-                        <path d="M2 12L12 17L22 12"></path>
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
                     </svg>
-                    <h3>No Training Jobs</h3>
-                    <p>Create your first training job to get started with LoRA fine-tuning</p>
+                    <h3>No training jobs</h3>
+                    <p>Create a job to see it here</p>
                 </div>
             `;
             return;
         }
 
-        const jobsHtml = this.trainingJobs.map(job => this.renderTrainingJobCard(job)).join('');
+        const totalPages = Math.max(1, Math.ceil(this.trainingJobs.length / this.trainingPerPage));
+        if (this.trainingPage > totalPages) this.trainingPage = totalPages;
+        const start = (this.trainingPage - 1) * this.trainingPerPage;
+        const end = start + this.trainingPerPage;
+        const pageJobs = this.trainingJobs.slice(start, end);
+
+        const jobsHtml = pageJobs.map(job => this.renderTrainingJobCard(job)).join('');
+        const hasPrev = this.trainingPage > 1;
+        const hasNext = this.trainingPage < totalPages;
+
         grid.innerHTML = `
             <div class="list-header">Training Jobs</div>
             ${jobsHtml}
+            <div class="pager">
+                <button class="pager-btn" onclick="trainingDashboard.changeTrainingPage(-1)" ${hasPrev ? '' : 'disabled'} aria-label="Previous page">‹</button>
+                <span class="pager-info">Page ${this.trainingPage} / ${totalPages}</span>
+                <button class="pager-btn" onclick="trainingDashboard.changeTrainingPage(1)" ${hasNext ? '' : 'disabled'} aria-label="Next page">›</button>
+            </div>
         `;
+    }
+
+    changeTrainingPage(delta) {
+        const totalPages = Math.max(1, Math.ceil(this.trainingJobs.length / this.trainingPerPage));
+        const nextPage = Math.min(Math.max(1, this.trainingPage + delta), totalPages);
+        if (nextPage === this.trainingPage) return;
+        this.trainingPage = nextPage;
+        this.renderTrainingJobs();
     }
 
     renderTrainingJobCard(job) {
