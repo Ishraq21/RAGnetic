@@ -125,10 +125,9 @@
                     </select>
                 </div>
                 <div class="controls-right">
-                    <label class="auto-refresh">
-                        <input type="checkbox" id="overview-auto-refresh">
-                        Auto-refresh
-                    </label>
+                    <button class="btn-secondary btn-sm" onclick="dashboard.checkForUpdates(true)" title="Check for updates now">
+                        ↻ Refresh
+                    </button>
                     <span class="last-updated">Last updated: <span id="overview-last-updated">—</span></span>
                 </div>
             </div>
@@ -161,7 +160,7 @@
                                 <td id="success-rate">0%</td>
                             </tr>
                             <tr>
-                                <td>Requests (Range)</td>
+                                <td>Requests (24h)</td>
                                 <td id="requests-24h">0</td>
                             </tr>
                             <tr>
@@ -169,11 +168,11 @@
                                 <td id="p95-latency">0ms</td>
                             </tr>
                             <tr>
-                                <td>Error Rate (Range)</td>
+                                <td>Error Rate (24h)</td>
                                 <td id="error-rate">0%</td>
                             </tr>
                             <tr>
-                                <td>Tokens (Range)</td>
+                                <td>Tokens Used (24h)</td>
                                 <td id="tokens-24h">0</td>
                             </tr>
                         </tbody>
