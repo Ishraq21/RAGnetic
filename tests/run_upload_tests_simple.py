@@ -29,7 +29,7 @@ class SimpleUploadTestRunner:
         
     def test_file_creation(self):
         """Test file creation and basic operations"""
-        print("🧪 Testing file creation...")
+        print(" Testing file creation...")
         
         try:
             # Create test data directory
@@ -63,7 +63,7 @@ class SimpleUploadTestRunner:
     
     def test_directory_structure(self):
         """Test directory structure creation"""
-        print("🧪 Testing directory structure...")
+        print(" Testing directory structure...")
         
         try:
             from app.core.config import get_path_settings
@@ -96,7 +96,7 @@ class SimpleUploadTestRunner:
     
     def test_agent_creation(self):
         """Test agent configuration creation"""
-        print("🧪 Testing agent creation...")
+        print(" Testing agent creation...")
         
         try:
             agents_dir = Path("agents")
@@ -125,7 +125,7 @@ class SimpleUploadTestRunner:
     
     def test_database_models(self):
         """Test database model imports"""
-        print("🧪 Testing database models...")
+        print(" Testing database models...")
         
         try:
             from app.db.models import temporary_documents_table, document_chunks_table, users_table
@@ -145,7 +145,7 @@ class SimpleUploadTestRunner:
     
     def test_service_imports(self):
         """Test service imports"""
-        print("🧪 Testing service imports...")
+        print(" Testing service imports...")
         
         try:
             from app.services.temporary_document_service import TemporaryDocumentService
@@ -162,7 +162,7 @@ class SimpleUploadTestRunner:
     
     def test_config_loading(self):
         """Test configuration loading"""
-        print("🧪 Testing configuration loading...")
+        print(" Testing configuration loading...")
         
         try:
             from app.core.config import get_path_settings, get_api_key, get_server_api_keys
@@ -196,7 +196,7 @@ class SimpleUploadTestRunner:
     
     def test_file_validation_logic(self):
         """Test file validation logic"""
-        print("🧪 Testing file validation logic...")
+        print(" Testing file validation logic...")
         
         try:
             # Test file extension validation
@@ -244,7 +244,7 @@ class SimpleUploadTestRunner:
     
     def test_cleanup_logic(self):
         """Test cleanup logic"""
-        print("🧪 Testing cleanup logic...")
+        print(" Testing cleanup logic...")
         
         try:
             # Test cleanup directory structure

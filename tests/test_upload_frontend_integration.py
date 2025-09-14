@@ -78,7 +78,7 @@ class FrontendUploadIntegrationTests:
     
     def test_dashboard_upload_interface(self):
         """Test upload interface on dashboard"""
-        print("🧪 Testing dashboard upload interface...")
+        print(" Testing dashboard upload interface...")
         
         if not self.driver:
             print(" Skipping frontend test - WebDriver not available")
@@ -107,7 +107,7 @@ class FrontendUploadIntegrationTests:
     
     def test_file_upload_via_frontend(self):
         """Test file upload through frontend interface"""
-        print("🧪 Testing file upload via frontend...")
+        print(" Testing file upload via frontend...")
         
         if not self.driver:
             print(" Skipping frontend test - WebDriver not available")
@@ -162,7 +162,7 @@ class FrontendUploadIntegrationTests:
     
     def test_chat_upload_interface(self):
         """Test upload interface in chat"""
-        print("🧪 Testing chat upload interface...")
+        print(" Testing chat upload interface...")
         
         if not self.driver:
             print(" Skipping frontend test - WebDriver not available")
@@ -192,7 +192,7 @@ class FrontendUploadIntegrationTests:
     
     def test_upload_drag_and_drop(self):
         """Test drag and drop upload functionality"""
-        print("🧪 Testing drag and drop upload...")
+        print(" Testing drag and drop upload...")
         
         if not self.driver:
             print(" Skipping frontend test - WebDriver not available")
@@ -224,7 +224,7 @@ class FrontendUploadIntegrationTests:
     
     def test_upload_progress_indication(self):
         """Test upload progress indication"""
-        print("🧪 Testing upload progress indication...")
+        print(" Testing upload progress indication...")
         
         if not self.driver:
             print(" Skipping frontend test - WebDriver not available")
@@ -256,7 +256,7 @@ class FrontendUploadIntegrationTests:
     
     def test_upload_error_handling_frontend(self):
         """Test error handling in frontend uploads"""
-        print("🧪 Testing upload error handling in frontend...")
+        print(" Testing upload error handling in frontend...")
         
         if not self.driver:
             print(" Skipping frontend test - WebDriver not available")
@@ -294,7 +294,7 @@ class FrontendUploadIntegrationTests:
     
     def test_upload_file_preview(self):
         """Test file preview functionality"""
-        print("🧪 Testing file preview functionality...")
+        print(" Testing file preview functionality...")
         
         if not self.driver:
             print(" Skipping frontend test - WebDriver not available")
@@ -325,7 +325,7 @@ class FrontendUploadIntegrationTests:
     
     def test_upload_multiple_files(self):
         """Test multiple file upload functionality"""
-        print("🧪 Testing multiple file upload...")
+        print(" Testing multiple file upload...")
         
         if not self.driver:
             print(" Skipping frontend test - WebDriver not available")
@@ -362,7 +362,7 @@ class FrontendUploadIntegrationTests:
     
     def test_upload_responsive_design(self):
         """Test upload interface responsive design"""
-        print("🧪 Testing upload responsive design...")
+        print(" Testing upload responsive design...")
         
         if not self.driver:
             print(" Skipping frontend test - WebDriver not available")
@@ -402,7 +402,7 @@ class FrontendUploadIntegrationTests:
     
     def test_upload_accessibility(self):
         """Test upload interface accessibility"""
-        print("🧪 Testing upload accessibility...")
+        print(" Testing upload accessibility...")
         
         if not self.driver:
             print(" Skipping frontend test - WebDriver not available")

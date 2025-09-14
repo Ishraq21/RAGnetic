@@ -72,7 +72,7 @@ class FixedUploadIntegrationTests:
     
     def test_server_connectivity_fixed(self):
         """Test server connectivity with proper configuration"""
-        print("🧪 Testing server connectivity (fixed)...")
+        print("Testing server connectivity (fixed)...")
         
         try:
             # Test with TestClient first (should work with proper headers)
@@ -98,7 +98,7 @@ class FixedUploadIntegrationTests:
     
     def test_agent_file_upload_fixed(self):
         """Test agent file upload with proper configuration"""
-        print("🧪 Testing agent file upload (fixed)...")
+        print(" Testing agent file upload (fixed)...")
         
         try:
             # Create test file
@@ -141,7 +141,7 @@ class FixedUploadIntegrationTests:
     
     def test_training_dataset_upload_fixed(self):
         """Test training dataset upload with proper configuration"""
-        print("🧪 Testing training dataset upload (fixed)...")
+        print(" Testing training dataset upload (fixed)...")
         
         try:
             # Create valid JSONL training data
@@ -189,7 +189,7 @@ class FixedUploadIntegrationTests:
     
     def test_temporary_document_upload_fixed(self):
         """Test temporary document upload with proper configuration"""
-        print("🧪 Testing temporary document upload (fixed)...")
+        print(" Testing temporary document upload (fixed)...")
         
         try:
             # Create test document
@@ -268,7 +268,7 @@ class FixedUploadIntegrationTests:
     
     def test_document_retrieval_fixed(self):
         """Test document retrieval with proper configuration"""
-        print("🧪 Testing document retrieval (fixed)...")
+        print(" Testing document retrieval (fixed)...")
         
         try:
             if not self.upload_results:
@@ -308,7 +308,7 @@ class FixedUploadIntegrationTests:
     
     def test_file_validation_fixed(self):
         """Test file validation with proper configuration"""
-        print("🧪 Testing file validation (fixed)...")
+        print(" Testing file validation (fixed)...")
         
         try:
             headers = {
@@ -367,7 +367,7 @@ class FixedUploadIntegrationTests:
     
     def test_concurrent_uploads_fixed(self):
         """Test concurrent uploads with proper configuration"""
-        print("🧪 Testing concurrent uploads (fixed)...")
+        print(" Testing concurrent uploads (fixed)...")
         
         try:
             import concurrent.futures
@@ -444,7 +444,7 @@ class FixedUploadIntegrationTests:
     
     def test_cleanup_integration_fixed(self):
         """Test cleanup integration with proper configuration"""
-        print("🧪 Testing cleanup integration (fixed)...")
+        print(" Testing cleanup integration (fixed)...")
         
         try:
             if not self.upload_results:

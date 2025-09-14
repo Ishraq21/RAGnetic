@@ -4,9 +4,10 @@ import logging
 import json
 import os
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks
+from fastapi import Path as _Path
 
 from app.core.security import get_http_api_key, PermissionChecker # Import PermissionChecker
 from app.agents.config_manager import load_agent_config
@@ -16,6 +17,8 @@ from app.schemas.agent import AgentConfig
 from app.core.config import get_path_settings
 from app.schemas.security import User # Import User schema
 from app.db import get_sync_db_engine
+from sqlalchemy import update as _update
+from app.db.models import benchmark_runs_table
 import secrets
 import re
 
@@ -81,6 +84,9 @@ async def generate_test_set_api(
 async def run_benchmark_api(
     agent_name: str = Body(..., embed=True, description="The name of the agent."),
     test_set: List[Dict[str, Any]] = Body(..., description="The test set as a JSON array of objects."),
+    purpose: str = Body("", embed=True, description="Purpose or change note for audit."),
+    tags: List[str] = Body([], embed=True, description="Tags for audit/governance."),
+    dataset_id: Optional[str] = Body(None, embed=True, description="Dataset identifier for provenance and audit."),
     bg_tasks: BackgroundTasks = None,
     current_user: User = Depends(PermissionChecker(["evaluation:run_benchmark"])),
 ):
@@ -113,9 +119,15 @@ async def run_benchmark_api(
                 agent_config,
                 test_set,
                 run_id=run_id,
-                dataset_id=None,
+                dataset_id=dataset_id,
                 sync_engine=engine,
-                export_csv_path=None  # benchmark will use the same csv_path we computed above
+                export_csv_path=None,  # benchmark will use the same csv_path we computed above
+                audit_info={
+                    "requested_by": current_user.username,
+                    "purpose": purpose,
+                    "tags": tags or [],
+                    "ip": getattr(current_user, "last_ip", None)
+                }
             )
             logger.info(f"Benchmark for '{agent_name}' completed. run_id={run_id}")
         except Exception as e:
@@ -124,6 +136,28 @@ async def run_benchmark_api(
     bg_tasks.add_task(_run_and_save_benchmark_sync)
     # NEW: include csv_path so clients can poll for it
     return {"status": "Benchmark started.", "agent": agent_name, "run_id": run_id, "csv_path": csv_path}
+@router.post("/benchmark/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+async def cancel_benchmark(
+    run_id: str = _Path(..., description="Benchmark run ID to cancel."),
+    current_user: User = Depends(PermissionChecker(["evaluation:run_benchmark"]))
+):
+    try:
+        engine = get_sync_db_engine()
+        with engine.begin() as conn:
+            res = conn.execute(
+                _update(benchmark_runs_table)
+                .where(benchmark_runs_table.c.run_id == run_id)
+                .where(benchmark_runs_table.c.status == "running")
+                .values(status="aborted")
+            )
+            if res.rowcount == 0:
+                # Either not found or not running
+                return {"status": "noop", "message": "Run not found or not in running state."}
+        logger.info(f"User '{current_user.username}' requested cancel for run_id={run_id}")
+        return {"status": "cancelled", "run_id": run_id}
+    except Exception as e:
+        logger.error(f"Failed to cancel benchmark {run_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to cancel benchmark")
 
 
 @router.get("/test-sets")

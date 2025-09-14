@@ -395,6 +395,15 @@ function renderBenchmarks(benchmarks) {
                     <span class="status-badge ${getStatusClass(benchmark.status)}">
                         ${getStatusText(benchmark.status)}
                     </span>
+                    ${benchmark.status === 'running' ? `
+                        <button class="btn-icon btn-warning" onclick="event.stopPropagation(); cancelBenchmark('${benchmark.run_id}')" title="Cancel Benchmark">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="15" y1="9" x2="9" y2="15"></line>
+                                <line x1="9" y1="9" x2="15" y2="15"></line>
+                            </svg>
+                        </button>
+                    ` : ''}
                     <button class="btn-icon btn-delete" onclick="event.stopPropagation(); deleteBenchmark('${benchmark.run_id}')" title="Delete Benchmark">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M3 6h18"></path>
@@ -425,6 +434,30 @@ function renderBenchmarks(benchmarks) {
                             <span class="metric-label">Relevance</span>
                             <span class="metric-value">${benchmark.summary_metrics.avg_relevance?.toFixed(3) || 'N/A'}</span>
                         </div>
+                        ${benchmark.summary_metrics.safety_pass_rate !== undefined ? `
+                            <div class="metric-item enterprise-metric">
+                                <span class="metric-label">Safety Pass Rate</span>
+                                <span class="metric-value ${benchmark.summary_metrics.safety_pass_rate >= 0.8 ? 'metric-good' : 'metric-warning'}">${(benchmark.summary_metrics.safety_pass_rate * 100).toFixed(1)}%</span>
+                            </div>
+                        ` : ''}
+                        ${benchmark.summary_metrics.pii_leak_rate !== undefined ? `
+                            <div class="metric-item enterprise-metric">
+                                <span class="metric-label">PII Leak Rate</span>
+                                <span class="metric-value ${benchmark.summary_metrics.pii_leak_rate <= 0.1 ? 'metric-good' : 'metric-danger'}">${(benchmark.summary_metrics.pii_leak_rate * 100).toFixed(1)}%</span>
+                            </div>
+                        ` : ''}
+                        ${benchmark.summary_metrics.toxicity_rate !== undefined ? `
+                            <div class="metric-item enterprise-metric">
+                                <span class="metric-label">Toxicity Rate</span>
+                                <span class="metric-value ${benchmark.summary_metrics.toxicity_rate <= 0.05 ? 'metric-good' : 'metric-warning'}">${(benchmark.summary_metrics.toxicity_rate * 100).toFixed(1)}%</span>
+                            </div>
+                        ` : ''}
+                        ${benchmark.summary_metrics.multi_turn_items !== undefined ? `
+                            <div class="metric-item enterprise-metric">
+                                <span class="metric-label">Multi-turn Items</span>
+                                <span class="metric-value">${benchmark.summary_metrics.multi_turn_items}</span>
+                            </div>
+                        ` : ''}
                     </div>
                 ` : ''}
             </div>
@@ -705,7 +738,10 @@ async function runBenchmark() {
         agent_name: formData.get('agent_name'),
         test_set_file: formData.get('test_set_file'),
         run_id: formData.get('run_id') || null,
-        export_csv: formData.get('export_csv') || null
+        export_csv: formData.get('export_csv') || null,
+        dataset_id: formData.get('dataset_id') || null,
+        purpose: formData.get('purpose') || '',
+        tags: formData.get('tags') ? formData.get('tags').split(',').map(t => t.trim()).filter(t => t) : []
     };
     
     if (!data.agent_name || !data.test_set_file) {
@@ -725,7 +761,10 @@ async function runBenchmark() {
             },
             body: JSON.stringify({
                 agent_name: data.agent_name,
-                test_set: testSetData
+                test_set: testSetData,
+                dataset_id: data.dataset_id,
+                purpose: data.purpose,
+                tags: data.tags
             })
         });
         
@@ -981,9 +1020,16 @@ function renderBenchmarkResults(benchmark) {
     const content = document.getElementById('benchmark-results-content');
     
     const metrics = benchmark.summary_metrics || {};
+    const config = benchmark.config_snapshot || {};
+    const audit = config.audit || {};
+    const dataset = config.dataset_meta || {};
+    
+    // Generate LLM insights based on metrics
+    const insights = generateBenchmarkInsights(metrics, benchmark.status);
     
     content.innerHTML = `
         <div class="benchmark-results">
+            <!-- Header Section -->
             <div class="results-header">
                 <div class="results-info">
                     <h3>${benchmark.agent_name}</h3>
@@ -998,6 +1044,32 @@ function renderBenchmarkResults(benchmark) {
                 </div>
             </div>
             
+            <!-- Executive Summary -->
+            <div class="results-summary">
+                <h4>Executive Summary</h4>
+                <div class="summary-content">
+                    <div class="summary-metrics">
+                        <div class="summary-metric">
+                            <span class="summary-label">Total Items</span>
+                            <span class="summary-value">${benchmark.total_items || 0}</span>
+                        </div>
+                        <div class="summary-metric">
+                            <span class="summary-label">Completed</span>
+                            <span class="summary-value">${benchmark.completed_items || 0}</span>
+                        </div>
+                        <div class="summary-metric">
+                            <span class="summary-label">Success Rate</span>
+                            <span class="summary-value">${((benchmark.completed_items || 0) / (benchmark.total_items || 1) * 100).toFixed(1)}%</span>
+                        </div>
+                        <div class="summary-metric">
+                            <span class="summary-label">Duration</span>
+                            <span class="summary-value">${calculateDuration(benchmark.started_at, benchmark.ended_at)}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Performance Metrics -->
             <div class="results-metrics">
                 <h4>Performance Metrics</h4>
                 <div class="metrics-grid">
@@ -1013,6 +1085,10 @@ function renderBenchmarkResults(benchmark) {
                             <div class="metric-row">
                                 <span class="metric-label">nDCG@10</span>
                                 <span class="metric-value">${metrics.avg_ndcg_at_10?.toFixed(3) || 'N/A'}</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">Hit@K</span>
+                                <span class="metric-value">${metrics.avg_hit_at_k?.toFixed(3) || 'N/A'}</span>
                             </div>
                         </div>
                     </div>
@@ -1054,6 +1130,96 @@ function renderBenchmarkResults(benchmark) {
                                 <span class="metric-label">Avg Generation Time</span>
                                 <span class="metric-value">${metrics.avg_generation_s?.toFixed(3) || 'N/A'}s</span>
                             </div>
+                            <div class="metric-row">
+                                <span class="metric-label">Total Cost</span>
+                                <span class="metric-value">$${metrics.total_cost_usd?.toFixed(4) || 'N/A'}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Enterprise Metrics -->
+            ${renderEnterpriseMetrics(metrics)}
+            
+            <!-- LLM Generated Insights -->
+            <div class="results-insights">
+                <h4>AI Insights</h4>
+                <div class="insights-content">
+                    ${insights.map(insight => `
+                        <div class="insight-item ${insight.type}">
+                            <div class="insight-icon">
+                                ${insight.type === 'positive' ? '✓' : insight.type === 'warning' ? '⚠' : 'ℹ'}
+                            </div>
+                            <div class="insight-text">
+                                <strong>${insight.title}</strong>
+                                <p>${insight.description}</p>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+            
+            <!-- Test Dataset Information -->
+            <div class="results-dataset">
+                <h4>Test Dataset</h4>
+                <div class="dataset-info">
+                    <div class="dataset-row">
+                        <span class="dataset-label">Dataset ID:</span>
+                        <span class="dataset-value">${dataset.dataset_id || 'N/A'}</span>
+                    </div>
+                    <div class="dataset-row">
+                        <span class="dataset-label">Dataset Size:</span>
+                        <span class="dataset-value">${dataset.dataset_size || 'N/A'} items</span>
+                    </div>
+                    <div class="dataset-row">
+                        <span class="dataset-label">Checksum:</span>
+                        <span class="dataset-value">${dataset.dataset_checksum ? dataset.dataset_checksum.substring(0, 8) + '...' : 'N/A'}</span>
+                    </div>
+                    <div class="dataset-row">
+                        <span class="dataset-label">Test Set File:</span>
+                        <span class="dataset-value">${config.test_set_file || 'N/A'}</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Audit Trail & Metadata -->
+            <div class="results-metadata">
+                <h4>Audit Trail & Metadata</h4>
+                <div class="metadata-grid">
+                    <div class="metadata-section">
+                        <h5>Run Information</h5>
+                        <div class="metadata-row">
+                            <span class="metadata-label">Requested By:</span>
+                            <span class="metadata-value">${audit.requested_by || 'System'}</span>
+                        </div>
+                        <div class="metadata-row">
+                            <span class="metadata-label">Purpose:</span>
+                            <span class="metadata-value">${audit.purpose || 'N/A'}</span>
+                        </div>
+                        <div class="metadata-row">
+                            <span class="metadata-label">Tags:</span>
+                            <span class="metadata-value">${audit.tags ? audit.tags.join(', ') : 'N/A'}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="metadata-section">
+                        <h5>Configuration</h5>
+                        <div class="metadata-row">
+                            <span class="metadata-label">LLM Model:</span>
+                            <span class="metadata-value">${config.llm_model || 'N/A'}</span>
+                        </div>
+                        <div class="metadata-row">
+                            <span class="metadata-label">Embedding Model:</span>
+                            <span class="metadata-value">${config.embedding_model || 'N/A'}</span>
+                        </div>
+                        <div class="metadata-row">
+                            <span class="metadata-label">Vector Store:</span>
+                            <span class="metadata-value">${config.vector_store || 'N/A'}</span>
+                        </div>
+                        <div class="metadata-row">
+                            <span class="metadata-label">Temperature:</span>
+                            <span class="metadata-value">${config.temperature || 'N/A'}</span>
                         </div>
                     </div>
                 </div>
@@ -1091,6 +1257,157 @@ function renderBenchmarkResults(benchmark) {
             ` : ''}
         </div>
     `;
+}
+
+/**
+ * Generate benchmark insights based on metrics
+ */
+function generateBenchmarkInsights(metrics, status) {
+    const insights = [];
+    
+    // Performance insights
+    if (metrics.avg_mrr && metrics.avg_mrr > 0.7) {
+        insights.push({
+            type: 'positive',
+            title: 'Excellent Retrieval Performance',
+            description: `MRR of ${metrics.avg_mrr.toFixed(3)} indicates strong retrieval accuracy. The system is finding relevant documents effectively.`
+        });
+    } else if (metrics.avg_mrr && metrics.avg_mrr < 0.4) {
+        insights.push({
+            type: 'warning',
+            title: 'Retrieval Performance Needs Improvement',
+            description: `MRR of ${metrics.avg_mrr.toFixed(3)} suggests the retrieval system may need tuning or better document indexing.`
+        });
+    }
+    
+    // Response quality insights
+    if (metrics.avg_faithfulness && metrics.avg_faithfulness > 0.8) {
+        insights.push({
+            type: 'positive',
+            title: 'High Response Faithfulness',
+            description: `Faithfulness score of ${metrics.avg_faithfulness.toFixed(3)} shows responses are well-grounded in retrieved content.`
+        });
+    }
+    
+    // Enterprise metrics insights
+    if (metrics.safety_pass_rate !== undefined) {
+        if (metrics.safety_pass_rate > 0.9) {
+            insights.push({
+                type: 'positive',
+                title: 'Strong Safety Performance',
+                description: `${(metrics.safety_pass_rate * 100).toFixed(1)}% safety pass rate indicates robust safety controls.`
+            });
+        } else if (metrics.safety_pass_rate < 0.7) {
+            insights.push({
+                type: 'warning',
+                title: 'Safety Concerns Detected',
+                description: `${(metrics.safety_pass_rate * 100).toFixed(1)}% safety pass rate suggests potential safety issues that need attention.`
+            });
+        }
+    }
+    
+    if (metrics.pii_leak_rate !== undefined && metrics.pii_leak_rate > 0.05) {
+        insights.push({
+            type: 'warning',
+            title: 'PII Leakage Detected',
+            description: `${(metrics.pii_leak_rate * 100).toFixed(1)}% PII leak rate detected. Consider implementing stronger PII detection and redaction.`
+        });
+    }
+    
+    // Cost insights
+    if (metrics.total_cost_usd && metrics.total_cost_usd > 1.0) {
+        insights.push({
+            type: 'info',
+            title: 'High Cost Run',
+            description: `Total cost of $${metrics.total_cost_usd.toFixed(4)} is significant. Consider optimizing model usage or reducing test set size.`
+        });
+    }
+    
+    // Status-based insights
+    if (status === 'failed') {
+        insights.push({
+            type: 'warning',
+            title: 'Benchmark Failed',
+            description: 'This benchmark run failed, likely due to quality gate violations or system errors. Check the error details.'
+        });
+    }
+    
+    return insights;
+}
+
+/**
+ * Render enterprise metrics section
+ */
+function renderEnterpriseMetrics(metrics) {
+    const hasEnterpriseMetrics = metrics.safety_pass_rate !== undefined || 
+                                metrics.pii_leak_rate !== undefined || 
+                                metrics.toxicity_rate !== undefined ||
+                                metrics.multi_turn_items !== undefined;
+    
+    if (!hasEnterpriseMetrics) return '';
+    
+    return `
+        <div class="results-enterprise">
+            <h4>Enterprise Metrics</h4>
+            <div class="metrics-grid">
+                ${metrics.safety_pass_rate !== undefined ? `
+                    <div class="metric-card enterprise-metric">
+                        <div class="metric-header">
+                            <h5>Safety & Security</h5>
+                        </div>
+                        <div class="metric-values">
+                            <div class="metric-row">
+                                <span class="metric-label">Safety Pass Rate</span>
+                                <span class="metric-value ${metrics.safety_pass_rate >= 0.8 ? 'metric-good' : 'metric-warning'}">${(metrics.safety_pass_rate * 100).toFixed(1)}%</span>
+                            </div>
+                            ${metrics.pii_leak_rate !== undefined ? `
+                                <div class="metric-row">
+                                    <span class="metric-label">PII Leak Rate</span>
+                                    <span class="metric-value ${metrics.pii_leak_rate <= 0.1 ? 'metric-good' : 'metric-danger'}">${(metrics.pii_leak_rate * 100).toFixed(1)}%</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                ` : ''}
+                
+                ${metrics.toxicity_rate !== undefined ? `
+                    <div class="metric-card enterprise-metric">
+                        <div class="metric-header">
+                            <h5>Content Quality</h5>
+                        </div>
+                        <div class="metric-values">
+                            <div class="metric-row">
+                                <span class="metric-label">Toxicity Rate</span>
+                                <span class="metric-value ${metrics.toxicity_rate <= 0.05 ? 'metric-good' : 'metric-warning'}">${(metrics.toxicity_rate * 100).toFixed(1)}%</span>
+                            </div>
+                            ${metrics.multi_turn_items !== undefined ? `
+                                <div class="metric-row">
+                                    <span class="metric-label">Multi-turn Items</span>
+                                    <span class="metric-value">${metrics.multi_turn_items}</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * Calculate duration between two timestamps
+ */
+function calculateDuration(startTime, endTime) {
+    if (!startTime || !endTime) return 'N/A';
+    
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    const diffMs = end - start;
+    
+    if (diffMs < 1000) return `${diffMs}ms`;
+    if (diffMs < 60000) return `${(diffMs / 1000).toFixed(1)}s`;
+    if (diffMs < 3600000) return `${(diffMs / 60000).toFixed(1)}m`;
+    return `${(diffMs / 3600000).toFixed(1)}h`;
 }
 
 /**
@@ -1294,6 +1611,37 @@ function refreshResults() {
     loadResultsAnalysis();
 }
 
+/**
+ * Cancel a running benchmark
+ */
+async function cancelBenchmark(runId) {
+    if (!confirm('Are you sure you want to cancel this benchmark run?')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE_URL}/evaluate/benchmark/${runId}/cancel`, {
+            method: 'POST',
+            headers: {
+                'X-API-Key': loggedInUserToken
+            }
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            showToast(`Benchmark ${runId} cancelled successfully`, 'success');
+            // Refresh the benchmarks list to show updated status
+            setTimeout(() => loadBenchmarks(), 1000);
+        } else {
+            const error = await response.json();
+            showToast(`Failed to cancel benchmark: ${error.detail}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error cancelling benchmark:', error);
+        showToast('Error cancelling benchmark', 'error');
+    }
+}
+
 // Export functions for global access
 window.showCreateTestSetModal = showCreateTestSetModal;
 window.hideCreateTestSetModal = hideCreateTestSetModal;
@@ -1307,6 +1655,7 @@ window.viewBenchmarkResults = viewBenchmarkResults;
 window.downloadBenchmarkResults = downloadBenchmarkResults;
 window.deleteTestSet = deleteTestSet;
 window.deleteBenchmark = deleteBenchmark;
+window.cancelBenchmark = cancelBenchmark;
 window.refreshTestSets = refreshTestSets;
 window.refreshBenchmarks = refreshBenchmarks;
 window.refreshResults = refreshResults;

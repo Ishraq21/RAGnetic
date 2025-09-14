@@ -57,7 +57,7 @@ class UploadValidationSecurityTests:
     
     def test_supported_file_types(self):
         """Test supported file types validation"""
-        print("🧪 Testing supported file types...")
+        print(" Testing supported file types...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -98,7 +98,7 @@ class UploadValidationSecurityTests:
     
     def test_unsupported_file_types(self):
         """Test unsupported file types rejection"""
-        print("🧪 Testing unsupported file types...")
+        print(" Testing unsupported file types...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -144,7 +144,7 @@ class UploadValidationSecurityTests:
     
     def test_file_size_limits(self):
         """Test file size limits"""
-        print("🧪 Testing file size limits...")
+        print(" Testing file size limits...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -186,7 +186,7 @@ class UploadValidationSecurityTests:
     
     def test_filename_security(self):
         """Test filename security measures"""
-        print("🧪 Testing filename security...")
+        print(" Testing filename security...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -241,7 +241,7 @@ class UploadValidationSecurityTests:
     
     def test_mime_type_validation(self):
         """Test MIME type validation"""
-        print("🧪 Testing MIME type validation...")
+        print(" Testing MIME type validation...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -283,7 +283,7 @@ class UploadValidationSecurityTests:
     
     def test_malicious_content_detection(self):
         """Test malicious content detection"""
-        print("🧪 Testing malicious content detection...")
+        print(" Testing malicious content detection...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -321,7 +321,7 @@ class UploadValidationSecurityTests:
     
     def test_zip_bomb_protection(self):
         """Test ZIP bomb protection"""
-        print("🧪 Testing ZIP bomb protection...")
+        print(" Testing ZIP bomb protection...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -345,7 +345,7 @@ class UploadValidationSecurityTests:
     
     def test_empty_file_handling(self):
         """Test empty file handling"""
-        print("🧪 Testing empty file handling...")
+        print(" Testing empty file handling...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -369,7 +369,7 @@ class UploadValidationSecurityTests:
     
     def test_unicode_handling(self):
         """Test Unicode and special character handling"""
-        print("🧪 Testing Unicode handling...")
+        print(" Testing Unicode handling...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -408,7 +408,7 @@ class UploadValidationSecurityTests:
     
     def test_concurrent_malicious_uploads(self):
         """Test concurrent malicious uploads"""
-        print("🧪 Testing concurrent malicious uploads...")
+        print(" Testing concurrent malicious uploads...")
         
         import concurrent.futures
         import threading
@@ -500,7 +500,7 @@ class UploadValidationSecurityTests:
     
     def test_authorization_security(self):
         """Test authorization security"""
-        print("🧪 Testing authorization security...")
+        print(" Testing authorization security...")
         
         # Test without authorization
         test_file = self.create_test_file("auth_test.txt", "Authorization test content")

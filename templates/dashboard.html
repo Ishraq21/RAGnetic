@@ -205,29 +205,6 @@
                     </div>
                 </div>
                 
-                <div class="section-card">
-                    <div class="section-header">
-                        <h3>Security Overview</h3>
-                    </div>
-                    <div class="metrics-grid">
-                        <div class="metric-tile">
-                            <div class="metric-name">Active API Keys</div>
-                            <div class="metric-value" id="security-api-keys">—</div>
-                        </div>
-                        <div class="metric-tile">
-                            <div class="metric-name">Failed Auth (24h)</div>
-                            <div class="metric-value" id="security-failed-auth">—</div>
-                        </div>
-                        <div class="metric-tile">
-                            <div class="metric-name">Rate Limited (24h)</div>
-                            <div class="metric-value" id="security-rate-limited">—</div>
-                        </div>
-                        <div class="metric-tile">
-                            <div class="metric-name">Active Sessions</div>
-                            <div class="metric-value" id="security-active-sessions">—</div>
-                        </div>
-                    </div>
-                </div>
 
                 <div class="section-card">
                     <div class="section-header">
@@ -2185,9 +2162,22 @@
                                 <small>Custom identifier for this benchmark run</small>
                             </div>
                             <div class="form-group">
-                                <label for="benchmark-export-csv">Export CSV (Optional)</label>
-                                <input type="text" id="benchmark-export-csv" name="export_csv" placeholder="Auto-generated if empty">
-                                <small>Custom CSV export path</small>
+                                <label for="benchmark-dataset-id">Dataset ID (Optional)</label>
+                                <input type="text" id="benchmark-dataset-id" name="dataset_id" placeholder="e.g., dataset-v1.0">
+                                <small>Dataset identifier for audit and provenance</small>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="benchmark-purpose">Purpose/Notes (Optional)</label>
+                                <input type="text" id="benchmark-purpose" name="purpose" placeholder="e.g., Testing new model, Pre-release validation">
+                                <small>Purpose or change notes for audit trail</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="benchmark-tags">Tags (Optional)</label>
+                                <input type="text" id="benchmark-tags" name="tags" placeholder="e.g., test, enterprise, safety">
+                                <small>Comma-separated tags for governance</small>
                             </div>
                         </div>
                     </div>

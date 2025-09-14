@@ -108,7 +108,7 @@ class MasterUploadTestRunner:
         successful_suites = sum(1 for result in self.test_results.values() if result["success"])
         total_suites = len(self.test_results)
         
-        print(f"📈 Overall Results:")
+        print(f" Overall Results:")
         print(f"   Total Test Suites: {total_suites}")
         print(f"   Successful: {successful_suites}")
         print(f"   Failed: {total_suites - successful_suites}")

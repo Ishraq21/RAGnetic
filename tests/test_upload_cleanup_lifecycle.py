@@ -56,7 +56,7 @@ class UploadCleanupLifecycleTests:
     
     def test_temporary_document_creation(self):
         """Test temporary document creation in database"""
-        print("🧪 Testing temporary document creation...")
+        print(" Testing temporary document creation...")
         
         # Create test file
         test_file = self.create_test_file("lifecycle_test.txt", "Lifecycle test content")
@@ -103,7 +103,7 @@ class UploadCleanupLifecycleTests:
     
     def test_document_chunks_creation(self):
         """Test document chunks creation"""
-        print("🧪 Testing document chunks creation...")
+        print(" Testing document chunks creation...")
         
         # Create test file with substantial content
         content = "# Test Document\n\nThis is a test document with multiple paragraphs.\n\n" * 20
@@ -155,7 +155,7 @@ class UploadCleanupLifecycleTests:
     
     def test_vector_store_creation(self):
         """Test vector store creation"""
-        print("🧪 Testing vector store creation...")
+        print(" Testing vector store creation...")
         
         # Create test file
         test_file = self.create_test_file("vectorstore_test.txt", "Vector store test content")
@@ -197,7 +197,7 @@ class UploadCleanupLifecycleTests:
     
     def test_file_storage_structure(self):
         """Test file storage structure"""
-        print("🧪 Testing file storage structure...")
+        print(" Testing file storage structure...")
         
         # Create test file
         test_file = self.create_test_file("storage_test.txt", "Storage structure test content")
@@ -239,7 +239,7 @@ class UploadCleanupLifecycleTests:
     
     def test_manual_cleanup(self):
         """Test manual cleanup functionality"""
-        print("🧪 Testing manual cleanup...")
+        print(" Testing manual cleanup...")
         
         # Create test file
         test_file = self.create_test_file("cleanup_test.txt", "Cleanup test content")
@@ -308,7 +308,7 @@ class UploadCleanupLifecycleTests:
     
     def test_expiration_cleanup(self):
         """Test expiration-based cleanup"""
-        print("🧪 Testing expiration-based cleanup...")
+        print(" Testing expiration-based cleanup...")
         
         # Create test file
         test_file = self.create_test_file("expiration_test.txt", "Expiration test content")
@@ -368,7 +368,7 @@ class UploadCleanupLifecycleTests:
     
     def test_cleanup_robustness(self):
         """Test cleanup robustness with missing files"""
-        print("🧪 Testing cleanup robustness...")
+        print(" Testing cleanup robustness...")
         
         # Create a temporary document record manually (simulating orphaned record)
         temp_doc_id = str(uuid.uuid4())
@@ -409,7 +409,7 @@ class UploadCleanupLifecycleTests:
     
     def test_cleanup_performance(self):
         """Test cleanup performance with many documents"""
-        print("🧪 Testing cleanup performance...")
+        print(" Testing cleanup performance...")
         
         # Create multiple temporary documents
         num_docs = 10
@@ -470,7 +470,7 @@ class UploadCleanupLifecycleTests:
     
     def test_cleanup_transaction_safety(self):
         """Test cleanup transaction safety"""
-        print("🧪 Testing cleanup transaction safety...")
+        print(" Testing cleanup transaction safety...")
         
         # This test would verify that cleanup operations are atomic
         # and don't leave the system in an inconsistent state

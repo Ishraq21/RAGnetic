@@ -260,7 +260,7 @@ class UploadTestSummary:
     
     def analyze_test_results(self):
         """Analyze test execution results"""
-        print("\n📈 Analyzing Test Results...")
+        print("\n Analyzing Test Results...")
         
         # Check for test report files
         report_files = [

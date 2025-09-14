@@ -101,7 +101,7 @@ class FinalComprehensiveUploadTests:
     
     def test_upload_schema_compliance(self):
         """Test that uploads follow RAGnetic schema and structure"""
-        print("🧪 Testing upload schema compliance...")
+        print(" Testing upload schema compliance...")
         
         try:
             # Test agent file upload schema
@@ -144,7 +144,7 @@ class FinalComprehensiveUploadTests:
     
     def test_training_dataset_schema_compliance(self):
         """Test training dataset upload schema compliance"""
-        print("🧪 Testing training dataset schema compliance...")
+        print(" Testing training dataset schema compliance...")
         
         try:
             # Create valid JSONL training data following RAGnetic schema
@@ -196,7 +196,7 @@ class FinalComprehensiveUploadTests:
     
     def test_temporary_document_schema_compliance(self):
         """Test temporary document upload schema compliance"""
-        print("🧪 Testing temporary document schema compliance...")
+        print(" Testing temporary document schema compliance...")
         
         try:
             # Create test document
@@ -283,7 +283,7 @@ class FinalComprehensiveUploadTests:
     
     def test_file_validation_schema_compliance(self):
         """Test file validation follows RAGnetic schema"""
-        print("🧪 Testing file validation schema compliance...")
+        print(" Testing file validation schema compliance...")
         
         try:
             headers = {"X-API-Key": self.test_api_key}
@@ -345,7 +345,7 @@ class FinalComprehensiveUploadTests:
     
     def test_database_schema_compliance(self):
         """Test database schema compliance"""
-        print("🧪 Testing database schema compliance...")
+        print(" Testing database schema compliance...")
         
         try:
             # Test temporary_documents_table schema
@@ -379,7 +379,7 @@ class FinalComprehensiveUploadTests:
     
     def test_directory_structure_schema_compliance(self):
         """Test directory structure follows RAGnetic schema"""
-        print("🧪 Testing directory structure schema compliance...")
+        print(" Testing directory structure schema compliance...")
         
         try:
             paths = get_path_settings()
@@ -411,7 +411,7 @@ class FinalComprehensiveUploadTests:
     
     def test_cleanup_schema_compliance(self):
         """Test cleanup follows RAGnetic schema"""
-        print("🧪 Testing cleanup schema compliance...")
+        print(" Testing cleanup schema compliance...")
         
         try:
             if not self.upload_results:
