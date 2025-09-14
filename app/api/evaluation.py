@@ -87,6 +87,7 @@ async def run_benchmark_api(
     purpose: str = Body("", embed=True, description="Purpose or change note for audit."),
     tags: List[str] = Body([], embed=True, description="Tags for audit/governance."),
     dataset_id: Optional[str] = Body(None, embed=True, description="Dataset identifier for provenance and audit."),
+    test_set_file: Optional[str] = Body(None, embed=True, description="Original test set filename for metadata."),
     bg_tasks: BackgroundTasks = None,
     current_user: User = Depends(PermissionChecker(["evaluation:run_benchmark"])),
 ):
@@ -115,18 +116,27 @@ async def run_benchmark_api(
     def _run_and_save_benchmark_sync():
         try:
             engine = get_sync_db_engine()
+            
+            # Improve dataset_id if not provided
+            effective_dataset_id = dataset_id
+            if not effective_dataset_id and test_set_file:
+                # Extract dataset name from filename (remove extension)
+                import os
+                effective_dataset_id = os.path.splitext(test_set_file)[0]
+            
             run_benchmark(
                 agent_config,
                 test_set,
                 run_id=run_id,
-                dataset_id=dataset_id,
+                dataset_id=effective_dataset_id,
                 sync_engine=engine,
                 export_csv_path=None,  # benchmark will use the same csv_path we computed above
                 audit_info={
                     "requested_by": current_user.username,
-                    "purpose": purpose,
+                    "purpose": purpose or None,  # Convert empty string to None
                     "tags": tags or [],
-                    "ip": getattr(current_user, "last_ip", None)
+                    "ip": getattr(current_user, "last_ip", None),
+                    "test_set_file": test_set_file  # Add original filename to audit info
                 }
             )
             logger.info(f"Benchmark for '{agent_name}' completed. run_id={run_id}")
@@ -430,9 +440,165 @@ async def get_benchmark_results(
                     summary_metrics['avg_retrieval_s'] = sum(retrieval_times) / len(retrieval_times) if retrieval_times else 0
                     summary_metrics['avg_generation_s'] = sum(generation_times) / len(generation_times) if generation_times else 0
             
+            # Enterprise metrics from database
+            try:
+                from sqlalchemy import select
+                from app.db.models import benchmark_runs_table
+                
+                engine = get_sync_db_engine()
+                with engine.connect() as conn:
+                    stmt = select(benchmark_runs_table).where(benchmark_runs_table.c.run_id == run_id)
+                    result = conn.execute(stmt).fetchone()
+                    
+                    if result and result.summary_metrics:
+                        import json
+                        try:
+                            db_summary = json.loads(result.summary_metrics) if isinstance(result.summary_metrics, str) else result.summary_metrics
+                            # Add enterprise metrics from database
+                            enterprise_metrics = ['safety_pass_rate', 'pii_leak_rate', 'toxicity_rate', 'multi_turn_items', 'bias_delta']
+                            for metric in enterprise_metrics:
+                                if metric in db_summary:
+                                    summary_metrics[metric] = db_summary[metric]
+                            
+                            # Add cost metrics
+                            if 'avg_total_cost_usd' in db_summary:
+                                summary_metrics['total_cost_usd'] = db_summary['avg_total_cost_usd']
+                            
+                            # Add hit@k metrics
+                            if 'avg_retrieval_hit@5' in db_summary:
+                                summary_metrics['avg_hit_at_k'] = db_summary['avg_retrieval_hit@5']
+                            
+                        except Exception as e:
+                            logger.warning(f"Could not parse database summary metrics: {e}")
+                
+            except Exception as e:
+                logger.warning(f"Could not fetch enterprise metrics from database: {e}")
+            
             # Get file stats
             file_stat = os.stat(benchmark_file)
             
+            # Try to get additional data from database
+            config_snapshot = {}
+            audit_info = {}
+            dataset_meta = {}
+            
+            try:
+                from sqlalchemy import select
+                from app.db.models import benchmark_runs_table
+                
+                # Get database connection
+                engine = get_sync_db_engine()
+                with engine.connect() as conn:
+                    # Query database for additional metadata
+                    stmt = select(benchmark_runs_table).where(benchmark_runs_table.c.run_id == run_id)
+                    result = conn.execute(stmt).fetchone()
+                    
+                    if result:
+                        # Parse config_snapshot JSON
+                        if result.config_snapshot:
+                            import json
+                            try:
+                                config_snapshot = json.loads(result.config_snapshot) if isinstance(result.config_snapshot, str) else result.config_snapshot
+                                audit_info = config_snapshot.get('audit', {})
+                                dataset_meta = config_snapshot.get('dataset_meta', {})
+                            except:
+                                pass
+                        
+                        # Use database timestamps if available
+                        started_at = result.started_at.isoformat() if result.started_at else datetime.fromtimestamp(file_stat.st_ctime).isoformat()
+                        ended_at = result.ended_at.isoformat() if result.ended_at else datetime.fromtimestamp(file_stat.st_mtime).isoformat()
+                    else:
+                        started_at = datetime.fromtimestamp(file_stat.st_ctime).isoformat()
+                        ended_at = datetime.fromtimestamp(file_stat.st_mtime).isoformat()
+                
+            except Exception as e:
+                logger.warning(f"Could not fetch database metadata for run_id '{run_id}': {e}")
+                started_at = datetime.fromtimestamp(file_stat.st_ctime).isoformat()
+                ended_at = datetime.fromtimestamp(file_stat.st_mtime).isoformat()
+            
+            # Process config_snapshot to fix frontend compatibility issues
+            processed_config = config_snapshot.copy() if config_snapshot else {}
+            
+            # Fix dataset metadata field names for frontend compatibility
+            if 'dataset_meta' in processed_config:
+                dataset_meta = processed_config['dataset_meta']
+                # Map backend field names to frontend expected names
+                dataset_meta['dataset_size'] = dataset_meta.get('size')
+                dataset_meta['dataset_checksum'] = dataset_meta.get('checksum')
+                
+                # Improve dataset_id with fallback
+                dataset_id = dataset_meta.get('dataset_id')
+                if not dataset_id:
+                    # Try to derive from checksum or provide meaningful fallback
+                    checksum = dataset_meta.get('checksum')
+                    if checksum:
+                        dataset_id = f"dataset_{checksum[:8]}"
+                    else:
+                        dataset_id = f"benchmark_{run_id}"
+                dataset_meta['dataset_id'] = dataset_id
+            
+            # Fix vector store display - convert object to readable string
+            if 'vector_store' in processed_config and isinstance(processed_config['vector_store'], dict):
+                vs = processed_config['vector_store']
+                vs_type = vs.get('type', 'Unknown')
+                vs_strategy = vs.get('retrieval_strategy', '')
+                if vs_strategy:
+                    processed_config['vector_store'] = f"{vs_type.upper()} ({vs_strategy})"
+                else:
+                    processed_config['vector_store'] = vs_type.upper()
+            
+            # Add temperature from config snapshot if available
+            temperature = processed_config.get('temperature')
+            if temperature is None:
+                # Try other possible sources
+                if 'benchmark' in processed_config:
+                    benchmark_config = processed_config['benchmark']
+                    temperature = benchmark_config.get('temperature')
+                
+                if temperature is None:
+                    temperature = processed_config.get('llm_temperature')
+            
+            # Set temperature with fallback for deterministic evaluation
+            if temperature is not None:
+                processed_config['temperature'] = temperature
+            else:
+                # For benchmarks, default is usually 0.0 (deterministic)
+                processed_config['temperature'] = 0.0
+            
+            # Fix audit info - convert empty strings to null for better frontend display
+            if 'audit' in processed_config:
+                audit = processed_config['audit']
+                if audit.get('purpose') == '':
+                    audit['purpose'] = None
+                if audit.get('tags') == []:
+                    audit['tags'] = None
+            
+            # Add test set file name from audit info or derive it
+            test_set_file = None
+            if 'audit' in processed_config and processed_config['audit'].get('test_set_file'):
+                original_filename = processed_config['audit']['test_set_file']
+                
+                # If filename has the pattern {name}_testset_{id}.json, extract the original name
+                if '_testset_' in original_filename and original_filename.endswith('.json'):
+                    # Extract the base name before '_testset_'
+                    base_name = original_filename.split('_testset_')[0]
+                    test_set_file = f"{base_name}.json"
+                else:
+                    # Use the filename as-is
+                    test_set_file = original_filename
+                    
+            elif 'dataset_meta' in processed_config and processed_config['dataset_meta'].get('dataset_id'):
+                dataset_id_val = processed_config['dataset_meta']['dataset_id']
+                if dataset_id_val and not dataset_id_val.startswith('dataset_') and not dataset_id_val.startswith('benchmark_'):
+                    # If it's a real dataset name, add .json extension
+                    test_set_file = f"{dataset_id_val}.json"
+                else:
+                    # For generated dataset IDs, provide a more generic name
+                    test_set_file = "test_set.json"
+            
+            if test_set_file:
+                processed_config['test_set_file'] = test_set_file
+
             return {
                 "run_id": run_id,
                 "agent_name": agent_name,
@@ -440,9 +606,10 @@ async def get_benchmark_results(
                 "status": "completed",
                 "total_items": len(df),
                 "completed_items": len(df),
-                "started_at": datetime.fromtimestamp(file_stat.st_ctime).isoformat(),
-                "ended_at": datetime.fromtimestamp(file_stat.st_mtime).isoformat(),
+                "started_at": started_at,
+                "ended_at": ended_at,
                 "summary_metrics": summary_metrics,
+                "config_snapshot": processed_config,
                 "size_bytes": file_stat.st_size
             }
             
@@ -455,6 +622,207 @@ async def get_benchmark_results(
     except Exception as e:
         logger.error(f"Error getting benchmark results for run_id '{run_id}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to get benchmark results")
+
+
+@router.post("/benchmarks/{run_id}/insights")
+async def generate_benchmark_insights(
+    run_id: str,
+    current_user: User = Depends(PermissionChecker(["evaluation:read_benchmarks"])),
+):
+    """
+    Generate AI-powered insights for a benchmark run.
+    """
+    try:
+        # Get benchmark results first
+        benchmark_dir = _APP_PATHS["BENCHMARK_DIR"]
+        if not os.path.exists(benchmark_dir):
+            raise HTTPException(status_code=404, detail="Benchmark directory not found")
+        
+        # Find the benchmark file
+        benchmark_file = None
+        for filename in os.listdir(benchmark_dir):
+            if filename.endswith('.csv') and filename.startswith('benchmark_'):
+                name_without_ext = filename.replace('.csv', '')
+                parts = name_without_ext.split('_')
+                if len(parts) >= 3:
+                    file_run_id = '_'.join(parts[2:])
+                    if file_run_id.startswith('agent_'):
+                        file_run_id = file_run_id[len('agent_'):]
+                    
+                    if file_run_id == run_id:
+                        benchmark_file = os.path.join(benchmark_dir, filename)
+                        break
+        
+        if not benchmark_file:
+            raise HTTPException(status_code=404, detail=f"Benchmark with run_id '{run_id}' not found")
+        
+        # Get summary metrics from database or calculate from CSV
+        summary_metrics = {}
+        
+        try:
+            from sqlalchemy import select
+            
+            engine = get_sync_db_engine()
+            with engine.connect() as conn:
+                stmt = select(benchmark_runs_table).where(benchmark_runs_table.c.run_id == run_id)
+                result = conn.execute(stmt).fetchone()
+            
+            if result and result.summary_metrics:
+                import json
+                summary_metrics = json.loads(result.summary_metrics) if isinstance(result.summary_metrics, str) else result.summary_metrics
+            else:
+                # Legacy benchmark - calculate metrics from CSV
+                logger.info(f"No database record found for {run_id}, calculating metrics from CSV")
+                try:
+                    import pandas as pd
+                    logger.info(f"Successfully imported pandas, reading CSV: {benchmark_file}")
+                except ImportError as e:
+                    logger.error(f"Failed to import pandas: {e}")
+                    raise HTTPException(status_code=500, detail="Failed to import pandas for CSV processing")
+                
+                try:
+                    df = pd.read_csv(benchmark_file)
+                    logger.info(f"Successfully read CSV with {len(df)} rows and columns: {list(df.columns)}")
+                except Exception as e:
+                    logger.error(f"Failed to read CSV file {benchmark_file}: {e}")
+                    raise HTTPException(status_code=500, detail=f"Failed to read CSV file: {e}")
+                
+                # Calculate basic metrics from CSV
+                if 'retrieval' in df.columns:
+                    retrieval_data = []
+                    for idx, row in df.iterrows():
+                        if pd.notna(row['retrieval']) and row['retrieval']:
+                            try:
+                                import ast
+                                retrieval_metrics = ast.literal_eval(row['retrieval']) if isinstance(row['retrieval'], str) else row['retrieval']
+                                retrieval_data.append(retrieval_metrics)
+                            except:
+                                continue
+                    
+                    if retrieval_data:
+                        mrr_values = [r.get('mrr', 0) for r in retrieval_data]
+                        ndcg_values = [r.get('ndcg@10', 0) for r in retrieval_data]
+                        summary_metrics['avg_mrr'] = sum(mrr_values) / len(mrr_values) if mrr_values else 0
+                        summary_metrics['avg_ndcg_at_10'] = sum(ndcg_values) / len(ndcg_values) if ndcg_values else 0
+                
+                if 'judge' in df.columns:
+                    judge_data = []
+                    for idx, row in df.iterrows():
+                        if pd.notna(row['judge']) and row['judge']:
+                            try:
+                                import ast
+                                judge_metrics = ast.literal_eval(row['judge']) if isinstance(row['judge'], str) else row['judge']
+                                judge_data.append(judge_metrics)
+                            except:
+                                continue
+                    
+                    if judge_data:
+                        faithfulness_values = [j.get('faithfulness', 0) for j in judge_data]
+                        relevance_values = [j.get('relevance', 0) for j in judge_data]
+                        conciseness_values = [j.get('conciseness', 0) for j in judge_data]
+                        coherence_values = [j.get('coherence', 0) for j in judge_data]
+                        
+                        summary_metrics['avg_faithfulness'] = sum(faithfulness_values) / len(faithfulness_values) if faithfulness_values else 0
+                        summary_metrics['avg_relevance'] = sum(relevance_values) / len(relevance_values) if relevance_values else 0
+                        summary_metrics['avg_conciseness'] = sum(conciseness_values) / len(conciseness_values) if conciseness_values else 0
+                        summary_metrics['avg_coherence'] = sum(coherence_values) / len(coherence_values) if coherence_values else 0
+                
+                if 'durations' in df.columns:
+                    duration_data = []
+                    for idx, row in df.iterrows():
+                        if pd.notna(row['durations']) and row['durations']:
+                            try:
+                                import ast
+                                durations = ast.literal_eval(row['durations']) if isinstance(row['durations'], str) else row['durations']
+                                duration_data.append(durations)
+                            except:
+                                continue
+                    
+                    if duration_data:
+                        retrieval_times = [d.get('retrieval_s', 0) for d in duration_data]
+                        generation_times = [d.get('generation_s', 0) for d in duration_data]
+                        
+                        summary_metrics['avg_retrieval_s'] = sum(retrieval_times) / len(retrieval_times) if retrieval_times else 0
+                        summary_metrics['avg_generation_s'] = sum(generation_times) / len(generation_times) if generation_times else 0
+            
+            # Connection closed automatically with context manager
+            
+        except Exception as e:
+            logger.error(f"Error fetching summary metrics: {e}")
+            raise HTTPException(status_code=500, detail="Failed to fetch summary metrics")
+        
+        # Generate fallback insights (LLM integration can be added later)
+        fallback_insights = []
+        
+        # Performance insights
+        mrr = summary_metrics.get('avg_mrr', 0)
+        if mrr > 0.7:
+            fallback_insights.append({
+                "title": "Excellent Retrieval Performance",
+                "description": f"MRR of {mrr:.3f} indicates strong retrieval accuracy. The system is finding relevant documents effectively.",
+                "type": "positive",
+                "priority": "medium"
+            })
+        elif mrr < 0.4:
+            fallback_insights.append({
+                "title": "Retrieval Performance Needs Improvement",
+                "description": f"MRR of {mrr:.3f} suggests the retrieval system may need tuning or better document indexing.",
+                "type": "warning",
+                "priority": "high"
+            })
+        else:
+            fallback_insights.append({
+                "title": "Moderate Retrieval Performance",
+                "description": f"MRR of {mrr:.3f} indicates moderate retrieval performance. Consider optimizing document indexing or retrieval parameters.",
+                "type": "info",
+                "priority": "medium"
+            })
+        
+        # Response quality insights
+        faithfulness = summary_metrics.get('avg_faithfulness', 0)
+        if faithfulness > 0.8:
+            fallback_insights.append({
+                "title": "High Response Faithfulness",
+                "description": f"Faithfulness score of {faithfulness:.3f} shows responses are well-grounded in retrieved content.",
+                "type": "positive",
+                "priority": "medium"
+            })
+        
+        # Performance insights
+        retrieval_time = summary_metrics.get('avg_retrieval_s', 0)
+        generation_time = summary_metrics.get('avg_generation_s', 0)
+        
+        if retrieval_time > 2.0:
+            fallback_insights.append({
+                "title": "Slow Retrieval Performance",
+                "description": f"Average retrieval time of {retrieval_time:.1f}s is high. Consider optimizing vector search or reducing document count.",
+                "type": "warning",
+                "priority": "medium"
+            })
+        
+        if generation_time > 5.0:
+            fallback_insights.append({
+                "title": "Slow Generation Performance",
+                "description": f"Average generation time of {generation_time:.1f}s is high. Consider using a faster model or optimizing prompts.",
+                "type": "warning",
+                "priority": "medium"
+            })
+        
+        # Add a general summary insight
+        fallback_insights.append({
+            "title": "Benchmark Summary",
+            "description": f"Completed {summary_metrics.get('total_items', 0)} items with {len(fallback_insights)} key areas identified for optimization.",
+            "type": "info",
+            "priority": "low"
+        })
+        
+        return {"insights": fallback_insights}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating insights for run_id '{run_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate insights")
 
 
 @router.delete("/benchmarks/{run_id}")

@@ -313,9 +313,7 @@ class Dashboard {
         const rangeText = range === '24h' ? '24h' : range === '7d' ? '7d' : '30d';
         
         // Update the labels to show current range
-        const requestsLabel = document.querySelector('td:contains("Requests")');
-        const errorLabel = document.querySelector('td:contains("Error Rate")');
-        const tokensLabel = document.querySelector('td:contains("Tokens Used")');
+        // Note: :contains() is not a valid CSS selector, so we'll use the direct approach below
         
         // Use more direct approach since :contains might not work
         const rows = document.querySelectorAll('.overview-table tr');

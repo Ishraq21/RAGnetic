@@ -764,7 +764,8 @@ async function runBenchmark() {
                 test_set: testSetData,
                 dataset_id: data.dataset_id,
                 purpose: data.purpose,
-                tags: data.tags
+                tags: data.tags,
+                test_set_file: data.test_set_file  // Include original filename
             })
         });
         
@@ -1024,7 +1025,7 @@ function renderBenchmarkResults(benchmark) {
     const audit = config.audit || {};
     const dataset = config.dataset_meta || {};
     
-    // Generate LLM insights based on metrics
+    // Generate LLM insights based on metrics (fallback)
     const insights = generateBenchmarkInsights(metrics, benchmark.status);
     
     content.innerHTML = `
@@ -1145,7 +1146,7 @@ function renderBenchmarkResults(benchmark) {
             <!-- LLM Generated Insights -->
             <div class="results-insights">
                 <h4>AI Insights</h4>
-                <div class="insights-content">
+                <div class="insights-content" id="insights-content-${benchmark.run_id}">
                     ${insights.map(insight => `
                         <div class="insight-item ${insight.type}">
                             <div class="insight-icon">
@@ -1157,7 +1158,14 @@ function renderBenchmarkResults(benchmark) {
                             </div>
                         </div>
                     `).join('')}
+                    <div class="insights-loading" style="display: none;">
+                        <div class="loading-spinner"></div>
+                        <p>Generating AI insights...</p>
+                    </div>
                 </div>
+                <button class="btn-text" onclick="generateAIInsights('${benchmark.run_id}')" style="margin-top: 12px;">
+                    Generate AI Summary
+                </button>
             </div>
             
             <!-- Test Dataset Information -->
@@ -1411,6 +1419,69 @@ function calculateDuration(startTime, endTime) {
 }
 
 /**
+ * Generate AI insights for a benchmark
+ */
+async function generateAIInsights(runId) {
+    const insightsContent = document.getElementById(`insights-content-${runId}`);
+    const loadingDiv = insightsContent.querySelector('.insights-loading');
+    const existingInsights = insightsContent.querySelectorAll('.insight-item');
+    
+    // Show loading state
+    loadingDiv.style.display = 'block';
+    existingInsights.forEach(item => item.style.display = 'none');
+    
+    try {
+        const response = await fetch(`${API_BASE_URL}/evaluate/benchmarks/${runId}/insights`, {
+            method: 'POST',
+            headers: {
+                'X-API-Key': loggedInUserToken
+            }
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            const insights = result.insights || [];
+            
+            // Hide loading and show new insights
+            loadingDiv.style.display = 'none';
+            existingInsights.forEach(item => item.remove());
+            
+            // Add new insights
+            insights.forEach(insight => {
+                const insightDiv = document.createElement('div');
+                insightDiv.className = `insight-item ${insight.type}`;
+                insightDiv.innerHTML = `
+                    <div class="insight-icon">
+                        ${insight.type === 'positive' ? '✓' : insight.type === 'warning' ? '⚠' : 'ℹ'}
+                    </div>
+                    <div class="insight-text">
+                        <strong>${insight.title}</strong>
+                        <p>${insight.description}</p>
+                    </div>
+                `;
+                insightsContent.appendChild(insightDiv);
+            });
+            
+            showToast('AI insights generated successfully', 'success');
+        } else {
+            const error = await response.json();
+            showToast(`Failed to generate insights: ${error.detail}`, 'error');
+            
+            // Show existing insights again
+            loadingDiv.style.display = 'none';
+            existingInsights.forEach(item => item.style.display = 'flex');
+        }
+    } catch (error) {
+        console.error('Error generating AI insights:', error);
+        showToast('Error generating AI insights', 'error');
+        
+        // Show existing insights again
+        loadingDiv.style.display = 'none';
+        existingInsights.forEach(item => item.style.display = 'flex');
+    }
+}
+
+/**
  * Download benchmark results
  */
 function downloadBenchmarkResults() {
@@ -1656,6 +1727,7 @@ window.downloadBenchmarkResults = downloadBenchmarkResults;
 window.deleteTestSet = deleteTestSet;
 window.deleteBenchmark = deleteBenchmark;
 window.cancelBenchmark = cancelBenchmark;
+window.generateAIInsights = generateAIInsights;
 window.refreshTestSets = refreshTestSets;
 window.refreshBenchmarks = refreshBenchmarks;
 window.refreshResults = refreshResults;
