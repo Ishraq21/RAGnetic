@@ -4676,6 +4676,19 @@ body {
     line-height: 1.5;
 }
 
+.insights-loading {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    color: var(--text-secondary);
+}
+
+.insights-loading .loading-spinner {
+    width: 16px;
+    height: 16px;
+}
+
 .results-dataset {
     background: var(--surface-color);
     border: 1px solid var(--border-color);

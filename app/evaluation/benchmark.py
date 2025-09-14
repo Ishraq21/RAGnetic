@@ -257,6 +257,17 @@ def run_benchmark(
         dataset_checksum = None
     dataset_size = len(test_set or [])
 
+    # Calculate temperature before creating config snapshot
+    bm = getattr(agent_config, "benchmark", None)
+    deterministic = True
+    try:
+        deterministic = bool(getattr(bm, "deterministic_eval", True))
+    except Exception:
+        deterministic = True
+
+    agent_temperature = 0.0 if deterministic else getattr(agent_config, "llm_temperature", None)
+    final_temperature = agent_temperature if agent_temperature is not None else 0.0
+
     cfg_snapshot_raw = {
         "agent_name": agent_config.name,
         "llm_model": getattr(agent_config, "llm_model", None),
@@ -266,6 +277,7 @@ def run_benchmark(
         "chunking": getattr(agent_config, "chunking", None),
         "tools": getattr(agent_config, "tools", []),
         "benchmark": getattr(agent_config, "benchmark", None),
+        "temperature": final_temperature,  # Add the actual temperature used
         "audit": audit_info or {},
         "dataset_meta": {
             "dataset_id": dataset_id,
@@ -292,20 +304,12 @@ def run_benchmark(
     default_csv_path = os.path.join(bench_dir, f"benchmark_{agent_slug}_{run_id}.csv")
     export_csv_path = export_csv_path or default_csv_path
 
-    # Models
-    bm = getattr(agent_config, "benchmark", None)
-    deterministic = True
-    try:
-        deterministic = bool(getattr(bm, "deterministic_eval", True))
-    except Exception:
-        deterministic = True
-
-    agent_temperature = 0.0 if deterministic else getattr(agent_config, "llm_temperature", None)
+    # Models (temperature already calculated above)
     agent_llm = get_llm_model(
         getattr(agent_config, "llm_model", None),
         retries=getattr(agent_config, "llm_retries", 2),
         timeout=getattr(agent_config, "llm_timeout", 60),
-        temperature=agent_temperature if agent_temperature is not None else 0.0,
+        temperature=final_temperature,
     )
     judge_model_name = getattr(agent_config, "evaluation_llm_model", None) or getattr(agent_config, "llm_model", None)
     judge_llm = get_llm_model(judge_model_name, temperature=0.0, retries=2, timeout=60)
