@@ -53,7 +53,7 @@ class UploadIntegrationTests:
     
     def test_server_connectivity(self):
         """Test server connectivity"""
-        print("🧪 Testing server connectivity...")
+        print(" Testing server connectivity...")
         
         try:
             # Test with TestClient first
@@ -76,7 +76,7 @@ class UploadIntegrationTests:
     
     def test_agent_file_upload_integration(self):
         """Test agent file upload integration"""
-        print("🧪 Testing agent file upload integration...")
+        print(" Testing agent file upload integration...")
         
         try:
             # Create test file
@@ -116,7 +116,7 @@ class UploadIntegrationTests:
     
     def test_training_dataset_upload_integration(self):
         """Test training dataset upload integration"""
-        print("🧪 Testing training dataset upload integration...")
+        print(" Testing training dataset upload integration...")
         
         try:
             # Create valid JSONL training data
@@ -160,7 +160,7 @@ class UploadIntegrationTests:
     
     def test_temporary_document_upload_integration(self):
         """Test temporary document upload integration"""
-        print("🧪 Testing temporary document upload integration...")
+        print(" Testing temporary document upload integration...")
         
         try:
             # Create test document
@@ -223,7 +223,7 @@ class UploadIntegrationTests:
     
     def test_document_retrieval_integration(self):
         """Test document retrieval integration"""
-        print("🧪 Testing document retrieval integration...")
+        print(" Testing document retrieval integration...")
         
         try:
             if not self.upload_results:
@@ -255,7 +255,7 @@ class UploadIntegrationTests:
     
     def test_file_validation_integration(self):
         """Test file validation integration"""
-        print("🧪 Testing file validation integration...")
+        print(" Testing file validation integration...")
         
         try:
             headers = {"Authorization": f"Bearer {self.test_api_key}"}
@@ -303,7 +303,7 @@ class UploadIntegrationTests:
     
     def test_concurrent_uploads_integration(self):
         """Test concurrent uploads integration"""
-        print("🧪 Testing concurrent uploads integration...")
+        print(" Testing concurrent uploads integration...")
         
         try:
             import concurrent.futures
@@ -374,7 +374,7 @@ class UploadIntegrationTests:
     
     def test_cleanup_integration(self):
         """Test cleanup integration"""
-        print("🧪 Testing cleanup integration...")
+        print(" Testing cleanup integration...")
         
         try:
             if not self.upload_results:

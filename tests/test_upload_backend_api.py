@@ -60,7 +60,7 @@ class BackendUploadAPITests:
     
     def test_agent_file_upload_success(self):
         """Test successful agent file upload"""
-        print("🧪 Testing agent file upload success...")
+        print(" Testing agent file upload success...")
         
         # Create test file
         test_content = "This is a test document for agent upload.\n" * 100
@@ -91,7 +91,7 @@ class BackendUploadAPITests:
     
     def test_agent_file_upload_unauthorized(self):
         """Test agent file upload without authorization"""
-        print("🧪 Testing agent file upload unauthorized...")
+        print(" Testing agent file upload unauthorized...")
         
         test_file = self.create_test_file("unauthorized_test.txt", "test content")
         
@@ -107,7 +107,7 @@ class BackendUploadAPITests:
     
     def test_agent_file_upload_invalid_file(self):
         """Test agent file upload with invalid file"""
-        print("🧪 Testing agent file upload invalid file...")
+        print(" Testing agent file upload invalid file...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -133,7 +133,7 @@ class BackendUploadAPITests:
     
     def test_training_dataset_upload_success(self):
         """Test successful training dataset upload"""
-        print("🧪 Testing training dataset upload success...")
+        print(" Testing training dataset upload success...")
         
         # Create valid JSONL training data
         training_data = []
@@ -170,7 +170,7 @@ class BackendUploadAPITests:
     
     def test_training_dataset_upload_invalid_format(self):
         """Test training dataset upload with invalid format"""
-        print("🧪 Testing training dataset upload invalid format...")
+        print(" Testing training dataset upload invalid format...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -191,7 +191,7 @@ class BackendUploadAPITests:
     
     def test_training_dataset_upload_wrong_extension(self):
         """Test training dataset upload with wrong file extension"""
-        print("🧪 Testing training dataset upload wrong extension...")
+        print(" Testing training dataset upload wrong extension...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -211,7 +211,7 @@ class BackendUploadAPITests:
     
     def test_temporary_document_upload_success(self):
         """Test successful temporary document upload"""
-        print("🧪 Testing temporary document upload success...")
+        print(" Testing temporary document upload success...")
         
         # Create test document
         test_content = "# Test Document\n\nThis is a test markdown document.\n" * 50
@@ -253,7 +253,7 @@ class BackendUploadAPITests:
     
     def test_temporary_document_upload_missing_thread_id(self):
         """Test temporary document upload without thread_id"""
-        print("🧪 Testing temporary document upload missing thread_id...")
+        print(" Testing temporary document upload missing thread_id...")
         
         test_file = self.create_test_file("test_doc.txt", "test content")
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
@@ -271,7 +271,7 @@ class BackendUploadAPITests:
     
     def test_temporary_document_upload_unsupported_type(self):
         """Test temporary document upload with unsupported file type"""
-        print("🧪 Testing temporary document upload unsupported type...")
+        print(" Testing temporary document upload unsupported type...")
         
         # Create executable file
         test_file = self.create_test_file("test.exe", "fake executable content")
@@ -292,7 +292,7 @@ class BackendUploadAPITests:
     
     def test_temporary_document_upload_oversized(self):
         """Test temporary document upload with oversized file"""
-        print("🧪 Testing temporary document upload oversized...")
+        print(" Testing temporary document upload oversized...")
         
         # Create file larger than 25MB
         large_content = "This is a large line of text for testing file size limits.\n"
@@ -315,7 +315,7 @@ class BackendUploadAPITests:
     
     def test_temporary_document_retrieval(self):
         """Test temporary document retrieval"""
-        print("🧪 Testing temporary document retrieval...")
+        print(" Testing temporary document retrieval...")
         
         # First upload a document
         test_file = self.create_test_file("retrieval_test.txt", "test content for retrieval")
@@ -352,7 +352,7 @@ class BackendUploadAPITests:
     
     def test_temporary_document_retrieval_nonexistent(self):
         """Test temporary document retrieval for nonexistent document"""
-        print("🧪 Testing temporary document retrieval nonexistent...")
+        print(" Testing temporary document retrieval nonexistent...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         fake_temp_doc_id = str(uuid.uuid4())
@@ -367,7 +367,7 @@ class BackendUploadAPITests:
     
     def test_concurrent_uploads(self):
         """Test concurrent uploads to the same endpoint"""
-        print("🧪 Testing concurrent uploads...")
+        print(" Testing concurrent uploads...")
         
         import concurrent.futures
         import threading
@@ -403,7 +403,7 @@ class BackendUploadAPITests:
     
     def test_upload_rate_limiting(self):
         """Test upload rate limiting"""
-        print("🧪 Testing upload rate limiting...")
+        print(" Testing upload rate limiting...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         

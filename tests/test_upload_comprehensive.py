@@ -174,7 +174,7 @@ This document tests markdown parsing and upload functionality.
     
     def test_agent_file_upload(self):
         """Test agent file upload functionality"""
-        print("🧪 Testing agent file upload...")
+        print(" Testing agent file upload...")
         
         headers = {"Authorization": f"Bearer {TEST_API_KEY}"}
         
@@ -199,7 +199,7 @@ This document tests markdown parsing and upload functionality.
     
     def test_training_dataset_upload(self):
         """Test training dataset upload functionality"""
-        print("🧪 Testing training dataset upload...")
+        print(" Testing training dataset upload...")
         
         headers = {"Authorization": f"Bearer {TEST_API_KEY}"}
         
@@ -225,7 +225,7 @@ This document tests markdown parsing and upload functionality.
     
     def test_temporary_document_upload(self):
         """Test temporary document upload functionality"""
-        print("🧪 Testing temporary document upload...")
+        print(" Testing temporary document upload...")
         
         headers = {"Authorization": f"Bearer {TEST_API_KEY}"}
         
@@ -254,7 +254,7 @@ This document tests markdown parsing and upload functionality.
     
     def test_file_validation(self):
         """Test file validation and security measures"""
-        print("🧪 Testing file validation...")
+        print(" Testing file validation...")
         
         headers = {"Authorization": f"Bearer {TEST_API_KEY}"}
         
@@ -304,7 +304,7 @@ This document tests markdown parsing and upload functionality.
     
     def test_stress_upload(self):
         """Test stress scenarios for uploads"""
-        print("🧪 Testing stress upload scenarios...")
+        print(" Testing stress upload scenarios...")
         
         headers = {"Authorization": f"Bearer {TEST_API_KEY}"}
         
@@ -365,7 +365,7 @@ This document tests markdown parsing and upload functionality.
     
     def test_upload_lifecycle(self):
         """Test upload lifecycle including cleanup"""
-        print("🧪 Testing upload lifecycle...")
+        print(" Testing upload lifecycle...")
         
         # Test temporary document retrieval
         if self.temp_doc_ids:
@@ -387,7 +387,7 @@ This document tests markdown parsing and upload functionality.
     
     def test_database_integrity(self):
         """Test database integrity after uploads"""
-        print("🧪 Testing database integrity...")
+        print(" Testing database integrity...")
         
         # This would test that all uploads are properly recorded in the database
         # and that relationships are maintained correctly
@@ -396,7 +396,7 @@ This document tests markdown parsing and upload functionality.
     
     def test_file_storage_structure(self):
         """Test that files are stored in correct directory structure"""
-        print("🧪 Testing file storage structure...")
+        print(" Testing file storage structure...")
         
         paths = get_path_settings()
         

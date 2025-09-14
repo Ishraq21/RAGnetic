@@ -113,16 +113,15 @@ class Dashboard {
                 this.loadLatencyMetrics(),
                 this.loadUsageSummary(),
                 this.loadSystemHealth(),
-                this.loadSecurityMetrics(),
                 this.loadResourceMetrics(),
                 this.loadTrainingOverview(),
                 this.loadDataPipelineMetrics()
             ]);
             this.updateStats();
             this.updateLastUpdated();
-            console.log('✅ Overview data loaded successfully');
+            console.log('Overview data loaded successfully');
         } catch (error) {
-            console.error('❌ Failed to load overview data:', error);
+            console.error('Failed to load overview data:', error);
             this.showToast('Failed to load dashboard data', 'error');
             // Ensure loading states are cleared even on error
             this.clearLoadingStates();
@@ -246,7 +245,7 @@ class Dashboard {
                         this.showToast('Dashboard updated with latest data', 'success');
                     }
                 } else {
-                    console.log('✅ No changes detected');
+                    console.log('No changes detected');
                     this.updateConnectionStatus('connected');
                     if (isManual) {
                         this.showToast('Dashboard is already up to date', 'info');
@@ -507,30 +506,6 @@ class Dashboard {
         }));
     }
 
-    async loadSecurityMetrics() {
-        try {
-            const response = await fetch('/api/v1/monitoring/security', {
-                headers: { 'X-API-Key': loggedInUserToken }
-            });
-            if (!response.ok) {
-                console.warn('Security metrics API failed:', response.status);
-                return;
-            }
-            const data = await response.json();
-            
-            const apiKeysEl = document.getElementById('security-api-keys');
-            const failedAuthEl = document.getElementById('security-failed-auth');
-            const rateLimitedEl = document.getElementById('security-rate-limited');
-            const activeSessionsEl = document.getElementById('security-active-sessions');
-            
-            if (apiKeysEl) apiKeysEl.textContent = String(data.active_api_keys || 0);
-            if (failedAuthEl) failedAuthEl.textContent = String(data.failed_auth_24h || 0);
-            if (rateLimitedEl) rateLimitedEl.textContent = String(data.rate_limited_24h || 0);
-            if (activeSessionsEl) activeSessionsEl.textContent = String(data.active_sessions || 0);
-        } catch (e) {
-            console.warn('Security metrics failed:', e);
-        }
-    }
 
     async loadResourceMetrics() {
         try {
@@ -819,15 +794,15 @@ class Dashboard {
 
 
     renderRecentAgentActivity(runs) {
-        console.log('🎯 Rendering recent agent activity with', runs?.length || 0, 'runs');
+        console.log('Rendering recent agent activity with', runs?.length || 0, 'runs');
         const container = document.getElementById('recent-agent-activity');
         if (!container) {
-            console.warn('❌ Recent activity container not found!');
+            console.warn('Recent activity container not found!');
             return;
         }
 
         if (!runs || runs.length === 0) {
-            console.log('📭 No recent activity to display');
+            console.log('No recent activity to display');
             container.innerHTML = '<p class="text-muted">No recent activity</p>';
             return;
         }
@@ -868,7 +843,7 @@ class Dashboard {
                 <button class="pager-btn" onclick="dashboard.changeRecentActivityPage(1)" ${hasNext ? '' : 'disabled'} aria-label="Next page">›</button>
             </div>
         `;
-        console.log('✅ Recent activity rendered successfully');
+        console.log('Recent activity rendered successfully');
     }
 
     changeRecentActivityPage(delta) {

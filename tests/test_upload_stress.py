@@ -72,7 +72,7 @@ class UploadStressTests:
     
     def test_concurrent_uploads_stress(self):
         """Test concurrent uploads under stress"""
-        print("🧪 Testing concurrent uploads stress...")
+        print(" Testing concurrent uploads stress...")
         
         self.start_time = time.time()
         initial_metrics = self.get_system_metrics()
@@ -169,7 +169,7 @@ class UploadStressTests:
     
     def test_large_file_upload_stress(self):
         """Test large file uploads under stress"""
-        print("🧪 Testing large file upload stress...")
+        print(" Testing large file upload stress...")
         
         self.start_time = time.time()
         initial_metrics = self.get_system_metrics()
@@ -248,7 +248,7 @@ class UploadStressTests:
     
     def test_rapid_sequential_uploads(self):
         """Test rapid sequential uploads"""
-        print("🧪 Testing rapid sequential uploads...")
+        print(" Testing rapid sequential uploads...")
         
         self.start_time = time.time()
         initial_metrics = self.get_system_metrics()
@@ -334,7 +334,7 @@ class UploadStressTests:
     
     def test_memory_usage_stress(self):
         """Test memory usage under upload stress"""
-        print("🧪 Testing memory usage stress...")
+        print(" Testing memory usage stress...")
         
         initial_memory = psutil.virtual_memory().percent
         initial_gc_count = len(gc.get_objects())
@@ -412,7 +412,7 @@ class UploadStressTests:
     
     def test_disk_space_stress(self):
         """Test disk space usage under upload stress"""
-        print("🧪 Testing disk space stress...")
+        print(" Testing disk space stress...")
         
         paths = get_path_settings()
         temp_uploads_dir = paths["TEMP_CLONES_DIR"] / "chat_uploads"
@@ -482,7 +482,7 @@ class UploadStressTests:
     
     def test_error_recovery_stress(self):
         """Test error recovery under stress"""
-        print("🧪 Testing error recovery stress...")
+        print(" Testing error recovery stress...")
         
         headers = {"Authorization": f"Bearer {self.test_api_key}"}
         
@@ -544,7 +544,7 @@ class UploadStressTests:
     
     def test_cleanup_under_stress(self):
         """Test cleanup functionality under stress"""
-        print("🧪 Testing cleanup under stress...")
+        print(" Testing cleanup under stress...")
         
         # This would test the cleanup task under stress conditions
         # For now, we'll just verify that cleanup directories exist and are accessible

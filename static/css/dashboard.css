@@ -4533,3 +4533,230 @@ body {
     opacity: 0.5;
     cursor: not-allowed;
 }
+
+/* Enterprise Evaluation Metrics */
+.enterprise-metric {
+    border-left: 3px solid var(--accent-color);
+    padding-left: 8px;
+}
+
+.metric-good {
+    color: var(--success-color);
+    font-weight: 600;
+}
+
+.metric-warning {
+    color: var(--warning-color);
+    font-weight: 600;
+}
+
+.metric-danger {
+    color: var(--error-color);
+    font-weight: 600;
+}
+
+.btn-warning {
+    color: var(--warning-color);
+}
+
+.btn-warning:hover {
+    background: var(--warning-color);
+    color: white;
+}
+
+/* Enhanced Benchmark Results Styling */
+.results-summary {
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 24px;
+}
+
+.summary-content {
+    margin-top: 16px;
+}
+
+.summary-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 16px;
+}
+
+.summary-metric {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 16px;
+    background: var(--card-background);
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+
+.summary-label {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.summary-value {
+    font-size: var(--font-size-lg);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.results-enterprise {
+    margin-bottom: 24px;
+}
+
+.results-insights {
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 24px;
+}
+
+.insights-content {
+    margin-top: 16px;
+}
+
+.insight-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+    border-radius: 6px;
+    border-left: 4px solid;
+}
+
+.insight-item.positive {
+    background: rgba(34, 197, 94, 0.1);
+    border-left-color: var(--success-color);
+}
+
+.insight-item.warning {
+    background: rgba(245, 158, 11, 0.1);
+    border-left-color: var(--warning-color);
+}
+
+.insight-item.info {
+    background: rgba(59, 130, 246, 0.1);
+    border-left-color: var(--accent-color);
+}
+
+.insight-icon {
+    font-size: 18px;
+    font-weight: bold;
+    margin-top: 2px;
+}
+
+.insight-item.positive .insight-icon {
+    color: var(--success-color);
+}
+
+.insight-item.warning .insight-icon {
+    color: var(--warning-color);
+}
+
+.insight-item.info .insight-icon {
+    color: var(--accent-color);
+}
+
+.insight-text strong {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--text-primary);
+}
+
+.insight-text p {
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.results-dataset {
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 24px;
+}
+
+.dataset-info {
+    margin-top: 16px;
+}
+
+.dataset-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.dataset-row:last-child {
+    border-bottom: none;
+}
+
+.dataset-label {
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.dataset-value {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+}
+
+.results-metadata {
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 24px;
+}
+
+.metadata-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 24px;
+    margin-top: 16px;
+}
+
+.metadata-section h5 {
+    margin: 0 0 12px 0;
+    color: var(--text-primary);
+    font-size: var(--font-size-base);
+}
+
+.metadata-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.metadata-row:last-child {
+    border-bottom: none;
+}
+
+.metadata-label {
+    font-weight: 500;
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+.metadata-value {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    text-align: right;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
