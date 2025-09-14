@@ -1227,7 +1227,7 @@ function renderBenchmarkResults(benchmark) {
                         </div>
                         <div class="metadata-row">
                             <span class="metadata-label">Temperature:</span>
-                            <span class="metadata-value">${config.temperature || 'N/A'}</span>
+                            <span class="metadata-value">${(config.temperature !== undefined && config.temperature !== null) ? config.temperature : 'N/A'}</span>
                         </div>
                     </div>
                 </div>
