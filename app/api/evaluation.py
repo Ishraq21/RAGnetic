@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundT
 from fastapi import Path as _Path
 
 from app.core.security import get_http_api_key, PermissionChecker # Import PermissionChecker
+from app.core.rate_limit import rate_limiter as rate_limit_dep
 from app.agents.config_manager import load_agent_config
 from app.evaluation.dataset_generator import generate_test_set
 from app.evaluation.benchmark import run_benchmark
@@ -31,7 +32,7 @@ _slug = lambda s: re.sub(r'[^A-Za-z0-9_.-]+', '_', s).strip('._')
 
 
 
-@router.post("/test-set", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/test-set", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(rate_limit_dep("evaluation_testset", 2, 60))])
 async def generate_test_set_api(
     agent_name: str = Body(..., embed=True, description="The name of the agent."),
     num_questions: int = Body(50, embed=True, description="Number of questions to generate."),
@@ -80,7 +81,7 @@ async def generate_test_set_api(
 
 
 
-@router.post("/benchmark", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/benchmark", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(rate_limit_dep("evaluation_benchmark", 2, 60))])
 async def run_benchmark_api(
     agent_name: str = Body(..., embed=True, description="The name of the agent."),
     test_set: List[Dict[str, Any]] = Body(..., description="The test set as a JSON array of objects."),
@@ -253,7 +254,7 @@ async def get_test_set(
         raise HTTPException(status_code=500, detail="Failed to read test set")
 
 
-@router.delete("/test-sets/{filename}")
+@router.delete("/test-sets/{filename}", dependencies=[Depends(rate_limit_dep("evaluation_delete", 5, 60))])
 async def delete_test_set(
     filename: str,
     current_user: User = Depends(PermissionChecker(["evaluation:generate_test_set"])),
@@ -825,7 +826,7 @@ async def generate_benchmark_insights(
         raise HTTPException(status_code=500, detail="Failed to generate insights")
 
 
-@router.delete("/benchmarks/{run_id}")
+@router.delete("/benchmarks/{run_id}", dependencies=[Depends(rate_limit_dep("evaluation_delete", 5, 60))])
 async def delete_benchmark(
     run_id: str,
     current_user: User = Depends(PermissionChecker(["evaluation:delete_benchmarks"])),

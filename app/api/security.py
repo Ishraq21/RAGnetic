@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError, NoResultFound
 from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field  # Import Field for LoginRequest
 from sqlalchemy import select
-from app.core.rate_limit import rate_limiter
+from app.core.rate_limit import rate_limiter as rate_limit_dep
 
 from app.db import get_db
 from app.db import dao as db_dao  # Alias to avoid name collision with security.py in future
@@ -48,7 +48,7 @@ def _derive_scope_from_user(user_data: Dict[str, Any]) -> str:
     return "viewer"
 
 
-@router.post("/login", response_model=Token, dependencies=[Depends(rate_limiter("login", 5, 60))])
+@router.post("/login", response_model=Token, dependencies=[Depends(rate_limit_dep("login", 5, 60))])
 async def login_for_access_token(
     request: LoginRequest,
     db: AsyncSession = Depends(get_db)
@@ -94,7 +94,7 @@ async def read_current_user(
 
 # --- User Management Endpoints ---
 
-@router.post("/users", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
+@router.post("/users", response_model=UserPublic, status_code=status.HTTP_201_CREATED, dependencies=[Depends(rate_limit_dep("user_create", 3, 60))])
 async def create_user(
         user_in: UserCreate,
         db: AsyncSession = Depends(get_db),
@@ -167,8 +167,7 @@ async def get_user_by_id(
                             detail="An unexpected error occurred while retrieving the user.")
 
 
-@router.put("/users/{user_id}", response_model=UserPublic)
-
+@router.put("/users/{user_id}", response_model=UserPublic, dependencies=[Depends(rate_limit_dep("user_update", 10, 60))])
 async def update_user(
         user_id: int,
         user_update: UserUpdate,
@@ -197,7 +196,7 @@ async def update_user(
                             detail="An unexpected error occurred while updating the user.")
 
 
-@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(rate_limit_dep("user_delete", 3, 60))])
 async def delete_user(
         user_id: int,
         db: AsyncSession = Depends(get_db),
@@ -320,7 +319,7 @@ class APIKeyRevoke(BaseModel):
     "/users/{user_id}/api-keys",
     response_model=Token,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(rate_limiter("apikey_create", 10, 60))]
+    dependencies=[Depends(rate_limit_dep("apikey_create", 10, 60))]
 )
 async def create_user_api_key(
         user_id: int,
@@ -354,7 +353,7 @@ async def create_user_api_key(
 @router.delete(
     "/api-keys",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(rate_limiter("apikey_revoke", 20, 60))]
+    dependencies=[Depends(rate_limit_dep("apikey_revoke", 20, 60))]
 )
 async def revoke_user_api_key(
         payload: APIKeyRevoke,

@@ -33,6 +33,14 @@ class TrainingDashboard {
             });
         }
 
+        // GPU mode toggle
+        const gpuModeToggle = document.getElementById('gpu-mode-toggle');
+        if (gpuModeToggle) {
+            gpuModeToggle.addEventListener('change', (e) => {
+                this.toggleGPUMode(e.target.checked);
+            });
+        }
+
         // File upload event listeners
         this.setupFileUploadListeners();
     }
@@ -222,6 +230,115 @@ class TrainingDashboard {
         if (uploadSelected) uploadSelected.style.display = 'none';
         if (fileInput) fileInput.value = '';
         if (pathInput) pathInput.value = '';
+    }
+
+    toggleGPUMode(enabled) {
+        const gpuConfigSection = document.getElementById('gpu-config-section');
+        if (gpuConfigSection) {
+            gpuConfigSection.style.display = enabled ? 'block' : 'none';
+        }
+
+        if (enabled) {
+            this.loadGPUProviders();
+        }
+    }
+
+    async loadGPUProviders() {
+        try {
+            const response = await fetch(`${API_BASE_URL}/gpu/providers`, {
+                headers: {
+                    'X-API-Key': loggedInUserToken,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const providers = await response.json();
+            this.populateGPUOptions(providers);
+        } catch (error) {
+            console.error('Error loading GPU providers:', error);
+            this.showToast('Failed to load GPU providers', 'error');
+        }
+    }
+
+    populateGPUOptions(providers) {
+        const gpuTypeSelect = document.getElementById('gpu-type');
+        const gpuProviderSelect = document.getElementById('gpu-provider');
+        
+        if (gpuTypeSelect) {
+            gpuTypeSelect.innerHTML = '<option value="">Select GPU type...</option>';
+            providers.forEach(provider => {
+                provider.gpu_types.forEach(gpu => {
+                    const option = document.createElement('option');
+                    option.value = gpu.gpu_type;
+                    option.textContent = `${gpu.gpu_type} - $${gpu.cost_per_hour}/hour`;
+                    option.dataset.provider = provider.name;
+                    option.dataset.cost = gpu.cost_per_hour;
+                    gpuTypeSelect.appendChild(option);
+                });
+            });
+        }
+
+        if (gpuProviderSelect) {
+            gpuProviderSelect.innerHTML = '<option value="">Select provider...</option>';
+            providers.forEach(provider => {
+                const option = document.createElement('option');
+                option.value = provider.name;
+                option.textContent = provider.name;
+                gpuProviderSelect.appendChild(option);
+            });
+        }
+
+        // Update cost estimate when GPU type changes
+        if (gpuTypeSelect) {
+            gpuTypeSelect.addEventListener('change', () => {
+                this.updateCostEstimate();
+            });
+        }
+
+        const maxHoursInput = document.getElementById('max-hours');
+        if (maxHoursInput) {
+            maxHoursInput.addEventListener('input', () => {
+                this.updateCostEstimate();
+            });
+        }
+    }
+
+    updateCostEstimate() {
+        const gpuTypeSelect = document.getElementById('gpu-type');
+        const maxHoursInput = document.getElementById('max-hours');
+        const costEstimate = document.getElementById('cost-estimate');
+
+        if (!gpuTypeSelect || !maxHoursInput || !costEstimate) return;
+
+        const selectedOption = gpuTypeSelect.options[gpuTypeSelect.selectedIndex];
+        if (selectedOption && selectedOption.value) {
+            const costPerHour = parseFloat(selectedOption.dataset.cost);
+            const maxHours = parseFloat(maxHoursInput.value) || 0;
+            const totalCost = costPerHour * maxHours;
+
+            costEstimate.innerHTML = `
+                <div class="estimate-card">
+                    <h4>Cost Estimate</h4>
+                    <div class="estimate-details">
+                        <div class="estimate-item">
+                            <span>GPU Cost:</span>
+                            <span>$${costPerHour.toFixed(2)}/hour</span>
+                        </div>
+                        <div class="estimate-item">
+                            <span>Total Estimated:</span>
+                            <span>$${totalCost.toFixed(2)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            costEstimate.style.display = 'block';
+        } else {
+            costEstimate.style.display = 'none';
+        }
     }
 
     async loadTrainingJobs() {
@@ -632,7 +749,12 @@ class TrainingDashboard {
             if (logsContainer) {
                 // Sanitize logs content to prevent XSS
                 const sanitizedLogs = this.sanitizeLogs(data.logs || 'No logs available');
+                const logSource = data.source || 'local';
+                
                 logsContainer.innerHTML = `
+                    <div class="logs-source">
+                        <span class="source-badge source-${logSource}">${logSource === 'gpu_provider' ? 'GPU Provider' : 'Local'}</span>
+                    </div>
                     <pre class="logs-text">${sanitizedLogs}</pre>
                 `;
             }
@@ -804,8 +926,27 @@ class TrainingDashboard {
             hyperparameters: hyperparameters
         };
 
+        // Add GPU configuration if GPU mode is enabled
+        const gpuModeToggle = document.getElementById('gpu-mode-toggle');
+        if (gpuModeToggle && gpuModeToggle.checked) {
+            const gpuType = document.getElementById('gpu-type')?.value;
+            const gpuProvider = document.getElementById('gpu-provider')?.value;
+            const maxHours = document.getElementById('max-hours')?.value;
+
+            if (!gpuType || !gpuProvider || !maxHours) {
+                this.showToast('Please fill in all GPU configuration fields', 'error');
+                return;
+            }
+
+            trainingJobConfig.use_gpu = true;
+            trainingJobConfig.gpu_type = gpuType;
+            trainingJobConfig.gpu_provider = gpuProvider;
+            trainingJobConfig.max_hours = parseFloat(maxHours);
+        }
+
         try {
-            const response = await fetch('/api/v1/training/apply', {
+            const endpoint = trainingJobConfig.use_gpu ? '/api/v1/training/jobs/gpu' : '/api/v1/training/apply';
+            const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

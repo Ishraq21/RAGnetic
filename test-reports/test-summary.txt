@@ -1,0 +1,10 @@
+RAGnetic Test Execution Summary
+========================================
+
+Unit Tests:
+  Status: FAILED
+  Duration: 22.2s
+  Error: Unknown error
+  stderr: sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+

@@ -159,7 +159,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
         if "retriever" in agent_config.tools:
             try:
                 embedding_tokens = count_tokens(query, embedding_model_name)
-                embedding_cost_usd = calculate_cost(embedding_model_name=embedding_model_name,
+                embedding_cost_usd = await calculate_cost(embedding_model_name=embedding_model_name,
                                                     embedding_tokens=embedding_tokens)
                 retriever_tool = await get_retriever_tool(agent_config, user_id, thread_id)
                 retrieved_docs = await retriever_tool.ainvoke(
@@ -442,7 +442,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
             logger.debug(
                 f"[call_model] Estimated prompt_tokens: {prompt_tokens}, completion_tokens: {completion_tokens}")
 
-        llm_cost_usd = calculate_cost(
+        llm_cost_usd = await calculate_cost(
             llm_model_name=agent_config.llm_model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens

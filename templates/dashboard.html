@@ -20,9 +20,893 @@
             window.location.href = '/login';
         }
     </script>
-    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20241236" defer></script>
+    <script>
+        // Prefer inline agent rendering on this page to avoid conflicts with external dashboard.js
+        window.USE_INLINE_AGENT_RENDERER = true;
+    </script>
+    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20250115" defer></script>
     <script src="{{ url_for('static', path='js/training.js') }}?v=20241228" defer></script>
     <script src="{{ url_for('static', path='js/evaluation.js') }}?v=20250113c" defer></script>
+    <script src="{{ url_for('static', path='js/projects.js') }}" defer></script>
+    <script src="{{ url_for('static', path='js/gpu.js') }}" defer></script>
+    <script src="{{ url_for('static', path='js/gpu-config.js') }}" defer></script>
+    <script src="{{ url_for('static', path='js/deployments.js') }}" defer></script>
+    <script src="{{ url_for('static', path='js/billing.js') }}" defer></script>
+    <script src="{{ url_for('static', path='js/analytics.js') }}" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+
+    <script>
+// Production-Grade Metric Drill-down Functionality
+
+// Global variable to store current metric data
+let currentMetricData = null;
+let currentMetricType = null;
+
+/**
+ * Show detailed metric data in a modal
+ */
+function showMetricDetails(metricType) {
+    currentMetricType = metricType;
+    const modal = document.getElementById('metric-details-modal');
+    const title = document.getElementById('modal-title');
+    const body = document.getElementById('modal-body');
+    
+    // Set title based on metric type
+    const titles = {
+        'system-health': 'System Health Details',
+        'error-rate': 'Error Rate Analysis',
+        'response-time': 'Response Time Breakdown',
+        'active-users': 'Active Users Details',
+        'gpu-utilization': 'GPU Utilization Details',
+        'training-jobs': 'Training Jobs Status',
+        'daily-cost': 'Cost Breakdown'
+    };
+    
+    title.textContent = titles[metricType] || 'Metric Details';
+    
+    // Show loading state
+    body.innerHTML = `
+        <div class="loading-state">
+            <div class="loading-spinner"></div>
+            <p>Loading detailed data...</p>
+        </div>
+    `;
+    
+    // Show modal
+    modal.classList.add('active');
+    
+    // Load data
+    loadMetricDetails(metricType);
+}
+
+/**
+ * Close the metric details modal
+ */
+function closeMetricDetails() {
+    const modal = document.getElementById('metric-details-modal');
+    modal.classList.remove('active');
+    currentMetricData = null;
+    currentMetricType = null;
+}
+
+/**
+ * Load detailed metric data
+ */
+async function loadMetricDetails(metricType) {
+    const body = document.getElementById('modal-body');
+    
+    try {
+        // Simulate API call - replace with actual API endpoints
+        const data = await fetchMetricDetails(metricType);
+        currentMetricData = data;
+        
+        // Render the detailed table
+        renderMetricTable(data, metricType);
+        
+    } catch (error) {
+        console.error('Error loading metric details:', error);
+        body.innerHTML = `
+            <div class="error-state">
+                <p>Failed to load detailed data. Please try again.</p>
+                <button class="btn-secondary" onclick="loadMetricDetails('${metricType}')">Retry</button>
+            </div>
+        `;
+    }
+}
+
+/**
+ * Fetch detailed metric data from API
+ */
+async function fetchMetricDetails(metricType) {
+    const { start, end } = dashboard.getRangeParams();
+    
+    const endpoints = {
+        'system-health': '/api/v1/analytics/system-health-details',
+        'error-rate': '/api/v1/analytics/error-details',
+        'response-time': '/api/v1/analytics/response-time-details',
+        'active-users': '/api/v1/analytics/active-users-details',
+        'gpu-utilization': '/api/v1/analytics/gpu-details',
+        'training-jobs': '/api/v1/analytics/training-details',
+        'daily-cost': '/api/v1/analytics/cost-details'
+    };
+    
+    const url = new URL(endpoints[metricType] || endpoints['system-health'], window.location.origin);
+    url.searchParams.set('start_time', start);
+    url.searchParams.set('end_time', end);
+    
+    const response = await fetch(url.toString(), {
+        headers: { 'X-API-Key': loggedInUserToken }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`API request failed: ${response.status}`);
+    }
+    
+    return await response.json();
+}
+
+/**
+ * Render metric data as a table
+ */
+function renderMetricTable(data, metricType) {
+    const body = document.getElementById('modal-body');
+    
+    if (!data || data.length === 0) {
+        body.innerHTML = `
+            <div class="empty-state">
+                <p>No detailed data available for this metric.</p>
+            </div>
+        `;
+        return;
+    }
+    
+    // Define columns for each metric type
+    const columns = getTableColumns(metricType);
+    
+    // Generate table HTML
+    const tableHtml = `
+        <div class="table-container">
+            <table class="details-table">
+                <thead>
+                    <tr>
+                        ${columns.map(col => `<th>${col.header}</th>`).join('')}
+                    </tr>
+                </thead>
+                <tbody>
+                    ${data.map(row => `
+                        <tr>
+                            ${columns.map(col => `<td>${formatCellValue(row[col.key], col.type)}</td>`).join('')}
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+        <div class="table-footer">
+            <p class="table-info">Showing ${data.length} records</p>
+        </div>
+    `;
+    
+    body.innerHTML = tableHtml;
+}
+
+/**
+ * Get table columns for each metric type
+ */
+function getTableColumns(metricType) {
+    const columns = {
+        'system-health': [
+            { key: 'timestamp', header: 'Time', type: 'datetime' },
+            { key: 'component', header: 'Component', type: 'text' },
+            { key: 'status', header: 'Status', type: 'status' },
+            { key: 'response_time', header: 'Response Time', type: 'duration' },
+            { key: 'error_count', header: 'Errors', type: 'number' }
+        ],
+        'error-rate': [
+            { key: 'timestamp', header: 'Time', type: 'datetime' },
+            { key: 'endpoint', header: 'Endpoint', type: 'text' },
+            { key: 'error_type', header: 'Error Type', type: 'text' },
+            { key: 'error_count', header: 'Count', type: 'number' },
+            { key: 'error_rate', header: 'Rate', type: 'percentage' }
+        ],
+        'response-time': [
+            { key: 'timestamp', header: 'Time', type: 'datetime' },
+            { key: 'endpoint', header: 'Endpoint', type: 'text' },
+            { key: 'p50', header: 'P50', type: 'duration' },
+            { key: 'p95', header: 'P95', type: 'duration' },
+            { key: 'p99', header: 'P99', type: 'duration' }
+        ],
+        'active-users': [
+            { key: 'user_id', header: 'User ID', type: 'text' },
+            { key: 'agent_name', header: 'Agent', type: 'text' },
+            { key: 'last_activity', header: 'Last Activity', type: 'datetime' },
+            { key: 'session_duration', header: 'Session Duration', type: 'duration' },
+            { key: 'requests_count', header: 'Requests', type: 'number' }
+        ],
+        'gpu-utilization': [
+            { key: 'instance_id', header: 'Instance', type: 'text' },
+            { key: 'gpu_type', header: 'GPU Type', type: 'text' },
+            { key: 'utilization', header: 'Utilization', type: 'percentage' },
+            { key: 'memory_used', header: 'Memory Used', type: 'bytes' },
+            { key: 'temperature', header: 'Temperature', type: 'temperature' }
+        ],
+        'training-jobs': [
+            { key: 'job_id', header: 'Job ID', type: 'text' },
+            { key: 'model_name', header: 'Model', type: 'text' },
+            { key: 'status', header: 'Status', type: 'status' },
+            { key: 'progress', header: 'Progress', type: 'percentage' },
+            { key: 'started_at', header: 'Started', type: 'datetime' },
+            { key: 'estimated_completion', header: 'ETA', type: 'datetime' }
+        ],
+        'daily-cost': [
+            { key: 'service', header: 'Service', type: 'text' },
+            { key: 'cost', header: 'Cost', type: 'currency' },
+            { key: 'usage_amount', header: 'Usage', type: 'number' },
+            { key: 'unit_cost', header: 'Unit Cost', type: 'currency' },
+            { key: 'percentage', header: '% of Total', type: 'percentage' }
+        ]
+    };
+    
+    return columns[metricType] || columns['system-health'];
+}
+
+/**
+ * Format cell values based on type
+ */
+function formatCellValue(value, type) {
+    if (value === null || value === undefined) {
+        return '—';
+    }
+    
+    switch (type) {
+        case 'datetime':
+            return new Date(value).toLocaleString();
+        case 'duration':
+            return `${value}ms`;
+        case 'percentage':
+            return `${value}%`;
+        case 'currency':
+            return `$${parseFloat(value).toFixed(2)}`;
+        case 'bytes':
+            return formatBytes(value);
+        case 'temperature':
+            return `${value}°C`;
+        case 'status':
+            return `<span class="status-badge status-${value.toLowerCase()}">${value}</span>`;
+        case 'number':
+            return parseInt(value).toLocaleString();
+        default:
+            return value;
+    }
+}
+
+/**
+ * Format bytes to human readable format
+ */
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+/**
+ * Export current metric data
+ */
+function exportMetricData() {
+    if (!currentMetricData || !currentMetricType) {
+        return;
+    }
+    
+    const columns = getTableColumns(currentMetricType);
+    const headers = columns.map(col => col.header);
+    
+    // Convert data to CSV
+    let csv = headers.join(',') + '\n';
+    currentMetricData.forEach(row => {
+        const values = columns.map(col => {
+            const value = row[col.key];
+            return typeof value === 'string' ? `"${value}"` : value;
+        });
+        csv += values.join(',') + '\n';
+    });
+    
+    // Download CSV
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${currentMetricType}-details-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+}
+
+// Close modal when clicking outside
+document.addEventListener('click', function(event) {
+    const modal = document.getElementById('metric-details-modal');
+    if (event.target === modal) {
+        closeMetricDetails();
+    }
+});
+
+// Close modal with Escape key
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+        closeMetricDetails();
+    }
+});
+
+    </script>
+    <script>
+
+// Professional navigation functions
+function navigateToGPU() {
+    // Navigate to GPU tab or open GPU provisioning modal
+    switchView('gpu');
+}
+
+function navigateToTraining() {
+    // Navigate to training tab
+    switchView('training');
+}
+
+function navigateToAgentBuilder() {
+    // Navigate to agents tab
+    switchView('agents');
+}
+
+function navigateToDeployment() {
+    // Navigate to deployments tab or open deployment modal
+    switchView('deployments');
+}
+
+// Search functionality
+document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.querySelector('.search-input');
+    if (searchInput) {
+        searchInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                const query = this.value.trim();
+                if (query) {
+                    // Implement search functionality
+                    console.log('Searching for:', query);
+                    // You can implement actual search logic here
+                }
+            }
+        });
+    }
+});
+
+
+function navigateToTraining() {
+    // Navigate to training tab
+    switchView('training');
+}
+
+function navigateToAgentBuilder() {
+    // Navigate to agents tab
+    switchView('agents');
+}
+
+function navigateToDeployment() {
+    // Navigate to deployments tab or open deployment modal
+    switchView('deployments');
+}
+
+    </script>
+    <script>// Agent Tab JavaScript
+
+let currentAgentView = 'table';
+let currentSort = { column: 'name', direction: 'asc' };
+let agents = [];
+
+// Initialize agent tab
+function initializeAgentTab() {
+    console.log('🔄 initializeAgentTab() called');
+    console.log('🔄 typeof loadAgentsInline:', typeof loadAgentsInline);
+    try {
+        console.log('🔄 About to call loadAgentsInline()');
+        if (typeof loadAgentsInline === 'function') {
+            loadAgentsInline();
+            console.log('🔄 loadAgentsInline() call completed');
+        } else {
+            console.error('🔄 loadAgentsInline is not a function!');
+        }
+    } catch (error) {
+        console.error('🔄 Error calling loadAgentsInline():', error);
+    }
+    setupEventListeners();
+}
+
+// Setup event listeners
+function setupEventListeners() {
+    // Search functionality
+    const searchInput = document.querySelector('.search-input');
+    if (searchInput) {
+        searchInput.addEventListener('input', debounce(handleSearch, 300));
+    }
+    
+    // Filter functionality
+    const filters = document.querySelectorAll('.filter-select');
+    filters.forEach(filter => {
+        filter.addEventListener('change', handleFilter);
+    });
+    
+    // Sort functionality
+    const sortableHeaders = document.querySelectorAll('.sortable');
+    sortableHeaders.forEach(header => {
+        header.addEventListener('click', () => handleSort(header.dataset.sort));
+    });
+}
+
+// Load agents from API
+async function loadAgentsInline() {
+    console.log('🔄 Inline loadAgentsInline() called');
+    const loadingState = document.getElementById('agent-loading');
+    const tableBody = document.getElementById('agent-table-body');
+    const cardsGrid = document.getElementById('agent-cards-grid');
+    const emptyState = document.getElementById('agent-empty');
+    
+    try {
+        console.log('🔄 Setting loading state...');
+        loadingState.style.display = 'flex';
+        tableBody.innerHTML = '';
+        cardsGrid.innerHTML = '';
+        emptyState.style.display = 'none';
+        
+        console.log('🔄 Fetching agents from API...');
+        // Load agents from the correct API endpoint
+        const response = await fetch('/api/v1/agents', {
+            headers: { 'X-API-Key': loggedInUserToken }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        agents = await response.json();
+        console.log('🔄 Loaded agents:', agents);
+        
+        // Load inspection data for each agent to determine deployment status
+        console.log('🔄 Loading inspection data for', agents.length, 'agents...');
+        for (let agent of agents) {
+            try {
+                console.log(`🔄 Loading inspection for ${agent.name}...`);
+                const inspectionResponse = await fetch(`/api/v1/agents/${agent.name}/inspection`, {
+                    headers: { 'X-API-Key': loggedInUserToken }
+                });
+                if (inspectionResponse.ok) {
+                    const inspection = await inspectionResponse.json();
+                    console.log(`🔄 Inspection for ${agent.name}:`, inspection);
+                    // Use is_online to determine if agent is actually running
+                    agent.deployment = inspection.is_online ? 'deployed' : 'not-deployed';
+                    agent.status = inspection.is_online ? 'deployed' : 'not-deployed';
+                    console.log(`🔄 Set ${agent.name} deployment: ${agent.deployment}, status: ${agent.status}`);
+                } else {
+                    console.warn(`🔄 Inspection failed for ${agent.name}: ${inspectionResponse.status}`);
+                    agent.deployment = 'not-deployed';
+                    agent.status = 'not-deployed';
+                }
+                
+                // Set default values for missing properties
+                agent.model = agent.model || 'gpt-4';
+                agent.embedding = agent.embedding || 'text-embedding-3-small';
+                agent.lastRun = agent.lastRun || 'Never';
+                agent.costThisMonth = agent.costThisMonth || 0;
+            } catch (error) {
+                console.warn(`🔄 Failed to load inspection for ${agent.name}:`, error);
+                agent.deployment = 'not-deployed';
+                agent.status = 'not-deployed';
+            }
+        }
+        
+        console.log('🔄 Finished loading inspection data, rendering agents...');
+        if (agents.length === 0) {
+            console.log('🔄 No agents found, showing empty state');
+            showEmptyState();
+        } else {
+            console.log('🔄 Rendering', agents.length, 'agents');
+            renderAgents();
+        }
+    } catch (error) {
+        console.error('🔄 Error loading agents:', error);
+        showErrorState();
+    } finally {
+        console.log('🔄 Hiding loading state');
+        loadingState.style.display = 'none';
+    }
+}
+
+// Render agents in current view
+function renderAgents() {
+    console.log('🔄 renderAgents() called, currentAgentView:', currentAgentView);
+    if (currentAgentView === 'table') {
+        console.log('🔄 Rendering table view');
+        renderTableView();
+    } else {
+        console.log('🔄 Rendering grid view');
+        renderGridView();
+    }
+}
+
+// Render table view
+function renderTableView() {
+    console.log('🔄 renderTableView() called with', agents.length, 'agents');
+    const tableBody = document.getElementById('agent-table-body');
+    if (!tableBody) {
+        console.error('🔄 agent-table-body not found!');
+        return;
+    }
+    tableBody.innerHTML = '';
+    
+    agents.forEach(agent => {
+        console.log('🔄 Creating table row for agent:', agent.name);
+        const row = createAgentTableRow(agent);
+        tableBody.appendChild(row);
+    });
+    console.log('🔄 Table view rendered');
+}
+
+// Render grid view
+function renderGridView() {
+    console.log('🔄 renderGridView() called with', agents.length, 'agents');
+    const cardsGrid = document.getElementById('agent-cards-grid');
+    if (!cardsGrid) {
+        console.error('🔄 agent-cards-grid not found!');
+        return;
+    }
+    cardsGrid.innerHTML = '';
+    
+    agents.forEach(agent => {
+        console.log('🔄 Creating card for agent:', agent.name);
+        const card = createAgentCard(agent);
+        cardsGrid.appendChild(card);
+    });
+    console.log('🔄 Grid view rendered');
+}
+
+// Create agent table row
+function createAgentTableRow(agent) {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+        <td>
+            <div class="agent-name" onclick="openAgentDetail('${agent.id}')">${agent.name}</div>
+            <div class="agent-description">${agent.description || 'No description'}</div>
+        </td>
+        <td>
+            <div class="status-pill ${agent.status}">
+                <div class="status-dot"></div>
+                ${agent.status}
+            </div>
+        </td>
+        <td>
+            <div class="model-info">
+                <div class="model-name">${agent.model}</div>
+                <div class="embedding-name">${agent.embedding}</div>
+            </div>
+        </td>
+        <td>
+            <div class="embedding-name">${agent.embedding}</div>
+        </td>
+        <td>
+            <div class="deployment-status">
+                <div class="deployment-badge ${agent.deployment}">${agent.deployment}</div>
+            </div>
+        </td>
+        <td>
+            <div class="last-run">${formatLastRun(agent.lastRun)}</div>
+        </td>
+        <td>
+            <div class="cost-amount">$${agent.costThisMonth}</div>
+        </td>
+        <td>
+            <div class="agent-actions">
+                ${agent.deployment === 'not-deployed' ? 
+                    `<button class="action-btn primary" onclick="deployAgent('${agent.name}')" title="Deploy">Deploy</button>` : 
+                    `<button class="action-btn warning" onclick="shutdownAgent('${agent.name}')" title="Shutdown">Shutdown</button>`
+                }
+                <button class="action-btn" onclick="editAgent('${agent.id}')" title="Edit">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                </button>
+                <button class="action-btn" onclick="cloneAgent('${agent.id}')" title="Clone">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                </button>
+                <button class="action-btn" onclick="testAgent('${agent.id}')" title="Test">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="5,3 19,12 5,21"></polygon>
+                    </svg>
+                </button>
+                <button class="action-btn" onclick="deleteAgent('${agent.id}')" title="Delete">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3,6 5,6 21,6"></polyline>
+                        <path d="M19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2"></path>
+                    </svg>
+                </button>
+            </div>
+        </td>
+    `;
+    return row;
+}
+
+// Create agent card
+function createAgentCard(agent) {
+    const card = document.createElement('div');
+    card.className = 'agent-card';
+    card.innerHTML = `
+        <div class="agent-card-header">
+            <div>
+                <h3 class="agent-card-title" onclick="openAgentDetail('${agent.id}')">${agent.name}</h3>
+                <p class="agent-card-description">${agent.description || 'No description'}</p>
+            </div>
+            <div class="agent-card-status">
+                <div class="status-pill ${agent.status}">
+                    <div class="status-dot"></div>
+                    ${agent.status}
+                </div>
+            </div>
+        </div>
+        
+        <div class="agent-card-body">
+            <div class="agent-card-info">
+                <div class="info-item">
+                    <div class="info-label">Model</div>
+                    <div class="info-value">${agent.model}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Embedding</div>
+                    <div class="info-value">${agent.embedding}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Deployment</div>
+                    <div class="info-value">
+                        <div class="deployment-badge ${agent.deployment}">${agent.deployment}</div>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Last Run</div>
+                    <div class="info-value">${formatLastRun(agent.lastRun)}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="agent-card-footer">
+            <div class="agent-card-cost">$${agent.costThisMonth} this month</div>
+            <div class="agent-card-actions">
+                ${agent.deployment === 'not-deployed' ? 
+                    `<button class="action-btn primary" onclick="deployAgent('${agent.name}')" title="Deploy">Deploy</button>` : 
+                    `<button class="action-btn warning" onclick="shutdownAgent('${agent.name}')" title="Shutdown">Shutdown</button>`
+                }
+                <button class="action-btn" onclick="editAgent('${agent.id}')" title="Edit">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                </button>
+                <button class="action-btn" onclick="testAgent('${agent.id}')" title="Test">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="5,3 19,12 5,21"></polygon>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    `;
+    return card;
+}
+
+// Toggle between table and grid view
+function toggleAgentView(view) {
+    currentAgentView = view;
+    
+    const tableView = document.getElementById('agent-table-view');
+    const gridView = document.getElementById('agent-grid-view');
+    const tableBtn = document.querySelector('[data-view="table"]');
+    const gridBtn = document.querySelector('[data-view="grid"]');
+    
+    if (view === 'table') {
+        tableView.style.display = 'block';
+        gridView.style.display = 'none';
+        tableBtn.classList.add('active');
+        gridBtn.classList.remove('active');
+    } else {
+        tableView.style.display = 'none';
+        gridView.style.display = 'block';
+        tableBtn.classList.remove('active');
+        gridBtn.classList.add('active');
+    }
+    
+    renderAgents();
+}
+
+// Handle search
+function handleSearch(event) {
+    const query = event.target.value.toLowerCase();
+    // Filter agents based on search query
+    // This would typically filter the agents array and re-render
+    console.log('Searching for:', query);
+}
+
+// Handle filter changes
+function handleFilter(event) {
+    const filterType = event.target.id.replace('-filter', '');
+    const filterValue = event.target.value;
+    // Apply filters to agents array and re-render
+    console.log('Filtering by', filterType, ':', filterValue);
+}
+
+// Handle sorting
+function handleSort(column) {
+    if (currentSort.column === column) {
+        currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+    } else {
+        currentSort.column = column;
+        currentSort.direction = 'asc';
+    }
+    
+    // Update sort indicators
+    document.querySelectorAll('.sortable').forEach(header => {
+        header.classList.remove('asc', 'desc');
+        if (header.dataset.sort === column) {
+            header.classList.add(currentSort.direction);
+        }
+    });
+    
+    // Sort agents array and re-render
+    console.log('Sorting by', column, currentSort.direction);
+}
+
+// Show empty state
+function showEmptyState() {
+    document.getElementById('agent-empty').style.display = 'flex';
+}
+
+// Show error state
+function showErrorState() {
+    console.error('🔄 Showing error state');
+    const loadingState = document.getElementById('agent-loading');
+    const emptyState = document.getElementById('agent-empty');
+    if (loadingState) loadingState.style.display = 'none';
+    if (emptyState) {
+        emptyState.innerHTML = '<div class="empty-icon">⚠️</div><p>Failed to load agents. Please try again.</p>';
+        emptyState.style.display = 'flex';
+    }
+}
+
+// Format last run timestamp
+function formatLastRun(timestamp) {
+    if (!timestamp) return 'Never';
+    
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    
+    return date.toLocaleDateString();
+}
+
+// Agent actions
+function openAgentDetail(agentId) {
+    // Navigate to agent detail page
+    console.log('Opening agent detail for:', agentId);
+    // This would typically navigate to a detail view or open a modal
+}
+
+async function deployAgent(agentName) {
+    console.log('Deploying agent:', agentName);
+    try {
+        const response = await fetch(`/api/v1/agents/${agentName}/deploy`, {
+            method: 'POST',
+            headers: { 'X-API-Key': loggedInUserToken }
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            console.log('Deploy result:', result);
+            // Reload agents to update status
+            loadAgentsInline();
+        } else {
+            const error = await response.json().catch(() => ({}));
+            console.error('Deploy failed:', error);
+            alert('Failed to deploy agent: ' + (error.detail || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Deploy error:', error);
+        alert('Failed to deploy agent: ' + error.message);
+    }
+}
+
+async function shutdownAgent(agentName) {
+    console.log('Shutting down agent:', agentName);
+    try {
+        const response = await fetch(`/api/v1/agents/${agentName}/shutdown`, {
+            method: 'POST',
+            headers: { 'X-API-Key': loggedInUserToken }
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            console.log('Shutdown result:', result);
+            // Reload agents to update status
+            loadAgentsInline();
+        } else {
+            const error = await response.json().catch(() => ({}));
+            console.error('Shutdown failed:', error);
+            alert('Failed to shutdown agent: ' + (error.detail || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Shutdown error:', error);
+        alert('Failed to shutdown agent: ' + error.message);
+    }
+}
+
+function editAgent(agentId) {
+    console.log('Editing agent:', agentId);
+    // Open edit modal or navigate to edit page
+}
+
+function cloneAgent(agentId) {
+    console.log('Cloning agent:', agentId);
+    // Open clone modal
+}
+
+function testAgent(agentId) {
+    console.log('Testing agent:', agentId);
+    // Open test interface
+}
+
+function deleteAgent(agentId) {
+    if (confirm('Are you sure you want to delete this agent?')) {
+        console.log('Deleting agent:', agentId);
+        // Delete agent via API
+    }
+}
+
+function showCreateAgentModal() {
+    console.log('Opening create agent modal');
+    // Open create agent modal
+}
+
+// Utility function for debouncing
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+// Initialize when DOM is loaded
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('🔄 DOMContentLoaded event fired');
+    console.log('🔄 USE_INLINE_AGENT_RENDERER:', window.USE_INLINE_AGENT_RENDERER);
+    // Only initialize if we're on the agents tab
+    if (document.getElementById('agents-view')) {
+        console.log('🔄 Found agents-view, initializing agent tab');
+        initializeAgentTab();
+    } else {
+        console.log('🔄 agents-view not found, skipping agent tab initialization');
+    }
+});
+
+    </script>
 </head>
 <body>
     <div id="toast-notification"></div>
@@ -56,14 +940,12 @@
     <main class="main-content">
         <!-- Tab Navigation -->
         <div class="tab-navigation">
-            <button class="tab-nav-item active" data-view="overview">
+            <button class="tab-nav-item active" data-view="home">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="7" height="7"></rect>
-                    <rect x="14" y="3" width="7" height="7"></rect>
-                    <rect x="14" y="14" width="7" height="7"></rect>
-                    <rect x="3" y="14" width="7" height="7"></rect>
+                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                    <polyline points="9,22 9,12 15,12 15,22"></polyline>
                 </svg>
-                Overview
+                Home
             </button>
             <button class="tab-nav-item" data-view="agents">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -109,214 +991,402 @@
                 </svg>
                 Evaluation
             </button>
+            <button class="tab-nav-item" data-view="projects">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                </svg>
+                Projects
+            </button>
+            <button class="tab-nav-item" data-view="gpu-control">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                    <line x1="8" y1="21" x2="16" y2="21"></line>
+                    <line x1="12" y1="17" x2="12" y2="21"></line>
+                </svg>
+                GPU Control
+            </button>
+            <button class="tab-nav-item" data-view="deployments">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                    <polyline points="3.27,6.96 12,12.01 20.73,6.96"></polyline>
+                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                </svg>
+                Deployments
+            </button>
+            <button class="tab-nav-item" data-view="billing">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="1" x2="12" y2="23"></line>
+                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                </svg>
+                Billing
+            </button>
         </div>
 
         <div class="content-container">
-            <!-- Overview View -->
-            <div class="view-content active" id="overview-view">
+                                    <!-- Professional AWS-Style Home View -->
+            <div class="view-content active" id="home-view">
             
-            <div class="overview-controls">
-                <div class="controls-left">
-                    <label for="overview-range">Range</label>
-                    <select id="overview-range">
-                        <option value="24h" selected>Last 24h</option>
-                        <option value="7d">Last 7d</option>
-                        <option value="30d">Last 30d</option>
-                    </select>
-                </div>
-                <div class="controls-right">
-                    <button class="btn-secondary btn-sm" onclick="dashboard.checkForUpdates(true)" title="Check for updates now">
-                        ↻ Refresh
-                    </button>
-                    <span class="last-updated">Last updated: <span id="overview-last-updated">—</span></span>
+            <!-- Search Bar -->
+            <div class="home-search-section">
+                <div class="search-container">
+                    <div class="search-input-wrapper">
+                        <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <path d="M21 21l-4.35-4.35"></path>
+                        </svg>
+                        <input type="text" class="search-input" placeholder="Search agents, models, jobs, projects..." />
+                    </div>
                 </div>
             </div>
 
-            <div class="stats-grid">
-                <div class="list-header">System Overview</div>
-                <div class="overview-table">
-                    <table class="table table-compact">
+            <!-- Primary Actions Row -->
+            <div class="home-section">
+                <h2 class="section-header">Get Started</h2>
+                <div class="primary-actions-grid">
+                    <div class="primary-action-card" onclick="navigateToGPU()">
+                        <div class="card-header">
+                            <div class="card-icon gpu-icon">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                                    <line x1="8" y1="21" x2="16" y2="21"></line>
+                                    <line x1="12" y1="17" x2="12" y2="21"></line>
+                                    <circle cx="12" cy="10" r="2"></circle>
+                                </svg>
+                            </div>
+                            <div class="card-status">
+                                <span class="status-dot available"></span>
+                                <span class="status-text">Available</span>
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <h3 class="card-title">Provision GPU</h3>
+                            <p class="card-description">Pick GPU type, provider, and start an instance</p>
+                            <div class="card-secondary-info">
+                                <span class="secondary-text">Last provisioned: 1h ago</span>
+                            </div>
+                        </div>
+                        <div class="card-footer">
+                            <button class="primary-cta-btn">Provision Now</button>
+                        </div>
+                    </div>
+
+                    <div class="primary-action-card" onclick="navigateToTraining()">
+                        <div class="card-header">
+                            <div class="card-icon training-icon">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
+                                    <path d="M2 17L12 22L22 17"></path>
+                                    <path d="M2 12L12 17L22 12"></path>
+                                    <line x1="12" y1="2" x2="12" y2="22"></line>
+                                </svg>
+                            </div>
+                            <div class="card-status">
+                                <span class="status-dot ready"></span>
+                                <span class="status-text">Ready</span>
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <h3 class="card-title">Train a Model</h3>
+                            <p class="card-description">Upload data, select training mode (local vs GPU), track jobs</p>
+                            <div class="card-secondary-info">
+                                <span class="secondary-text">3 jobs running</span>
+                            </div>
+                        </div>
+                        <div class="card-footer">
+                            <button class="primary-cta-btn">Train Now</button>
+                        </div>
+                    </div>
+
+                    <div class="primary-action-card" onclick="navigateToAgentBuilder()">
+                        <div class="card-header">
+                            <div class="card-icon agent-icon">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="9" cy="7" r="4"></circle>
+                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                                    <circle cx="18" cy="8" r="2"></circle>
+                                </svg>
+                            </div>
+                            <div class="card-status">
+                                <span class="status-dot available"></span>
+                                <span class="status-text">Available</span>
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <h3 class="card-title">Build an Agent</h3>
+                            <p class="card-description">Create orchestration via YAML or UI, attach tools/models</p>
+                            <div class="card-secondary-info">
+                                <span class="secondary-text">12 agents created</span>
+                            </div>
+                        </div>
+                        <div class="card-footer">
+                            <button class="primary-cta-btn">Build Now</button>
+                        </div>
+                    </div>
+
+                    <div class="primary-action-card" onclick="navigateToDeployment()">
+                        <div class="card-header">
+                            <div class="card-icon deploy-icon">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                                    <polyline points="3.27,6.96 12,12.01 20.73,6.96"></polyline>
+                                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                                    <path d="M8 12l2 2 4-4"></path>
+                                </svg>
+                            </div>
+                            <div class="card-status">
+                                <span class="status-dot ready"></span>
+                                <span class="status-text">Ready</span>
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <h3 class="card-title">Deploy an Agent</h3>
+                            <p class="card-description">Choose deployment mode (Chat, API, Slack, etc.)</p>
+                            <div class="card-secondary-info">
+                                <span class="secondary-text">5 agents deployed</span>
+                            </div>
+                        </div>
+                        <div class="card-footer">
+                            <button class="primary-cta-btn">Deploy Now</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Links / Insights Row -->
+            <div class="home-section">
+                <h2 class="section-header">Quick Insights</h2>
+                <div class="insights-grid">
+                    <div class="insight-card credit-card">
+                        <div class="insight-header">
+                            <div class="insight-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <path d="M12 6v6l4 2"></path>
+                                </svg>
+                            </div>
+                            <h3 class="insight-title">Credit Balance</h3>
+                        </div>
+                        <div class="insight-content">
+                            <div class="insight-value">$247.50</div>
+                            <div class="insight-subtitle">Available credits</div>
+                        </div>
+                        <div class="insight-footer">
+                            <button class="secondary-cta-btn">Top Up</button>
+                        </div>
+                    </div>
+
+                    <div class="insight-card jobs-card">
+                        <div class="insight-header">
+                            <div class="insight-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                                    <line x1="8" y1="21" x2="16" y2="21"></line>
+                                    <line x1="12" y1="17" x2="12" y2="21"></line>
+                                </svg>
+                            </div>
+                            <h3 class="insight-title">Active Jobs</h3>
+                        </div>
+                        <div class="insight-content">
+                            <div class="insight-value">7</div>
+                            <div class="insight-subtitle">Running trainings/agents</div>
+                        </div>
+                        <div class="insight-footer">
+                            <button class="secondary-cta-btn">View All</button>
+                        </div>
+                    </div>
+
+                    <div class="insight-card activity-card">
+                        <div class="insight-header">
+                            <div class="insight-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                                    <path d="M3 3v5h5"></path>
+                                </svg>
+                            </div>
+                            <h3 class="insight-title">Recent Activity</h3>
+                        </div>
+                        <div class="insight-content">
+                            <div class="activity-list">
+                                <div class="activity-item">
+                                    <span class="activity-text">GPU provisioned</span>
+                                    <span class="activity-time">2m ago</span>
+                                </div>
+                                <div class="activity-item">
+                                    <span class="activity-text">Model trained</span>
+                                    <span class="activity-time">15m ago</span>
+                                </div>
+                                <div class="activity-item">
+                                    <span class="activity-text">Agent deployed</span>
+                                    <span class="activity-time">1h ago</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="insight-footer">
+                            <button class="secondary-cta-btn">View All</button>
+                        </div>
+                    </div>
+
+                    <div class="insight-card cost-card">
+                        <div class="insight-header">
+                            <div class="insight-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="12" y1="1" x2="12" y2="23"></line>
+                                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                                </svg>
+                            </div>
+                            <h3 class="insight-title">Cost Snapshot</h3>
+                        </div>
+                        <div class="insight-content">
+                            <div class="insight-value">$89.45</div>
+                            <div class="insight-subtitle">Last 7 days</div>
+                            <div class="cost-trend">
+                                <span class="trend-indicator positive">↗</span>
+                                <span class="trend-text">+12% vs last week</span>
+                            </div>
+                        </div>
+                        <div class="insight-footer">
+                            <button class="secondary-cta-btn">View Details</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            </div>
+        <!-- Agents View -->
+        <div class="view-content" id="agents-view">
+            
+            <!-- Agent Header -->
+            <div class="agent-header">
+                <div class="agent-header-left">
+                    <h2 class="agent-title">Agents</h2>
+                    <p class="agent-subtitle">Build, manage, and monitor your AI agents</p>
+                </div>
+                <div class="agent-header-right">
+                    <button class="btn-primary new-agent-btn" onclick="showCreateAgentModal()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        + New Agent
+                    </button>
+                </div>
+            </div>
+
+            <!-- Search and Filters -->
+            <div class="agent-controls">
+                <div class="search-section">
+                    <div class="search-input-wrapper">
+                        <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <path d="M21 21l-4.35-4.35"></path>
+                        </svg>
+                        <input type="text" class="search-input" placeholder="Search agents by name, description, or tags..." />
+                    </div>
+                </div>
+                
+                <div class="filters-section">
+                    <select class="filter-select" id="status-filter">
+                        <option value="">All Status</option>
+                        <option value="online">Online</option>
+                        <option value="offline">Offline</option>
+                        <option value="error">Error</option>
+                    </select>
+                    
+                    <select class="filter-select" id="model-filter">
+                        <option value="">All Models</option>
+                        <option value="gpt-4o">GPT-4o</option>
+                        <option value="gpt-4">GPT-4</option>
+                        <option value="claude-3">Claude-3</option>
+                        <option value="llama-3-70b">Llama-3-70B</option>
+                    </select>
+                    
+                    <select class="filter-select" id="deployment-filter">
+                        <option value="">All Deployments</option>
+                        <option value="not-deployed">Not Deployed</option>
+                        <option value="chat">Chat</option>
+                        <option value="api">API</option>
+                        <option value="slack">Slack</option>
+                        <option value="discord">Discord</option>
+                    </select>
+                </div>
+                
+                <div class="view-toggle">
+                    <button class="view-toggle-btn active" data-view="table" onclick="toggleAgentView('table')">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 3h18v18H3zM9 9h6v6H9z"></path>
+                        </svg>
+                    </button>
+                    <button class="view-toggle-btn" data-view="grid" onclick="toggleAgentView('grid')">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="14" width="7" height="7"></rect>
+                            <rect x="3" y="14" width="7" height="7"></rect>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Agent List - Table View -->
+            <div class="agent-table-view" id="agent-table-view">
+                <div class="table-container">
+                    <table class="agent-table">
                         <thead>
                             <tr>
-                                <th>Metric</th>
-                                <th>Value</th>
+                                <th class="sortable" data-sort="name">Agent Name</th>
+                                <th class="sortable" data-sort="status">Status</th>
+                                <th class="sortable" data-sort="model">Model</th>
+                                <th class="sortable" data-sort="embedding">Embedding</th>
+                                <th class="sortable" data-sort="deployment">Deployment</th>
+                                <th class="sortable" data-sort="last-run">Last Run</th>
+                                <th class="sortable" data-sort="cost">Cost This Month</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            <tr>
-                                <td>Active Agents</td>
-                                <td id="total-agents">0</td>
-                            </tr>
-                            <tr>
-                                <td>Total Runs</td>
-                                <td id="total-runs">0</td>
-                            </tr>
-                            <tr>
-                                <td>Training Jobs</td>
-                                <td id="total-training-jobs">0</td>
-                            </tr>
-                            <tr>
-                                <td>Success Rate</td>
-                                <td id="success-rate">0%</td>
-                            </tr>
-                            <tr>
-                                <td>Requests (24h)</td>
-                                <td id="requests-24h">0</td>
-                            </tr>
-                            <tr>
-                                <td>p95 Latency</td>
-                                <td id="p95-latency">0ms</td>
-                            </tr>
-                            <tr>
-                                <td>Error Rate (24h)</td>
-                                <td id="error-rate">0%</td>
-                            </tr>
-                            <tr>
-                                <td>Tokens Used (24h)</td>
-                                <td id="tokens-24h">0</td>
-                            </tr>
+                        <tbody id="agent-table-body">
+                            <!-- Agent rows will be populated here -->
                         </tbody>
                     </table>
                 </div>
             </div>
-            
-            <div class="overview-sections">
-                <div class="section-card">
-                    <div class="section-header">
-                        <h3>System Health</h3>
-                    </div>
-                    <div class="health-grid">
-                        <div class="health-tile">
-                            <div class="health-name">Database</div>
-                            <div class="health-status" id="health-db">—</div>
-                        </div>
-                        <div class="health-tile">
-                            <div class="health-name">Queue</div>
-                            <div class="health-status" id="health-queue">—</div>
-                        </div>
-                        <div class="health-tile">
-                            <div class="health-name">Vector Store</div>
-                            <div class="health-status" id="health-vector">—</div>
-                        </div>
-                        <div class="health-tile">
-                            <div class="health-name">Storage</div>
-                            <div class="health-status" id="health-storage">—</div>
-                        </div>
-                    </div>
-                </div>
-                
 
-                <div class="section-card">
-                    <div class="section-header">
-                        <h3>Resource Usage</h3>
-                    </div>
-                    <div class="metrics-grid">
-                        <div class="metric-tile">
-                            <div class="metric-name">Memory</div>
-                            <div class="metric-value" id="resource-memory">—</div>
-                            <div class="metric-detail" id="resource-memory-detail">—</div>
-                        </div>
-                        <div class="metric-tile">
-                            <div class="metric-name">CPU</div>
-                            <div class="metric-value" id="resource-cpu">—</div>
-                        </div>
-                        <div class="metric-tile">
-                            <div class="metric-name">Disk</div>
-                            <div class="metric-value" id="resource-disk">—</div>
-                            <div class="metric-detail" id="resource-disk-detail">—</div>
-                        </div>
-                    </div>
+            <!-- Agent List - Grid View -->
+            <div class="agent-grid-view" id="agent-grid-view" style="display: none;">
+                <div class="agent-cards-grid" id="agent-cards-grid">
+                    <!-- Agent cards will be populated here -->
                 </div>
-
-                <div class="section-card">
-                    <div class="section-header">
-                        <h3>ML Operations</h3>
-                    </div>
-                    <div class="metrics-grid">
-                        <div class="metric-tile">
-                            <div class="metric-name">Training Jobs</div>
-                            <div class="metric-value" id="training-running-jobs">—</div>
-                        </div>
-                        <div class="metric-tile">
-                            <div class="metric-name">Models Available</div>
-                            <div class="metric-value" id="training-total-models">—</div>
-                        </div>
-                        <div class="metric-tile">
-                            <div class="metric-name">GPU Hours (24h)</div>
-                            <div class="metric-value" id="training-gpu-hours">—</div>
-                        </div>
-                        <div class="metric-tile">
-                            <div class="metric-name">Training Cost (24h)</div>
-                            <div class="metric-value" id="training-cost">—</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="section-card">
-                    <div class="section-header">
-                        <h3>Data Pipeline</h3>
-                    </div>
-                    <div class="metrics-grid">
-                        <div class="metric-tile">
-                            <div class="metric-name">Documents Indexed</div>
-                            <div class="metric-value" id="pipeline-total-docs">—</div>
-                        </div>
-                        <div class="metric-tile">
-                            <div class="metric-name">Embeddings (24h)</div>
-                            <div class="metric-value" id="pipeline-embeddings">—</div>
-                        </div>
-                        <div class="metric-tile">
-                            <div class="metric-name">Vector Store Size</div>
-                            <div class="metric-value" id="pipeline-vs-size">—</div>
-                        </div>
-                        <div class="metric-tile">
-                            <div class="metric-name">Failed Ingests (24h)</div>
-                            <div class="metric-value" id="pipeline-failed-ingests">—</div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="section-card">
-                    <div class="section-header">
-                        <h3>Recent Agent Activity</h3>
-                        <button class="btn-text" onclick="switchView('agents')">View All</button>
-                    </div>
-                    <div class="activity-list" id="recent-agent-activity">
-                        <div class="loading-state">
-                            <div class="loading-spinner"></div>
-                            <p>Loading recent activity...</p>
-                        </div>
-                    </div>
-                </div>
-                
             </div>
-        </div>
 
-        <!-- Agents View -->
-        <div class="view-content" id="agents-view">
-            
-            <div class="actions-bar">
+            <!-- Loading State -->
+            <div class="loading-state" id="agent-loading">
+                <div class="loading-spinner"></div>
+                <p>Loading agents...</p>
+            </div>
+
+            <!-- Empty State -->
+            <div class="empty-state" id="agent-empty" style="display: none;">
+                <div class="empty-icon">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                </div>
+                <h3>No agents found</h3>
+                <p>Create your first agent to get started with RAGnetic</p>
                 <button class="btn-primary" onclick="showCreateAgentModal()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="12" y1="5" x2="12" y2="19"></line>
                         <line x1="5" y1="12" x2="19" y2="12"></line>
                     </svg>
-                    New Agent
+                    Create Your First Agent
                 </button>
             </div>
-            
-            <div class="agents-grid" id="agents-grid">
-                <div class="list-header">Agents</div>
-                <div class="loading-state">
-                    <div class="loading-spinner"></div>
-                    <p>Loading agents...</p>
-                </div>
-            </div>
         </div>
-
-
-        <!-- Training View -->
-        <div class="view-content" id="training-view">
+<div class="view-content" id="training-view">
             
             <div class="actions-bar">
                 <button class="btn-primary" onclick="showCreateTrainingJobModal()">
@@ -350,19 +1420,878 @@
 
         <!-- Analytics View -->
         <div class="view-content" id="analytics-view">
-            
-            <div class="analytics-grid">
-                <div class="list-header">Analytics</div>
-                <div class="chart-placeholder">
-                    <h3>Agent Performance</h3>
-                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="20" x2="18" y2="10"></line>
-                        <line x1="12" y1="20" x2="12" y2="4"></line>
-                        <line x1="6" y1="20" x2="6" y2="14"></line>
-                    </svg>
-                    <p>Chart coming soon</p>
+
+            <!-- Analytics Sub-Tabs Navigation -->
+            <div class="analytics-subtabs">
+                <div class="subtab-nav">
+                    <button class="subtab-btn active" data-tab="overview">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="14" width="7" height="7"></rect>
+                            <rect x="3" y="14" width="7" height="7"></rect>
+                        </svg>
+                        Overview
+                    </button>
+                    <button class="subtab-btn" data-tab="costs">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                        </svg>
+                        Costs
+                    </button>
+                    <button class="subtab-btn" data-tab="llm">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 19c-5 0-7-2-7-5s2-5 7-5 7 2 7 5-2 5-7 5z"></path>
+                            <path d="M23 19c-5 0-7-2-7-5s2-5 7-5 7 2 7 5-2 5-7 5z"></path>
+                        </svg>
+                        LLM Analytics
+                    </button>
+                    <button class="subtab-btn" data-tab="agents">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
+                        </svg>
+                        Agent Runs
+                    </button>
+                    <button class="subtab-btn" data-tab="training">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+                        </svg>
+                        Training
+                    </button>
+                    <button class="subtab-btn" data-tab="gpu">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                            <line x1="8" y1="21" x2="16" y2="21"></line>
+                            <line x1="12" y1="17" x2="12" y2="21"></line>
+                        </svg>
+                        GPU Analytics
+                    </button>
+                    <button class="subtab-btn" data-tab="evaluation">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 11H5a2 2 0 0 0-2 2v3c0 1.1.9 2 2 2h4m0-7v7m0-7h10a2 2 0 0 1 2 2v3c0 1.1-.9 2-2 2h-4m-6 0h6"></path>
+                        </svg>
+                        Evaluation
+                    </button>
                 </div>
+            </div>
+
+            <!-- Loading State -->
+            <div id="analytics-loading" class="analytics-loading" style="display: none;">
+                <div class="loading-spinner"></div>
+                <p>Loading analytics data...</p>
+            </div>
+
+            <!-- Error State -->
+            <div id="analytics-error" class="analytics-error" style="display: none;">
+                <p>Failed to load analytics data. Please try again.</p>
+            </div>
+
+
+            <!-- Analytics Sub-Tab Content -->
+            <div class="analytics-content">
                 
+                <!-- Overview Tab -->
+                <div class="subtab-content active" id="overview-tab">
+                    <!-- AWS-Style Two Column Layout -->
+                    <div class="aws-layout">
+                        <!-- Left Side: Tables and Metrics -->
+                        <div class="left-panel">
+                            <!-- Key Metrics Cards -->
+                            <div class="metrics-grid">
+                                <div class="metric-card primary">
+                                    <div class="metric-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                        </svg>
+                    </div>
+                                    <div class="metric-content">
+                                        <h3>Total Spend</h3>
+                                        <div class="metric-value" id="total-spend">$0.00</div>
+                                        <div class="metric-description">All-time spending across services</div>
+                                        <div class="metric-trend" id="spend-trend">
+                                            <span class="trend-indicator positive">↗</span>
+                                            <span class="trend-text">+12% vs last month</span>
+                    </div>
+                </div>
+                                </div>
+                            
+                                <div class="metric-card">
+                                    <div class="metric-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M9 19c-5 0-7-2-7-5s2-5 7-5 7 2 7 5-2 5-7 5z"></path>
+                                            <path d="M23 19c-5 0-7-2-7-5s2-5 7-5 7 2 7 5-2 5-7 5z"></path>
+                        </svg>
+                    </div>
+                                    <div class="metric-content">
+                                        <h3>API Requests</h3>
+                                        <div class="metric-value" id="total-requests">0</div>
+                                        <div class="metric-description">Total API calls processed</div>
+                                        <div class="metric-trend" id="requests-trend">
+                                            <span class="trend-indicator positive">↗</span>
+                                            <span class="trend-text">+8% vs last month</span>
+                    </div>
+                </div>
+                                </div>
+                            
+                                <div class="metric-card">
+                                    <div class="metric-icon">
+                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                                            <line x1="8" y1="21" x2="16" y2="21"></line>
+                                            <line x1="12" y1="17" x2="12" y2="21"></line>
+                                        </svg>
+                                    </div>
+                                    <div class="metric-content">
+                                        <h3>GPU Compute</h3>
+                                        <div class="metric-value" id="gpu-hours">0h</div>
+                                        <div class="metric-description">Total GPU compute hours</div>
+                                        <div class="metric-trend" id="gpu-trend">
+                                            <span class="trend-indicator neutral">→</span>
+                                            <span class="trend-text">Stable usage</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            
+                                <div class="metric-card">
+                                    <div class="metric-icon">
+                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
+                                        </svg>
+                                    </div>
+                                    <div class="metric-content">
+                                        <h3>Active Agents</h3>
+                                        <div class="metric-value" id="active-agents">0</div>
+                                        <div class="metric-description">Agents currently running</div>
+                                        <div class="metric-trend" id="agents-trend">
+                                            <span class="trend-indicator positive">↗</span>
+                                            <span class="trend-text">+3 new this week</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="metric-card">
+                                    <div class="metric-icon">
+                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <circle cx="12" cy="12" r="10"></circle>
+                                            <polyline points="12,6 12,12 16,14"></polyline>
+                                        </svg>
+                                    </div>
+                                    <div class="metric-content">
+                                        <h3>Avg Response Time</h3>
+                                        <div class="metric-value" id="avg-response-time">0ms</div>
+                                        <div class="metric-description">Average response time</div>
+                                        <div class="metric-trend" id="response-trend">
+                                            <span class="trend-indicator negative">↘</span>
+                                            <span class="trend-text">-15% faster</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="metric-card">
+                                    <div class="metric-icon">
+                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+                                        </svg>
+                                    </div>
+                                    <div class="metric-content">
+                                        <h3>Success Rate</h3>
+                                        <div class="metric-value" id="success-rate">0%</div>
+                                        <div class="metric-description">Request completion rate</div>
+                                        <div class="metric-trend" id="success-trend">
+                                            <span class="trend-indicator positive">↗</span>
+                                            <span class="trend-text">+2% improvement</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+            </div>
+
+                        <!-- Overview Tables -->
+                        <div class="overview-tables">
+                            <div class="table-section">
+                                <h3>Recent Activity</h3>
+                    <div class="table-wrapper">
+                                    <table class="data-table">
+                            <thead>
+                                <tr>
+                                                <th>Time</th>
+                                                <th>Agent</th>
+                                                <th>Action</th>
+                                                <th>Status</th>
+                                                <th>Cost</th>
+                                </tr>
+                            </thead>
+                                        <tbody id="recent-activity-table">
+                                            <tr>
+                                                <td>2 min ago</td>
+                                                <td>Customer Support Bot</td>
+                                                <td>Query Processing</td>
+                                                <td><span class="status-badge success">Success</span></td>
+                                                <td>$0.02</td>
+                                            </tr>
+                                            <tr>
+                                                <td>5 min ago</td>
+                                                <td>Data Analyzer</td>
+                                                <td>Report Generation</td>
+                                                <td><span class="status-badge success">Success</span></td>
+                                                <td>$0.15</td>
+                                            </tr>
+                                            <tr>
+                                                <td>12 min ago</td>
+                                                <td>Content Generator</td>
+                                                <td>Article Creation</td>
+                                                <td><span class="status-badge success">Success</span></td>
+                                                <td>$0.08</td>
+                                            </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                            <div class="table-section">
+                                <h3>Top Performing Agents</h3>
+                    <div class="table-wrapper">
+                                    <table class="data-table">
+                            <thead>
+                                <tr>
+                                                <th>Agent Name</th>
+                                                <th>Runs</th>
+                                                <th>Success Rate</th>
+                                                <th>Avg Response Time</th>
+                                                <th>Total Cost</th>
+                                </tr>
+                            </thead>
+                                        <tbody id="top-agents-table">
+                                            <tr>
+                                                <td>Customer Support Bot</td>
+                                                <td>1,247</td>
+                                                <td>98.5%</td>
+                                                <td>1.2s</td>
+                                                <td>$45.20</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Data Analyzer</td>
+                                                <td>892</td>
+                                                <td>96.8%</td>
+                                                <td>3.4s</td>
+                                                <td>$67.80</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Content Generator</td>
+                                                <td>654</td>
+                                                <td>94.2%</td>
+                                                <td>2.1s</td>
+                                                <td>$32.15</td>
+                                            </tr>
+                            </tbody>
+                        </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Costs Tab -->
+                <div class="subtab-content" id="costs-tab">
+                    
+                    <div class="cost-sections">
+                        <!-- Total Cost Overview -->
+                        <div class="cost-section">
+                            <h3>Total Cost Overview</h3>
+                            <div class="cost-charts">
+                                <div class="chart-container large">
+                    <div class="chart-header">
+                                        <h4>Spending Trends</h4>
+                                        <p>Daily spending breakdown across all services</p>
+                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="total-cost-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Cost Distribution</h4>
+                                        <p>Breakdown by service category</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="cost-distribution-chart"></canvas>
+                                    </div>
+                                </div>
+                    </div>
+                </div>
+
+                        <!-- LLM Cost Breakdown -->
+                        <div class="cost-section">
+                            <h3>LLM API Costs</h3>
+                            <div class="cost-charts">
+                                <div class="chart-container large">
+                    <div class="chart-header">
+                                        <h4>LLM Spending by Provider</h4>
+                                        <p>Costs by OpenAI, Anthropic, and other providers</p>
+                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="llm-cost-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Model Usage Costs</h4>
+                                        <p>Costs by specific model (GPT-4, Claude, etc.)</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="model-cost-chart"></canvas>
+                                    </div>
+                                </div>
+                    </div>
+                </div>
+
+                        <!-- GPU Cost Breakdown -->
+                        <div class="cost-section">
+                            <h3>🚀 GPU Compute Costs</h3>
+                            <div class="cost-charts">
+                                <div class="chart-container large">
+                    <div class="chart-header">
+                                        <h4>GPU Spending Trends</h4>
+                                        <p>Daily GPU compute costs by provider</p>
+                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="gpu-cost-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>GPU Cost Efficiency</h4>
+                                        <p>Cost per hour by GPU type</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="gpu-efficiency-chart"></canvas>
+                                    </div>
+                    </div>
+                </div>
+            </div>
+
+                        <!-- Training Cost Breakdown -->
+                        <div class="cost-section">
+                            <h3>Training Costs</h3>
+                            <div class="cost-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Training Job Costs</h4>
+                                        <p>Costs for fine-tuning and training jobs</p>
+                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="training-cost-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Training Cost per Job</h4>
+                                        <p>Average cost breakdown per training job</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="training-per-job-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Cost Tables -->
+                        <div class="cost-tables">
+                            <div class="table-section">
+                                <h3>Cost Breakdown by Service</h3>
+                    <div class="table-wrapper">
+                                    <table class="data-table">
+                            <thead>
+                                <tr>
+                                                <th>Service</th>
+                                                <th>This Month</th>
+                                                <th>Last Month</th>
+                                                <th>Change</th>
+                                                <th>Percentage</th>
+                                </tr>
+                            </thead>
+                                        <tbody id="cost-breakdown-table">
+                                            <tr>
+                                                <td>LLM APIs</td>
+                                                <td>$45.20</td>
+                                                <td>$38.50</td>
+                                                <td>+$6.70</td>
+                                                <td><span class="trend-indicator positive">+17.4%</span></td>
+                                            </tr>
+                                            <tr>
+                                                <td>GPU Compute</td>
+                                                <td>$23.80</td>
+                                                <td>$25.20</td>
+                                                <td>-$1.40</td>
+                                                <td><span class="trend-indicator negative">-5.6%</span></td>
+                                            </tr>
+                                            <tr>
+                                                <td>Training</td>
+                                                <td>$12.50</td>
+                                                <td>$8.90</td>
+                                                <td>+$3.60</td>
+                                                <td><span class="trend-indicator positive">+40.4%</span></td>
+                                            </tr>
+                                            <tr>
+                                                <td>Storage</td>
+                                                <td>$3.20</td>
+                                                <td>$2.80</td>
+                                                <td>+$0.40</td>
+                                                <td><span class="trend-indicator positive">+14.3%</span></td>
+                                            </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                            <div class="table-section">
+                                <h3>Daily Cost Trends</h3>
+                    <div class="table-wrapper">
+                                    <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                                <th>LLM Cost</th>
+                                                <th>GPU Cost</th>
+                                                <th>Training Cost</th>
+                                                <th>Total</th>
+                                </tr>
+                            </thead>
+                                        <tbody id="daily-cost-table">
+                                            <tr>
+                                                <td>Today</td>
+                                                <td>$2.10</td>
+                                                <td>$1.20</td>
+                                                <td>$0.50</td>
+                                                <td>$3.80</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Yesterday</td>
+                                                <td>$1.85</td>
+                                                <td>$0.95</td>
+                                                <td>$0.00</td>
+                                                <td>$2.80</td>
+                                            </tr>
+                                            <tr>
+                                                <td>2 days ago</td>
+                                                <td>$2.30</td>
+                                                <td>$1.45</td>
+                                                <td>$0.75</td>
+                                                <td>$4.50</td>
+                                            </tr>
+                            </tbody>
+                        </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LLM Analytics Tab -->
+                <div class="subtab-content" id="llm-tab">
+                    
+                    <div class="llm-sections">
+                        <!-- Token Usage -->
+                        <div class="llm-section">
+                            <h3>Token Usage Analytics</h3>
+                            <div class="llm-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Token Consumption Trends</h4>
+                                        <p>Daily token usage across all models</p>
+                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="token-usage-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Token Distribution by Model</h4>
+                                        <p>Token usage breakdown by model type</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="token-distribution-chart"></canvas>
+                                    </div>
+                                </div>
+                    </div>
+                </div>
+
+                        <!-- Model Performance -->
+                        <div class="llm-section">
+                            <h3>⚡ Model Performance</h3>
+                            <div class="llm-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Response Time by Model</h4>
+                                        <p>Average response times across different models</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="model-response-time-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Model Usage Distribution</h4>
+                                        <p>Request volume by model</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="model-usage-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Cost Efficiency -->
+                        <div class="llm-section">
+                            <h3>Cost Efficiency</h3>
+                            <div class="llm-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Cost per Token by Model</h4>
+                                        <p>Efficiency comparison across models</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="cost-per-token-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Model ROI Analysis</h4>
+                                        <p>Return on investment by model</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="model-roi-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Agent Runs Tab -->
+                <div class="subtab-content" id="agents-tab">
+                    
+                    <div class="agent-sections">
+                        <!-- Run Statistics -->
+                        <div class="agent-section">
+                            <h3>Run Statistics</h3>
+                            <div class="agent-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Daily Agent Runs</h4>
+                                        <p>Number of agent executions over time</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="agent-runs-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Run Success Rate</h4>
+                                        <p>Success rate by agent</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="agent-success-rate-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Performance Metrics -->
+                        <div class="agent-section">
+                            <h3>🎯 Performance Metrics</h3>
+                            <div class="agent-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Execution Time Trends</h4>
+                                        <p>Average execution time by agent</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="execution-time-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Agent Performance Score</h4>
+                                        <p>Multi-dimensional performance analysis</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="agent-performance-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Error Analysis -->
+                        <div class="agent-section">
+                            <h3>🚨 Error Analysis</h3>
+                            <div class="agent-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Error Rate Trends</h4>
+                                        <p>Error rates over time by agent</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="error-rate-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Error Types Distribution</h4>
+                                        <p>Breakdown of error types</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="error-types-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Training Tab -->
+                <div class="subtab-content" id="training-tab">
+                    
+                    <div class="training-sections">
+                        <!-- Training Jobs -->
+                        <div class="training-section">
+                        <h3>Training Jobs</h3>
+                            <div class="training-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Training Job Timeline</h4>
+                                        <p>Training jobs over time with status</p>
+                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="training-timeline-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Job Status Distribution</h4>
+                                        <p>Breakdown of job statuses</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="job-status-chart"></canvas>
+                                    </div>
+                                </div>
+                    </div>
+                </div>
+
+                        <!-- Performance Metrics -->
+                        <div class="training-section">
+                            <h3>Training Performance</h3>
+                            <div class="training-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Training Duration Trends</h4>
+                                        <p>Average training time by model size</p>
+                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="training-duration-chart"></canvas>
+                    </div>
+                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Model Accuracy Improvement</h4>
+                                        <p>Accuracy gains over training iterations</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="accuracy-improvement-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Cost Analysis -->
+                        <div class="training-section">
+                            <h3>Training Costs</h3>
+                            <div class="training-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Training Cost Trends</h4>
+                                        <p>Cost per training job over time</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="training-cost-trends-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Cost per Model Size</h4>
+                                        <p>Training costs by model parameters</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="cost-per-model-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GPU Analytics Tab -->
+                <div class="subtab-content" id="gpu-tab">
+                    
+                    <div class="gpu-sections">
+                        <!-- Usage Analytics -->
+                        <div class="gpu-section">
+                            <h3>Usage Analytics</h3>
+                            <div class="gpu-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>GPU Compute Hours</h4>
+                                        <p>Usage patterns by GPU type and provider</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="gpu-usage-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>GPU Utilization Rate</h4>
+                                        <p>Average utilization by GPU type</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="gpu-utilization-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Performance Metrics -->
+                        <div class="gpu-section">
+                            <h3>⚡ Performance Metrics</h3>
+                            <div class="gpu-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>GPU Performance Comparison</h4>
+                                        <p>Throughput and efficiency by GPU type</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="gpu-performance-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Instance Lifecycle</h4>
+                                        <p>Average instance duration and patterns</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="instance-lifecycle-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Cost Analysis -->
+                        <div class="gpu-section">
+                            <h3>Cost Analysis</h3>
+                            <div class="gpu-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>GPU Cost Trends</h4>
+                                        <p>Daily GPU spending by provider</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="gpu-cost-trends-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Cost per Compute Hour</h4>
+                                        <p>Efficiency comparison by GPU type</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="cost-per-hour-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Evaluation Tab -->
+                <div class="subtab-content" id="evaluation-tab">
+                    
+                    <div class="evaluation-sections">
+                        <!-- Benchmark Results -->
+                        <div class="evaluation-section">
+                            <h3>Benchmark Results</h3>
+                            <div class="evaluation-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Benchmark Performance Trends</h4>
+                                        <p>Performance scores over time</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="benchmark-performance-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Model Comparison</h4>
+                                        <p>Benchmark scores by model</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="model-comparison-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Evaluation Metrics -->
+                        <div class="evaluation-section">
+                            <h3>Evaluation Metrics</h3>
+                            <div class="evaluation-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Accuracy Trends</h4>
+                                        <p>Model accuracy over time</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="accuracy-trends-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Evaluation Score Distribution</h4>
+                                        <p>Distribution of evaluation scores</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="score-distribution-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Test Set Analysis -->
+                        <div class="evaluation-section">
+                            <h3>🧪 Test Set Analysis</h3>
+                            <div class="evaluation-charts">
+                                <div class="chart-container large">
+                                    <div class="chart-header">
+                                        <h4>Test Set Performance</h4>
+                                        <p>Performance across different test sets</p>
+                                    </div>
+                                    <div class="chart-wrapper large">
+                                        <canvas id="test-set-performance-chart"></canvas>
+                                    </div>
+                                </div>
+                                <div class="chart-container medium">
+                                    <div class="chart-header">
+                                        <h4>Error Analysis</h4>
+                                        <p>Common failure patterns</p>
+                                    </div>
+                                    <div class="chart-wrapper medium">
+                                        <canvas id="error-analysis-chart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
 
@@ -446,6 +2375,64 @@
                 </div>
             </div>
         </div>
+        </div>
+
+        <!-- Projects View -->
+        <div class="view-content" id="projects-view">
+            <div class="projects-grid">
+                <div class="list-header">Project Management</div>
+                <div class="projects-content">
+                    <div class="loading-state">
+                        <div class="loading-spinner"></div>
+                        <p>Loading projects...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- GPU Control View -->
+        <div class="view-content" id="gpu-control-view">
+            <div class="gpu-control-grid">
+                <div class="list-header">
+                    GPU Infrastructure Control
+                    <div class="gpu-service-status-header">
+                        <span class="status-badge status-unknown" id="gpu-service-badge">Loading...</span>
+                        <span class="status-message" id="gpu-service-message">Checking service status...</span>
+                    </div>
+                </div>
+                <div class="gpu-control-content">
+                    <div class="loading-state">
+                        <div class="loading-spinner"></div>
+                        <p>Loading GPU infrastructure...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Deployments View -->
+        <div class="view-content" id="deployments-view">
+            <div class="deployments-grid">
+                <div class="list-header">API Deployments</div>
+                <div class="deployments-content">
+                    <div class="loading-state">
+                        <div class="loading-spinner"></div>
+                        <p>Loading deployments...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Billing View -->
+        <div class="view-content" id="billing-view">
+            <div class="billing-grid">
+                <div class="list-header">Billing & Credits</div>
+                <div class="billing-content">
+                    <div class="loading-state">
+                        <div class="loading-spinner"></div>
+                        <p>Loading billing information...</p>
+                    </div>
+                </div>
+            </div>
         </div>
     </main>
 
@@ -1317,6 +3304,18 @@
                             </select>
                             <small>Truncate retrieved docs to fit within the budget (recommended for large documents)</small>
                         </div>
+                    </div>
+                </div>
+
+                <!-- GPU Configuration Section -->
+                <div class="form-section">
+                    <div class="section-header">
+                        <h3>GPU Configuration</h3>
+                        <p>Configure GPU acceleration for your agent (optional)</p>
+                    </div>
+                    
+                    <div id="gpu-config-container">
+                        <!-- GPU configuration will be rendered here -->
                     </div>
                 </div>
 
@@ -2239,6 +4238,22 @@
                     </svg>
                     Download CSV
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Metric Details Modals -->
+    <div class="metric-details-modal" id="metric-details-modal">
+        <div class="metric-details-content">
+            <div class="metric-details-header">
+                <h2 class="metric-details-title" id="modal-title">Metric Details</h2>
+                <button class="close-modal" onclick="closeMetricDetails()">&times;</button>
+            </div>
+            <div class="metric-details-body" id="modal-body">
+                <!-- Dynamic content will be loaded here -->
+            </div>
+            <div class="metric-details-footer">
+                <button class="export-btn" onclick="exportMetricData()">Export Data</button>
             </div>
         </div>
     </div>

@@ -1,0 +1,293 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="0.548" timestamp="2025-09-14T15:48:31.677735-07:00" hostname="Mac.lan"><testcase classname="integration.test_api_agents.TestAgentsAPI" name="test_list_agents" time="0.272"><error message="failed on setup with &quot;sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) datatype mismatch&#10;[SQL: INSERT INTO projects (id, name, description, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)]&#10;[parameters: ('test-project-3800f769-84fc-4b6d-b805-dbd6936c206a', 'Test Project Suarez PLC', 'A test project for testing', 1, '2025-09-14 22:48:31.998236', '2025-09-14 22:48:31.998239')]&#10;(Background on this error at: https://sqlalche.me/e/20/gkpj)&quot;">self = &lt;sqlalchemy.engine.base.Connection object at 0x3317b4ec0&gt;
+dialect = &lt;sqlalchemy.dialects.sqlite.aiosqlite.SQLiteDialect_aiosqlite object at 0x3305be300&gt;
+context = &lt;sqlalchemy.dialects.sqlite.aiosqlite.SQLiteExecutionContext_aiosqlite object at 0x3317b7e90&gt;
+statement = &lt;sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x3317b78c0&gt;
+parameters = [('test-project-3800f769-84fc-4b6d-b805-dbd6936c206a', 'Test Project Suarez PLC', 'A test project for testing', 1, '2025-09-14 22:48:31.998236', '2025-09-14 22:48:31.998239')]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -&gt; CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+&gt;                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+env/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+env/lib/python3.12/site-packages/sqlalchemy/engine/default.py:951: in do_execute
+    cursor.execute(statement, parameters)
+env/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:177: in execute
+    self._adapt_connection._handle_exception(error)
+env/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:337: in _handle_exception
+    raise error
+env/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:159: in execute
+    self.await_(_cursor.execute(operation, parameters))
+env/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+env/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+env/lib/python3.12/site-packages/aiosqlite/cursor.py:40: in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+env/lib/python3.12/site-packages/aiosqlite/cursor.py:32: in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+env/lib/python3.12/site-packages/aiosqlite/core.py:122: in _execute
+    return await future
+           ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;Connection(Thread-1, started daemon 13714354176)&gt;
+
+    def run(self) -&gt; None:
+        """
+        Execute function calls on a separate thread.
+    
+        :meta private:
+        """
+        while True:
+            # Continues running until all queue items are processed,
+            # even after connection is closed (so we can finalize all
+            # futures)
+    
+            tx_item = self._tx.get()
+            if tx_item is _STOP_RUNNING_SENTINEL:
+                break
+    
+            future, function = tx_item
+    
+            try:
+                LOG.debug("executing %s", function)
+&gt;               result = function()
+                         ^^^^^^^^^^
+E               sqlite3.IntegrityError: datatype mismatch
+
+env/lib/python3.12/site-packages/aiosqlite/core.py:105: IntegrityError
+
+The above exception was the direct cause of the following exception:
+
+request = &lt;SubRequest 'test_project' for &lt;Coroutine test_list_agents&gt;&gt;
+kwargs = {'db_session': &lt;sqlalchemy.orm.session.AsyncSession object at 0x3306c9400&gt;, 'test_user': User(username='testuser_963e6..., 9, 14, 22, 48, 31, 991940), updated_at=datetime.datetime(2025, 9, 14, 22, 48, 31, 991976), roles=[], scope='viewer')}
+event_loop_fixture_id = 'event_loop'
+setup = &lt;function _wrap_async_fixture.&lt;locals&gt;._async_fixture_wrapper.&lt;locals&gt;.setup at 0x3317e8c20&gt;
+context = &lt;_contextvars.Context object at 0x32cd4c500&gt;
+setup_task = &lt;Task finished name='Task-6' coro=&lt;_wrap_async_fixture.&lt;locals&gt;._async_fixture_wrapper.&lt;locals&gt;.setup() done, defined ....12/site-packages/pytest_asyncio/plugin.py:385&gt; exception=IntegrityError('(sqlite3.IntegrityError) datatype mismatch')&gt;
+
+    @functools.wraps(fixture)
+    def _async_fixture_wrapper(request: FixtureRequest, **kwargs: Any):
+        func = _perhaps_rebind_fixture_func(fixture, request.instance)
+        event_loop_fixture_id = _get_event_loop_fixture_id_for_async_fixture(
+            request, func
+        )
+        event_loop = request.getfixturevalue(event_loop_fixture_id)
+        kwargs.pop(event_loop_fixture_id, None)
+    
+        async def setup():
+            res = await func(**_add_kwargs(func, kwargs, event_loop, request))
+            return res
+    
+        context = contextvars.copy_context()
+        setup_task = _create_task_in_context(event_loop, setup(), context)
+&gt;       result = event_loop.run_until_complete(setup_task)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+env/lib/python3.12/site-packages/pytest_asyncio/plugin.py:391: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py:684: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+env/lib/python3.12/site-packages/pytest_asyncio/plugin.py:386: in setup
+    res = await func(**_add_kwargs(func, kwargs, event_loop, request))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/conftest.py:188: in test_project
+    await db_session.execute(stmt)
+env/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py:463: in execute
+    result = await greenlet_spawn(
+env/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py:201: in greenlet_spawn
+    result = context.throw(*sys.exc_info())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+env/lib/python3.12/site-packages/sqlalchemy/orm/session.py:2365: in execute
+    return self._execute_internal(
+env/lib/python3.12/site-packages/sqlalchemy/orm/session.py:2260: in _execute_internal
+    result = conn.execute(
+env/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1419: in execute
+    return meth(
+env/lib/python3.12/site-packages/sqlalchemy/sql/elements.py:526: in _execute_on_connection
+    return connection._execute_clauseelement(
+env/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1641: in _execute_clauseelement
+    ret = self._execute_context(
+env/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1846: in _execute_context
+    return self._exec_single_context(
+env/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+env/lib/python3.12/site-packages/sqlalchemy/engine/base.py:2355: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+env/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+env/lib/python3.12/site-packages/sqlalchemy/engine/default.py:951: in do_execute
+    cursor.execute(statement, parameters)
+env/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:177: in execute
+    self._adapt_connection._handle_exception(error)
+env/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:337: in _handle_exception
+    raise error
+env/lib/python3.12/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:159: in execute
+    self.await_(_cursor.execute(operation, parameters))
+env/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+env/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+env/lib/python3.12/site-packages/aiosqlite/cursor.py:40: in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+env/lib/python3.12/site-packages/aiosqlite/cursor.py:32: in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+env/lib/python3.12/site-packages/aiosqlite/core.py:122: in _execute
+    return await future
+           ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;Connection(Thread-1, started daemon 13714354176)&gt;
+
+    def run(self) -&gt; None:
+        """
+        Execute function calls on a separate thread.
+    
+        :meta private:
+        """
+        while True:
+            # Continues running until all queue items are processed,
+            # even after connection is closed (so we can finalize all
+            # futures)
+    
+            tx_item = self._tx.get()
+            if tx_item is _STOP_RUNNING_SENTINEL:
+                break
+    
+            future, function = tx_item
+    
+            try:
+                LOG.debug("executing %s", function)
+&gt;               result = function()
+                         ^^^^^^^^^^
+E               sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) datatype mismatch
+E               [SQL: INSERT INTO projects (id, name, description, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)]
+E               [parameters: ('test-project-3800f769-84fc-4b6d-b805-dbd6936c206a', 'Test Project Suarez PLC', 'A test project for testing', 1, '2025-09-14 22:48:31.998236', '2025-09-14 22:48:31.998239')]
+E               (Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+env/lib/python3.12/site-packages/aiosqlite/core.py:105: IntegrityError</error></testcase></testsuite></testsuites>

@@ -401,6 +401,161 @@ benchmark_items_table = Table(
 )
 
 
+# --- GPU Infrastructure Tables ---
+
+# Enum for GPU instance status
+gpu_instance_status_enum = Enum("pending", "running", "stopped", "failed", "terminated", name="gpu_instance_status_enum")
+
+# Enum for deployment status
+deployment_status_enum = Enum("pending", "active", "inactive", "failed", name="deployment_status_enum")
+
+# Enum for deployment type
+deployment_type_enum = Enum("api", "webhook", "streaming", name="deployment_type_enum")
+
+# Enum for transaction type
+transaction_type_enum = Enum("credit", "debit", "refund", name="transaction_type_enum")
+
+# Enum for session type
+session_type_enum = Enum("training", "inference", "deployment", name="session_type_enum")
+
+# Enum for usage type
+usage_type_enum = Enum("training", "inference", "deployment", name="usage_type_enum")
+
+projects_table = Table(
+    "projects", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String(255), nullable=False),
+    Column("description", Text, nullable=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("billing_session_id", Integer, ForeignKey("billing_sessions.id", ondelete="SET NULL"), nullable=True),
+    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
+    Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
+    Index("ix_projects_user_id_created_at", "user_id", "created_at"),
+)
+
+project_agents_table = Table(
+    "project_agents", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("project_id", Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False),
+    Column("agent_name", String(255), nullable=False),
+    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
+    UniqueConstraint("project_id", "agent_name", name="uq_project_agent"),
+)
+
+user_credits_table = Table(
+    "user_credits", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True),
+    Column("balance", Float(precision=10), nullable=False, default=0.0),
+    Column("daily_limit", Float(precision=10), nullable=True),
+    Column("total_spent", Float(precision=10), nullable=False, default=0.0),
+    Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
+    Index("ix_user_credits_user_id", "user_id"),
+)
+
+credit_transactions_table = Table(
+    "credit_transactions", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("amount", Float(precision=10), nullable=False),
+    Column("transaction_type", transaction_type_enum, nullable=False),
+    Column("description", Text, nullable=True),
+    Column("gpu_instance_id", Integer, ForeignKey("gpu_instances.id", ondelete="SET NULL"), nullable=True),
+    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
+    Index("ix_credit_transactions_user_id_created_at", "user_id", "created_at"),
+)
+
+billing_sessions_table = Table(
+    "billing_sessions", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("project_id", Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=True),
+    Column("session_type", session_type_enum, nullable=False),
+    Column("total_cost", Float(precision=10), nullable=False, default=0.0),
+    Column("started_at", DateTime, default=utc_timestamp, nullable=False),
+    Column("ended_at", DateTime, nullable=True),
+    Index("ix_billing_sessions_project_id_started_at", "project_id", "started_at"),
+)
+
+gpu_providers_table = Table(
+    "gpu_providers", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String(255), nullable=False),
+    Column("gpu_type", String(255), nullable=False),
+    Column("cost_per_hour", Float(precision=10), nullable=False),
+    Column("availability", Boolean, nullable=False, default=True),
+    Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
+    UniqueConstraint("name", "gpu_type", name="uq_gpu_provider"),
+)
+
+gpu_instances_table = Table(
+    "gpu_instances", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("project_id", Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("gpu_type", String(255), nullable=False),
+    Column("provider", String(255), nullable=False),
+    Column("status", gpu_instance_status_enum, nullable=False, default="pending", index=True),
+    Column("instance_id", String(255), nullable=True),
+    Column("cost_per_hour", Float(precision=10), nullable=False),
+    Column("total_cost", Float(precision=10), nullable=False, default=0.0),
+    Column("started_at", DateTime, nullable=True),
+    Column("stopped_at", DateTime, nullable=True),
+    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
+    Index("ix_gpu_instances_status_project_id", "status", "project_id"),
+)
+
+gpu_usage_table = Table(
+    "gpu_usage", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("instance_id", Integer, ForeignKey("gpu_instances.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("usage_type", usage_type_enum, nullable=False),
+    Column("duration_minutes", Integer, nullable=False),
+    Column("cost", Float(precision=10), nullable=False),
+    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
+    Index("ix_gpu_usage_instance_id_created_at", "instance_id", "created_at"),
+)
+
+deployments_table = Table(
+    "deployments", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("project_id", Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("agent_id", Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False),
+    Column("deployment_type", deployment_type_enum, nullable=False, index=True),
+    Column("status", deployment_status_enum, nullable=False, default="pending"),
+    Column("api_key_id", Integer, ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True),
+    Column("endpoint_path", String(255), nullable=True),
+    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
+    Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
+    Index("ix_deployments_project_id_deployment_type", "project_id", "deployment_type"),
+)
+
+api_keys_table = Table(
+    "api_keys", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("name", String(255), nullable=False),
+    Column("key_hash", String(255), nullable=False, unique=True),
+    Column("scope", api_key_scope_enum, nullable=False, index=True),
+    Column("is_active", Boolean, nullable=False, default=True, index=True),
+    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
+    Column("last_used_at", DateTime, nullable=True),
+    Index("ix_api_keys_user_id_is_active_scope", "user_id", "is_active", "scope"),
+)
+
+api_usage_table = Table(
+    "api_usage", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("api_key_id", Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("deployment_id", Integer, ForeignKey("deployments.id", ondelete="CASCADE"), nullable=True),
+    Column("request_count", Integer, nullable=False, default=0),
+    Column("total_cost", Float(precision=10), nullable=False, default=0.0),
+    Column("last_request", DateTime, nullable=True),
+    Column("created_at", DateTime, default=utc_timestamp, nullable=False),
+    Index("ix_api_usage_api_key_id_created_at", "api_key_id", "created_at"),
+)
+
 # --- Indexes for Performance ---
 Index("tmp_docs_exp_idx", temporary_documents_table.c.expires_at)
 
