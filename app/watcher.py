@@ -10,6 +10,7 @@ from multiprocessing import Process
 from pathlib import Path
 import configparser
 import logging.config
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Import core components
 from app.agents.config_manager import get_agent_configs
@@ -41,6 +42,7 @@ class AgentDataEventHandler(FileSystemEventHandler):
         self.api_key = self._get_api_key()
         self.last_event_time = {} # To debounce events
         self.uploaded_temp_dir = _DATA_DIR / "uploaded_temp"
+        self.agents_dir = _APP_PATHS["AGENTS_DIR"]
 
         self._initialize_db_for_watcher()
 
@@ -84,16 +86,17 @@ class AgentDataEventHandler(FileSystemEventHandler):
 
     async def _run_async_with_db_session(self, coro_func, *args, **kwargs):
         """Runs an async coroutine, providing it with a DB session."""
-        if AsyncSessionLocal is None:
-            logger.error("AsyncSessionLocal is not initialized in watcher process. Cannot run async with DB session.")
-            return
+        try:
+            # Ensure database is initialized
+            if AsyncSessionLocal is None:
+                logger.error("AsyncSessionLocal is not initialized in watcher process. Cannot run async with DB session.")
+                return
 
-        async with AsyncSessionLocal() as session:
-            try:
+            async with AsyncSessionLocal() as session:
                 return await coro_func(*args, db=session, **kwargs)
-            except Exception as e:
-                logger.error(f"Error during async DB operation in watcher: {e}", exc_info=True)
-                raise
+        except Exception as e:
+            logger.error(f"Error during async DB operation in watcher: {e}", exc_info=True)
+            raise
 
     def on_any_event(self, event):
         if event.is_directory or event.event_type not in ['created', 'deleted', 'modified']:
@@ -113,7 +116,16 @@ class AgentDataEventHandler(FileSystemEventHandler):
             return
         self.last_event_time[str(src_path)] = current_time
 
-        # --- Agent re-deployment logic ---
+        # --- Agent YAML file changes ---
+        if src_path.is_relative_to(self.agents_dir) and src_path.suffix in ['.yaml', '.yml']:
+            logger.info(f"Agent YAML file change detected: {src_path}")
+            try:
+                self._handle_agent_yaml_change(src_path, event.event_type)
+            except Exception as e:
+                logger.error(f"Failed to handle agent YAML change for {src_path}: {e}", exc_info=True)
+            return
+
+        # --- Agent re-deployment logic for data changes ---
         affected_agents = self._find_affected_agents(str(src_path))
         if not affected_agents:
             return
@@ -158,6 +170,48 @@ class AgentDataEventHandler(FileSystemEventHandler):
                         affected.append(config)
                         break
         return affected
+
+    def _handle_agent_yaml_change(self, yaml_path: Path, event_type: str):
+        """Handle agent YAML file changes by calling the sync API endpoint."""
+        try:
+            agent_name = yaml_path.stem  # Get filename without extension
+            
+            if event_type == 'deleted':
+                # Delete agent from database via API
+                logger.info(f"Agent YAML deleted: {agent_name}")
+                self._call_sync_api()
+            else:
+                # Create or update agent in database via API
+                logger.info(f"Agent YAML {'created' if event_type == 'created' else 'modified'}: {agent_name}")
+                self._call_sync_api()
+                
+        except Exception as e:
+            logger.error(f"Failed to handle agent YAML change for {yaml_path}: {e}", exc_info=True)
+
+    def _call_sync_api(self):
+        """Call the sync API endpoint to sync all agents."""
+        try:
+            import requests
+            import time
+            
+            # Wait a bit for the file to be fully written
+            time.sleep(1)
+            
+            # Call the sync endpoint
+            response = requests.post(
+                f"{self.server_url}/agents/sync",
+                headers={"X-API-Key": self.api_key},
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"Sync API called successfully: {result}")
+            else:
+                logger.error(f"Sync API call failed: {response.status_code} - {response.text}")
+                
+        except Exception as e:
+            logger.error(f"Failed to call sync API: {e}", exc_info=True)
 
 
 def start_watcher(directories: list[str]):
