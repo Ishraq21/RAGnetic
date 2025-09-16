@@ -1,8 +1,8 @@
-"""Initial DB
+"""Fix Db
 
-Revision ID: 9e7c6984ef14
+Revision ID: 82fa27ad6469
 Revises: 
-Create Date: 2025-09-13 17:03:21.672322
+Create Date: 2025-09-14 16:18:16.199601
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '9e7c6984ef14'
+revision: str = '82fa27ad6469'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -55,6 +55,21 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_benchmark_runs_dataset_id'), ['dataset_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_benchmark_runs_run_id'), ['run_id'], unique=True)
 
+    op.create_table('billing_sessions',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('project_id', sa.Integer(), nullable=True),
+    sa.Column('session_type', sa.Enum('training', 'inference', 'deployment', name='session_type_enum'), nullable=False),
+    sa.Column('total_cost', sa.Float(precision=10), nullable=False),
+    sa.Column('started_at', sa.DateTime(), nullable=False),
+    sa.Column('ended_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['project_id'], ['projects.id'], name=op.f('fk_billing_sessions_project_id_projects'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_billing_sessions_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_billing_sessions'))
+    )
+    with op.batch_alter_table('billing_sessions', schema=None) as batch_op:
+        batch_op.create_index('ix_billing_sessions_project_id_started_at', ['project_id', 'started_at'], unique=False)
+
     op.create_table('crontab_schedule',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('minute', sa.String(length=64), nullable=True),
@@ -63,6 +78,16 @@ def upgrade() -> None:
     sa.Column('day_of_month', sa.String(length=64), nullable=True),
     sa.Column('month_of_year', sa.String(length=64), nullable=True),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_crontab_schedule'))
+    )
+    op.create_table('gpu_providers',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('name', sa.String(length=255), nullable=False),
+    sa.Column('gpu_type', sa.String(length=255), nullable=False),
+    sa.Column('cost_per_hour', sa.Float(precision=10), nullable=False),
+    sa.Column('availability', sa.Boolean(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_gpu_providers')),
+    sa.UniqueConstraint('name', 'gpu_type', name='uq_gpu_provider')
     )
     op.create_table('interval_schedule',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
@@ -83,6 +108,22 @@ def upgrade() -> None:
     sa.Column('last_update', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_periodic_task_changed'))
     )
+    op.create_table('projects',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('name', sa.String(length=255), nullable=False),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('billing_session_id', sa.Integer(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['billing_session_id'], ['billing_sessions.id'], name=op.f('fk_projects_billing_session_id_billing_sessions'), ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_projects_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_projects'))
+    )
+    with op.batch_alter_table('projects', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_projects_user_id'), ['user_id'], unique=False)
+        batch_op.create_index('ix_projects_user_id_created_at', ['user_id', 'created_at'], unique=False)
+
     op.create_table('ragnetic_logs',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('timestamp', sa.DateTime(), nullable=False),
@@ -128,6 +169,25 @@ def upgrade() -> None:
     )
     with op.batch_alter_table('agent_tools', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_agent_tools_agent_id'), ['agent_id'], unique=False)
+
+    op.create_table('api_keys',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('name', sa.String(length=255), nullable=False),
+    sa.Column('key_hash', sa.String(length=255), nullable=False),
+    sa.Column('scope', sa.Enum('admin', 'editor', 'viewer', name='api_key_scope_enum'), nullable=False),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('last_used_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_api_keys_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_api_keys')),
+    sa.UniqueConstraint('key_hash', name=op.f('uq_api_keys_key_hash'))
+    )
+    with op.batch_alter_table('api_keys', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_api_keys_is_active'), ['is_active'], unique=False)
+        batch_op.create_index(batch_op.f('ix_api_keys_scope'), ['scope'], unique=False)
+        batch_op.create_index(batch_op.f('ix_api_keys_user_id'), ['user_id'], unique=False)
+        batch_op.create_index('ix_api_keys_user_id_is_active_scope', ['user_id', 'is_active', 'scope'], unique=False)
 
     op.create_table('benchmark_items',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
@@ -208,6 +268,28 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_fine_tuned_models_created_by_user_id'), ['created_by_user_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_fine_tuned_models_job_name'), ['job_name'], unique=False)
 
+    op.create_table('gpu_instances',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('project_id', sa.Integer(), nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('gpu_type', sa.String(length=255), nullable=False),
+    sa.Column('provider', sa.String(length=255), nullable=False),
+    sa.Column('status', sa.Enum('pending', 'running', 'stopped', 'failed', 'terminated', name='gpu_instance_status_enum'), nullable=False),
+    sa.Column('instance_id', sa.String(length=255), nullable=True),
+    sa.Column('cost_per_hour', sa.Float(precision=10), nullable=False),
+    sa.Column('total_cost', sa.Float(precision=10), nullable=False),
+    sa.Column('started_at', sa.DateTime(), nullable=True),
+    sa.Column('stopped_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['project_id'], ['projects.id'], name=op.f('fk_gpu_instances_project_id_projects'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_gpu_instances_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_gpu_instances'))
+    )
+    with op.batch_alter_table('gpu_instances', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_gpu_instances_project_id'), ['project_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_gpu_instances_status'), ['status'], unique=False)
+        batch_op.create_index('ix_gpu_instances_status_project_id', ['status', 'project_id'], unique=False)
+
     op.create_table('periodic_task',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('name', sa.String(length=255), nullable=True),
@@ -229,6 +311,15 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['interval_id'], ['interval_schedule.id'], name=op.f('fk_periodic_task_interval_id_interval_schedule')),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_periodic_task')),
     sa.UniqueConstraint('name', name=op.f('uq_periodic_task_name'))
+    )
+    op.create_table('project_agents',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('project_id', sa.Integer(), nullable=False),
+    sa.Column('agent_name', sa.String(length=255), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['project_id'], ['projects.id'], name=op.f('fk_project_agents_project_id_projects'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_project_agents')),
+    sa.UniqueConstraint('project_id', 'agent_name', name='uq_project_agent')
     )
     op.create_table('role_permissions',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
@@ -271,6 +362,20 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id', name=op.f('pk_user_api_keys')),
     sa.UniqueConstraint('api_key', name=op.f('uq_user_api_keys_api_key'))
     )
+    op.create_table('user_credits',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('balance', sa.Float(precision=10), nullable=False),
+    sa.Column('daily_limit', sa.Float(precision=10), nullable=True),
+    sa.Column('total_spent', sa.Float(precision=10), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_user_credits_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_user_credits')),
+    sa.UniqueConstraint('user_id', name=op.f('uq_user_credits_user_id'))
+    )
+    with op.batch_alter_table('user_credits', schema=None) as batch_op:
+        batch_op.create_index('ix_user_credits_user_id', ['user_id'], unique=False)
+
     op.create_table('user_organizations',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
@@ -340,6 +445,44 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_conversation_metrics_request_id'), ['request_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_conversation_metrics_session_id'), ['session_id'], unique=False)
 
+    op.create_table('credit_transactions',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('amount', sa.Float(precision=10), nullable=False),
+    sa.Column('transaction_type', sa.Enum('credit', 'debit', 'refund', name='transaction_type_enum'), nullable=False),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('gpu_instance_id', sa.Integer(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['gpu_instance_id'], ['gpu_instances.id'], name=op.f('fk_credit_transactions_gpu_instance_id_gpu_instances'), ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_credit_transactions_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_credit_transactions'))
+    )
+    with op.batch_alter_table('credit_transactions', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_credit_transactions_user_id'), ['user_id'], unique=False)
+        batch_op.create_index('ix_credit_transactions_user_id_created_at', ['user_id', 'created_at'], unique=False)
+
+    op.create_table('deployments',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('project_id', sa.Integer(), nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('agent_id', sa.Integer(), nullable=False),
+    sa.Column('deployment_type', sa.Enum('api', 'webhook', 'streaming', name='deployment_type_enum'), nullable=False),
+    sa.Column('status', sa.Enum('pending', 'active', 'inactive', 'failed', name='deployment_status_enum'), nullable=False),
+    sa.Column('api_key_id', sa.Integer(), nullable=True),
+    sa.Column('endpoint_path', sa.String(length=255), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], name=op.f('fk_deployments_agent_id_agents'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['api_key_id'], ['api_keys.id'], name=op.f('fk_deployments_api_key_id_api_keys'), ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['project_id'], ['projects.id'], name=op.f('fk_deployments_project_id_projects'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_deployments_user_id_users'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_deployments'))
+    )
+    with op.batch_alter_table('deployments', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_deployments_deployment_type'), ['deployment_type'], unique=False)
+        batch_op.create_index(batch_op.f('ix_deployments_project_id'), ['project_id'], unique=False)
+        batch_op.create_index('ix_deployments_project_id_deployment_type', ['project_id', 'deployment_type'], unique=False)
+
     op.create_table('document_chunks',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('document_name', sa.String(length=512), nullable=False),
@@ -356,6 +499,20 @@ def upgrade() -> None:
     with op.batch_alter_table('document_chunks', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_document_chunks_document_name'), ['document_name'], unique=False)
         batch_op.create_index(batch_op.f('ix_document_chunks_temp_document_id'), ['temp_document_id'], unique=False)
+
+    op.create_table('gpu_usage',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('instance_id', sa.Integer(), nullable=False),
+    sa.Column('usage_type', sa.Enum('training', 'inference', 'deployment', name='usage_type_enum'), nullable=False),
+    sa.Column('duration_minutes', sa.Integer(), nullable=False),
+    sa.Column('cost', sa.Float(precision=10), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['instance_id'], ['gpu_instances.id'], name=op.f('fk_gpu_usage_instance_id_gpu_instances'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_gpu_usage'))
+    )
+    with op.batch_alter_table('gpu_usage', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_gpu_usage_instance_id'), ['instance_id'], unique=False)
+        batch_op.create_index('ix_gpu_usage_instance_id_created_at', ['instance_id', 'created_at'], unique=False)
 
     op.create_table('lambda_runs',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -408,6 +565,22 @@ def upgrade() -> None:
     with op.batch_alter_table('agent_run_steps', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_agent_run_steps_parent_run_id'), ['parent_run_id'], unique=False)
 
+    op.create_table('api_usage',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('api_key_id', sa.Integer(), nullable=False),
+    sa.Column('deployment_id', sa.Integer(), nullable=True),
+    sa.Column('request_count', sa.Integer(), nullable=False),
+    sa.Column('total_cost', sa.Float(precision=10), nullable=False),
+    sa.Column('last_request', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['api_key_id'], ['api_keys.id'], name=op.f('fk_api_usage_api_key_id_api_keys'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['deployment_id'], ['deployments.id'], name=op.f('fk_api_usage_deployment_id_deployments'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('pk_api_usage'))
+    )
+    with op.batch_alter_table('api_usage', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_api_usage_api_key_id'), ['api_key_id'], unique=False)
+        batch_op.create_index('ix_api_usage_api_key_id_created_at', ['api_key_id', 'created_at'], unique=False)
+
     op.create_table('citations',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('message_id', sa.Integer(), nullable=False),
@@ -434,6 +607,11 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_citations_chunk_id'))
 
     op.drop_table('citations')
+    with op.batch_alter_table('api_usage', schema=None) as batch_op:
+        batch_op.drop_index('ix_api_usage_api_key_id_created_at')
+        batch_op.drop_index(batch_op.f('ix_api_usage_api_key_id'))
+
+    op.drop_table('api_usage')
     with op.batch_alter_table('agent_run_steps', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_agent_run_steps_parent_run_id'))
 
@@ -447,11 +625,27 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_lambda_runs_thread_id'))
 
     op.drop_table('lambda_runs')
+    with op.batch_alter_table('gpu_usage', schema=None) as batch_op:
+        batch_op.drop_index('ix_gpu_usage_instance_id_created_at')
+        batch_op.drop_index(batch_op.f('ix_gpu_usage_instance_id'))
+
+    op.drop_table('gpu_usage')
     with op.batch_alter_table('document_chunks', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_document_chunks_temp_document_id'))
         batch_op.drop_index(batch_op.f('ix_document_chunks_document_name'))
 
     op.drop_table('document_chunks')
+    with op.batch_alter_table('deployments', schema=None) as batch_op:
+        batch_op.drop_index('ix_deployments_project_id_deployment_type')
+        batch_op.drop_index(batch_op.f('ix_deployments_project_id'))
+        batch_op.drop_index(batch_op.f('ix_deployments_deployment_type'))
+
+    op.drop_table('deployments')
+    with op.batch_alter_table('credit_transactions', schema=None) as batch_op:
+        batch_op.drop_index('ix_credit_transactions_user_id_created_at')
+        batch_op.drop_index(batch_op.f('ix_credit_transactions_user_id'))
+
+    op.drop_table('credit_transactions')
     with op.batch_alter_table('conversation_metrics', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_conversation_metrics_session_id'))
         batch_op.drop_index(batch_op.f('ix_conversation_metrics_request_id'))
@@ -470,6 +664,10 @@ def downgrade() -> None:
 
     op.drop_table('agent_runs')
     op.drop_table('user_organizations')
+    with op.batch_alter_table('user_credits', schema=None) as batch_op:
+        batch_op.drop_index('ix_user_credits_user_id')
+
+    op.drop_table('user_credits')
     op.drop_table('user_api_keys')
     with op.batch_alter_table('temporary_documents', schema=None) as batch_op:
         batch_op.drop_index('tmp_docs_exp_idx')
@@ -478,7 +676,14 @@ def downgrade() -> None:
 
     op.drop_table('temporary_documents')
     op.drop_table('role_permissions')
+    op.drop_table('project_agents')
     op.drop_table('periodic_task')
+    with op.batch_alter_table('gpu_instances', schema=None) as batch_op:
+        batch_op.drop_index('ix_gpu_instances_status_project_id')
+        batch_op.drop_index(batch_op.f('ix_gpu_instances_status'))
+        batch_op.drop_index(batch_op.f('ix_gpu_instances_project_id'))
+
+    op.drop_table('gpu_instances')
     with op.batch_alter_table('fine_tuned_models', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_fine_tuned_models_job_name'))
         batch_op.drop_index(batch_op.f('ix_fine_tuned_models_created_by_user_id'))
@@ -495,6 +700,13 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_benchmark_items_run_id'))
 
     op.drop_table('benchmark_items')
+    with op.batch_alter_table('api_keys', schema=None) as batch_op:
+        batch_op.drop_index('ix_api_keys_user_id_is_active_scope')
+        batch_op.drop_index(batch_op.f('ix_api_keys_user_id'))
+        batch_op.drop_index(batch_op.f('ix_api_keys_scope'))
+        batch_op.drop_index(batch_op.f('ix_api_keys_is_active'))
+
+    op.drop_table('api_keys')
     with op.batch_alter_table('agent_tools', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_agent_tools_agent_id'))
 
@@ -502,10 +714,20 @@ def downgrade() -> None:
     op.drop_table('users')
     op.drop_table('roles')
     op.drop_table('ragnetic_logs')
+    with op.batch_alter_table('projects', schema=None) as batch_op:
+        batch_op.drop_index('ix_projects_user_id_created_at')
+        batch_op.drop_index(batch_op.f('ix_projects_user_id'))
+
+    op.drop_table('projects')
     op.drop_table('periodic_task_changed')
     op.drop_table('organizations')
     op.drop_table('interval_schedule')
+    op.drop_table('gpu_providers')
     op.drop_table('crontab_schedule')
+    with op.batch_alter_table('billing_sessions', schema=None) as batch_op:
+        batch_op.drop_index('ix_billing_sessions_project_id_started_at')
+
+    op.drop_table('billing_sessions')
     with op.batch_alter_table('benchmark_runs', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_benchmark_runs_run_id'))
         batch_op.drop_index(batch_op.f('ix_benchmark_runs_dataset_id'))

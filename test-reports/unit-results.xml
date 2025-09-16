@@ -1,0 +1,968 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="37" skipped="0" tests="115" time="30.601" timestamp="2025-09-14T15:47:45.819617-07:00" hostname="Mac.lan"><testcase classname="unit.test_cost_service.TestCostPerformance" name="test_token_counting_performance" time="1.549" /><testcase classname="unit.test_cost_service.TestCostPerformance" name="test_cost_calculation_performance" time="0.291" /><testcase classname="unit.test_cost_service.TestCostCalculator" name="test_count_tokens" time="0.216" /><testcase classname="unit.test_cost_service.TestCostCalculator" name="test_calculate_cost_embedding_only" time="0.217" /><testcase classname="unit.test_cost_service.TestCostCalculator" name="test_count_tokens_unicode" time="0.217" /><testcase classname="unit.test_cost_service.TestCostCalculator" name="test_calculate_cost_unknown_model" time="0.215" /><testcase classname="unit.test_cost_service.TestCostCalculator" name="test_calculate_cost_combined" time="0.216" /><testcase classname="unit.test_cost_service.TestCostCalculator" name="test_count_tokens_empty" time="0.216" /><testcase classname="unit.test_cost_service.TestCostCalculator" name="test_calculate_cost_llm_only" time="0.216" /><testcase classname="unit.test_cost_service.TestCostEdgeCases" name="test_invalid_providers" time="0.218" /><testcase classname="unit.test_cost_service.TestCostEdgeCases" name="test_concurrent_cost_calculations" time="0.217" /><testcase classname="unit.test_cost_service.TestCostEdgeCases" name="test_negative_values" time="0.217" /><testcase classname="unit.test_cost_service.TestCostEdgeCases" name="test_invalid_gpu_types" time="0.215" /><testcase classname="unit.test_cost_service.TestCostEdgeCases" name="test_very_large_values" time="0.216" /><testcase classname="unit.test_cost_service.TestCostEdgeCases" name="test_zero_values" time="0.216" /><testcase classname="unit.test_cost_service.TestCostOptimization" name="test_budget_validation" time="0.216" /><testcase classname="unit.test_cost_service.TestCostOptimization" name="test_cost_comparison_between_providers" time="0.216" /><testcase classname="unit.test_cost_service.TestCostOptimization" name="test_cost_alerts_threshold" time="0.215" /><testcase classname="unit.test_cost_service.TestCostOptimization" name="test_cost_estimation_accuracy" time="0.217" /><testcase classname="unit.test_cost_service.TestCostService" name="test_cost_with_different_providers" time="0.216" /><testcase classname="unit.test_cost_service.TestCostService" name="test_get_cheapest_provider_no_available" time="0.217" /><testcase classname="unit.test_cost_service.TestCostService" name="test_estimate_inference_cost_per_min" time="0.218" /><testcase classname="unit.test_cost_service.TestCostService" name="test_cost_with_different_gpu_types" time="0.238" /><testcase classname="unit.test_cost_service.TestCostService" name="test_estimate_training_cost" time="0.216" /><testcase classname="unit.test_cost_service.TestCostService" name="test_get_cheapest_provider" time="0.228" /><testcase classname="unit.test_cost_service.TestCostService" name="test_gpu_cost_calculation" time="0.247" /><testcase classname="unit.test_credit_service.TestCreditLimits" name="test_daily_limit_enforcement" time="0.229"><failure message="pydantic_core._pydantic_core.ValidationError: 1 validation error for UserCredits&#10;updated_at&#10;  Field required [type=missing, input_value={'balance': 1000.0, 'dail...0.0, 'total_spent': 0.0}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing">self = &lt;unit.test_credit_service.TestCreditLimits object at 0x34258bad0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x343f687d0&gt;
+
+    @pytest.mark.asyncio
+    async def test_daily_limit_enforcement(self, db_session):
+        """Test that daily limits are enforced."""
+        user_id = 1
+    
+        # Mock user with $50 daily limit
+        with patch('app.services.credit_service.get_user_credits') as mock_get:
+&gt;           mock_get.return_value = UserCredits(
+                balance=1000.0,  # Plenty of balance
+                daily_limit=50.0,
+                total_spent=0.0
+            )
+E           pydantic_core._pydantic_core.ValidationError: 1 validation error for UserCredits
+E           updated_at
+E             Field required [type=missing, input_value={'balance': 1000.0, 'dail...0.0, 'total_spent': 0.0}, input_type=dict]
+E               For further information visit https://errors.pydantic.dev/2.11/v/missing
+
+tests/unit/test_credit_service.py:314: ValidationError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditLimits" name="test_update_daily_limit" time="0.228" /><testcase classname="unit.test_credit_service.TestCreditLimits" name="test_spending_reset_daily" time="0.228"><failure message="AttributeError: &lt;module 'app.services.credit_service' from '/Users/ishraq21/ragnetic/app/services/credit_service.py'&gt; does not have the attribute 'get_transactions_since'">self = &lt;unit.test_credit_service.TestCreditLimits object at 0x342590590&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x343f591f0&gt;
+
+    @pytest.mark.asyncio
+    async def test_spending_reset_daily(self, db_session):
+        """Test that daily spending tracking resets."""
+        user_id = 1
+    
+        from app.services.credit_service import get_daily_spending
+        from datetime import datetime, timedelta
+    
+        # Mock spending from yesterday vs today
+&gt;       with patch('app.services.credit_service.get_transactions_since') as mock_transactions:
+
+tests/unit/test_credit_service.py:351: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/mock.py:1455: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;unittest.mock._patch object at 0x343f68da0&gt;
+
+    def get_original(self):
+        target = self.getter()
+        name = self.attribute
+    
+        original = DEFAULT
+        local = False
+    
+        try:
+            original = target.__dict__[name]
+        except (AttributeError, KeyError):
+            original = getattr(target, name, DEFAULT)
+        else:
+            local = True
+    
+        if name in _builtins and isinstance(target, ModuleType):
+            self.create = True
+    
+        if not self.create and original is DEFAULT:
+&gt;           raise AttributeError(
+                "%s does not have the attribute %r" % (target, name)
+            )
+E           AttributeError: &lt;module 'app.services.credit_service' from '/Users/ishraq21/ragnetic/app/services/credit_service.py'&gt; does not have the attribute 'get_transactions_since'
+
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/mock.py:1428: AttributeError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditEdgeCases" name="test_very_small_amounts" time="0.227" /><testcase classname="unit.test_credit_service.TestCreditEdgeCases" name="test_rollback_on_error" time="0.226"><failure message="AttributeError: &lt;module 'app.services.credit_service' from '/Users/ishraq21/ragnetic/app/services/credit_service.py'&gt; does not have the attribute 'log_transaction'">self = &lt;unit.test_credit_service.TestCreditEdgeCases object at 0x342591610&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x343f5af90&gt;
+
+    @pytest.mark.asyncio
+    async def test_rollback_on_error(self, db_session):
+        """Test that transactions are rolled back on error."""
+        user_id = 1
+        await top_up(user_id, 100.0)
+    
+        initial_credits = await get_user_credits(user_id)
+        initial_balance = initial_credits.balance
+    
+        # Mock an error during deduction
+&gt;       with patch('app.services.credit_service.log_transaction') as mock_log:
+
+tests/unit/test_credit_service.py:404: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/mock.py:1455: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;unittest.mock._patch object at 0x343b5f8f0&gt;
+
+    def get_original(self):
+        target = self.getter()
+        name = self.attribute
+    
+        original = DEFAULT
+        local = False
+    
+        try:
+            original = target.__dict__[name]
+        except (AttributeError, KeyError):
+            original = getattr(target, name, DEFAULT)
+        else:
+            local = True
+    
+        if name in _builtins and isinstance(target, ModuleType):
+            self.create = True
+    
+        if not self.create and original is DEFAULT:
+&gt;           raise AttributeError(
+                "%s does not have the attribute %r" % (target, name)
+            )
+E           AttributeError: &lt;module 'app.services.credit_service' from '/Users/ishraq21/ragnetic/app/services/credit_service.py'&gt; does not have the attribute 'log_transaction'
+
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/mock.py:1428: AttributeError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditEdgeCases" name="test_database_error_handling" time="0.226"><failure message="AttributeError: module 'app.services.credit_service' has no attribute 'db_session'">self = &lt;unit.test_credit_service.TestCreditEdgeCases object at 0x3425910d0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x343f58980&gt;
+
+    @pytest.mark.asyncio
+    async def test_database_error_handling(self, db_session):
+        """Test handling of database errors."""
+        user_id = 1
+    
+&gt;       with patch('app.services.credit_service.db_session.execute') as mock_execute:
+
+tests/unit/test_credit_service.py:388: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/mock.py:1439: in __enter__
+    self.target = self.getter()
+                  ^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'app.services.credit_service.db_session'
+
+    def resolve_name(name):
+        """
+        Resolve a name to an object.
+    
+        It is expected that `name` will be a string in one of the following
+        formats, where W is shorthand for a valid Python identifier and dot stands
+        for a literal period in these pseudo-regexes:
+    
+        W(.W)*
+        W(.W)*:(W(.W)*)?
+    
+        The first form is intended for backward compatibility only. It assumes that
+        some part of the dotted name is a package, and the rest is an object
+        somewhere within that package, possibly nested inside other objects.
+        Because the place where the package stops and the object hierarchy starts
+        can't be inferred by inspection, repeated attempts to import must be done
+        with this form.
+    
+        In the second form, the caller makes the division point clear through the
+        provision of a single colon: the dotted name to the left of the colon is a
+        package to be imported, and the dotted name to the right is the object
+        hierarchy within that package. Only one import is needed in this form. If
+        it ends with the colon, then a module object is returned.
+    
+        The function will return an object (which might be a module), or raise one
+        of the following exceptions:
+    
+        ValueError - if `name` isn't in a recognised format
+        ImportError - if an import failed when it shouldn't have
+        AttributeError - if a failure occurred when traversing the object hierarchy
+                         within the imported package to get to the desired object.
+        """
+        global _NAME_PATTERN
+        if _NAME_PATTERN is None:
+            # Lazy import to speedup Python startup time
+            import re
+            dotted_words = r'(?!\d)(\w+)(\.(?!\d)(\w+))*'
+            _NAME_PATTERN = re.compile(f'^(?P&lt;pkg&gt;{dotted_words})'
+                                       f'(?P&lt;cln&gt;:(?P&lt;obj&gt;{dotted_words})?)?$',
+                                       re.UNICODE)
+    
+        m = _NAME_PATTERN.match(name)
+        if not m:
+            raise ValueError(f'invalid format: {name!r}')
+        gd = m.groupdict()
+        if gd.get('cln'):
+            # there is a colon - a one-step import is all that's needed
+            mod = importlib.import_module(gd['pkg'])
+            parts = gd.get('obj')
+            parts = parts.split('.') if parts else []
+        else:
+            # no colon - have to iterate to find the package boundary
+            parts = name.split('.')
+            modname = parts.pop(0)
+            # first part *must* be a module/package.
+            mod = importlib.import_module(modname)
+            while parts:
+                p = parts[0]
+                s = f'{modname}.{p}'
+                try:
+                    mod = importlib.import_module(s)
+                    parts.pop(0)
+                    modname = s
+                except ImportError:
+                    break
+        # if we reach this point, mod is the module, already imported, and
+        # parts is the list of parts in the object hierarchy to be traversed, or
+        # an empty list if just the module is wanted.
+        result = mod
+        for p in parts:
+&gt;           result = getattr(result, p)
+                     ^^^^^^^^^^^^^^^^^^
+E           AttributeError: module 'app.services.credit_service' has no attribute 'db_session'
+
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/pkgutil.py:528: AttributeError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditEdgeCases" name="test_invalid_user_id" time="0.226"><failure message="assert False&#10; +  where False = isinstance(&lt;app.services.credit_service.UserCredits object at 0x343f6be00&gt;, UserCredits)">self = &lt;unit.test_credit_service.TestCreditEdgeCases object at 0x3425907d0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x343f6a540&gt;
+
+    @pytest.mark.asyncio
+    async def test_invalid_user_id(self, db_session):
+        """Test operations with invalid user ID."""
+        invalid_user_id = -1
+    
+        # Should handle gracefully or raise appropriate error
+        credits = await get_user_credits(invalid_user_id)
+&gt;       assert isinstance(credits, UserCredits)
+E       assert False
+E        +  where False = isinstance(&lt;app.services.credit_service.UserCredits object at 0x343f6be00&gt;, UserCredits)
+
+tests/unit/test_credit_service.py:381: AssertionError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditTransactions" name="test_transaction_logging_top_up" time="0.226"><failure message="AttributeError: &lt;module 'app.services.credit_service' from '/Users/ishraq21/ragnetic/app/services/credit_service.py'&gt; does not have the attribute 'log_transaction'">self = &lt;unit.test_credit_service.TestCreditTransactions object at 0x34258aa80&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x344de88f0&gt;
+
+    @pytest.mark.asyncio
+    async def test_transaction_logging_top_up(self, db_session):
+        """Test that top-ups are logged as transactions."""
+        user_id = 1
+        amount = 50.0
+    
+&gt;       with patch('app.services.credit_service.log_transaction') as mock_log:
+
+tests/unit/test_credit_service.py:259: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/mock.py:1455: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;unittest.mock._patch object at 0x344de8fb0&gt;
+
+    def get_original(self):
+        target = self.getter()
+        name = self.attribute
+    
+        original = DEFAULT
+        local = False
+    
+        try:
+            original = target.__dict__[name]
+        except (AttributeError, KeyError):
+            original = getattr(target, name, DEFAULT)
+        else:
+            local = True
+    
+        if name in _builtins and isinstance(target, ModuleType):
+            self.create = True
+    
+        if not self.create and original is DEFAULT:
+&gt;           raise AttributeError(
+                "%s does not have the attribute %r" % (target, name)
+            )
+E           AttributeError: &lt;module 'app.services.credit_service' from '/Users/ishraq21/ragnetic/app/services/credit_service.py'&gt; does not have the attribute 'log_transaction'
+
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/mock.py:1428: AttributeError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditTransactions" name="test_transaction_logging_deduction" time="0.226"><failure message="AttributeError: &lt;module 'app.services.credit_service' from '/Users/ishraq21/ragnetic/app/services/credit_service.py'&gt; does not have the attribute 'log_transaction'">self = &lt;unit.test_credit_service.TestCreditTransactions object at 0x34258af90&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x344dea9c0&gt;
+
+    @pytest.mark.asyncio
+    async def test_transaction_logging_deduction(self, db_session):
+        """Test that deductions are logged as transactions."""
+        user_id = 1
+        await top_up(user_id, 100.0)  # Setup balance
+    
+&gt;       with patch('app.services.credit_service.log_transaction') as mock_log:
+
+tests/unit/test_credit_service.py:274: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/mock.py:1455: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;unittest.mock._patch object at 0x344debf50&gt;
+
+    def get_original(self):
+        target = self.getter()
+        name = self.attribute
+    
+        original = DEFAULT
+        local = False
+    
+        try:
+            original = target.__dict__[name]
+        except (AttributeError, KeyError):
+            original = getattr(target, name, DEFAULT)
+        else:
+            local = True
+    
+        if name in _builtins and isinstance(target, ModuleType):
+            self.create = True
+    
+        if not self.create and original is DEFAULT:
+&gt;           raise AttributeError(
+                "%s does not have the attribute %r" % (target, name)
+            )
+E           AttributeError: &lt;module 'app.services.credit_service' from '/Users/ishraq21/ragnetic/app/services/credit_service.py'&gt; does not have the attribute 'log_transaction'
+
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/unittest/mock.py:1428: AttributeError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditTransactions" name="test_get_transaction_history" time="0.226"><failure message="AttributeError: 'dict' object has no attribute 'transaction_type'">self = &lt;unit.test_credit_service.TestCreditTransactions object at 0x34258b4a0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x344db0c50&gt;
+
+    @pytest.mark.asyncio
+    async def test_get_transaction_history(self, db_session):
+        """Test retrieving transaction history."""
+        user_id = 1
+    
+        # Perform various operations
+        await top_up(user_id, 100.0)
+        await deduct(user_id, 25.0, "GPU training")
+        await top_up(user_id, 50.0)
+    
+        from app.services.credit_service import get_transaction_history
+        transactions = await get_transaction_history(user_id, limit=10)
+    
+        assert len(transactions) &gt;= 3
+&gt;       assert any(t.transaction_type == "topup" for t in transactions)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_credit_service.py:300: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+.0 = &lt;list_iterator object at 0x344db2260&gt;
+
+&gt;   assert any(t.transaction_type == "topup" for t in transactions)
+               ^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'transaction_type'
+
+tests/unit/test_credit_service.py:300: AttributeError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditPerformance" name="test_credit_operation_performance" time="0.318"><failure message="assert 400.0 == 75.0&#10; +  where 400.0 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance">self = &lt;unit.test_credit_service.TestCreditPerformance object at 0x3425436b0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x344deb500&gt;
+benchmark = &lt;pytest_benchmark.fixture.BenchmarkFixture object at 0x344de9160&gt;
+
+    @pytest.mark.asyncio
+    async def test_credit_operation_performance(self, db_session, benchmark):
+        """Benchmark credit operations."""
+        user_id = 1
+    
+        async def credit_operations():
+            await top_up(user_id, 100.0)
+            await deduct(user_id, 25.0, "Test")
+            return await get_user_credits(user_id)
+    
+        result = await benchmark(credit_operations)
+&gt;       assert result.balance == 75.0
+E       assert 400.0 == 75.0
+E        +  where 400.0 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance
+
+tests/unit/test_credit_service.py:444: AssertionError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditPerformance" name="test_concurrent_users_performance" time="0.226" /><testcase classname="unit.test_credit_service.TestCreditService" name="test_negative_amounts_rejected" time="0.241" /><testcase classname="unit.test_credit_service.TestCreditService" name="test_large_amounts" time="0.229"><failure message="assert 1000399.99 == 999999.99&#10; +  where 1000399.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance">self = &lt;unit.test_credit_service.TestCreditService object at 0x3425899a0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x345039fa0&gt;
+
+    @pytest.mark.asyncio
+    async def test_large_amounts(self, db_session):
+        """Test handling of large credit amounts."""
+        user_id = 1
+        large_amount = 999999.99
+    
+        await top_up(user_id, large_amount)
+        credits = await get_user_credits(user_id)
+&gt;       assert credits.balance == large_amount
+E       assert 1000399.99 == 999999.99
+E        +  where 1000399.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance
+
+tests/unit/test_credit_service.py:242: AssertionError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_deduct_credits_insufficient_balance" time="0.226"><failure message="Failed: DID NOT RAISE &lt;class 'ValueError'&gt;">self = &lt;unit.test_credit_service.TestCreditService object at 0x342467fe0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x34503b170&gt;
+
+    @pytest.mark.asyncio
+    async def test_deduct_credits_insufficient_balance(self, db_session):
+        """Test deducting credits when insufficient balance."""
+        user_id = 1
+    
+        # Only top up small amount
+        await top_up(user_id, 10.0)
+    
+        # Try to deduct more than available
+&gt;       with pytest.raises(ValueError, match="Insufficient credits"):
+E       Failed: DID NOT RAISE &lt;class 'ValueError'&gt;
+
+tests/unit/test_credit_service.py:82: Failed</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_within_limits_daily" time="0.227"><failure message="pydantic_core._pydantic_core.ValidationError: 1 validation error for UserCredits&#10;updated_at&#10;  Field required [type=missing, input_value={'balance': 200.0, 'daily...0.0, 'total_spent': 0.0}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing">self = &lt;unit.test_credit_service.TestCreditService object at 0x342588dd0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x345072ae0&gt;
+
+    @pytest.mark.asyncio
+    async def test_within_limits_daily(self, db_session):
+        """Test daily spending limits."""
+        user_id = 1
+    
+        # Set up user with daily limit
+        await top_up(user_id, 200.0)  # Plenty of balance
+    
+        # Mock getting user with specific daily limit
+        with patch('app.services.credit_service.get_user_credits') as mock_get:
+&gt;           mock_get.return_value = UserCredits(
+                balance=200.0,
+                daily_limit=50.0,
+                total_spent=0.0
+            )
+E           pydantic_core._pydantic_core.ValidationError: 1 validation error for UserCredits
+E           updated_at
+E             Field required [type=missing, input_value={'balance': 200.0, 'daily...0.0, 'total_spent': 0.0}, input_type=dict]
+E               For further information visit https://errors.pydantic.dev/2.11/v/missing
+
+tests/unit/test_credit_service.py:114: ValidationError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_top_up_credits" time="0.227"><failure message="assert 1000609.99 == (0.0 + 50.0)&#10; +  where 1000609.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance">self = &lt;unit.test_credit_service.TestCreditService object at 0x342543a40&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x34507da60&gt;
+
+    @pytest.mark.asyncio
+    async def test_top_up_credits(self, db_session):
+        """Test topping up user credits."""
+        user_id = 1
+        initial_balance = 0.0
+        top_up_amount = 50.0
+    
+        # Top up credits
+        await top_up(user_id, top_up_amount)
+    
+        # Verify balance updated
+        credits = await get_user_credits(user_id)
+&gt;       assert credits.balance == initial_balance + top_up_amount
+E       assert 1000609.99 == (0.0 + 50.0)
+E        +  where 1000609.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance
+
+tests/unit/test_credit_service.py:44: AssertionError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_concurrent_credit_operations" time="0.227"><failure message="assert 1001409.99 == 800.0&#10; +  where 1001409.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance">self = &lt;unit.test_credit_service.TestCreditService object at 0x342589d00&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x34507f800&gt;
+
+    @pytest.mark.asyncio
+    async def test_concurrent_credit_operations(self, db_session):
+        """Test thread safety of credit operations."""
+        import asyncio
+        user_id = 1
+    
+        # Initial top-up
+        await top_up(user_id, 1000.0)
+    
+        # Concurrent deductions
+        async def deduct_worker(amount, description):
+            try:
+                await deduct(user_id, amount, f"Concurrent {description}")
+                return True
+            except ValueError:
+                return False  # Insufficient funds
+    
+        # Run 20 concurrent deductions of $10 each
+        tasks = [
+            deduct_worker(10.0, f"task_{i}")
+            for i in range(20)
+        ]
+    
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+        # Count successful deductions
+        successful = sum(1 for r in results if r is True)
+    
+        # Verify final balance
+        credits = await get_user_credits(user_id)
+        expected_balance = 1000.0 - (successful * 10.0)
+&gt;       assert credits.balance == expected_balance
+E       assert 1001409.99 == 800.0
+E        +  where 1001409.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance
+
+tests/unit/test_credit_service.py:195: AssertionError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_ensure_balance_insufficient" time="0.226"><failure message="Failed: DID NOT RAISE &lt;class 'ValueError'&gt;">self = &lt;unit.test_credit_service.TestCreditService object at 0x3425888c0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x34508e900&gt;
+
+    @pytest.mark.asyncio
+    async def test_ensure_balance_insufficient(self, db_session):
+        """Test ensure_balance when user has insufficient credits."""
+        user_id = 1
+        await top_up(user_id, 30.0)
+    
+        # Should raise exception
+&gt;       with pytest.raises(ValueError, match="Insufficient credits"):
+E       Failed: DID NOT RAISE &lt;class 'ValueError'&gt;
+
+tests/unit/test_credit_service.py:101: Failed</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_ensure_balance_sufficient" time="0.225" /><testcase classname="unit.test_credit_service.TestCreditService" name="test_precision_handling" time="0.226"><failure message="assert 1001539.99 &lt; 0.01&#10; +  where 1001539.99 = abs((1001639.99 - 100.0))&#10; +    where 1001639.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance">self = &lt;unit.test_credit_service.TestCreditService object at 0x342540c20&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x34507ea20&gt;
+
+    @pytest.mark.asyncio
+    async def test_precision_handling(self, db_session):
+        """Test handling of decimal precision."""
+        user_id = 1
+    
+        # Top up with precise decimal
+        await top_up(user_id, 33.33)
+        await top_up(user_id, 66.67)
+    
+        credits = await get_user_credits(user_id)
+&gt;       assert abs(credits.balance - 100.0) &lt; 0.01  # Handle floating point precision
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       assert 1001539.99 &lt; 0.01
+E        +  where 1001539.99 = abs((1001639.99 - 100.0))
+E        +    where 1001639.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance
+
+tests/unit/test_credit_service.py:232: AssertionError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_deduct_credits_sufficient_balance" time="0.227"><failure message="assert 1001714.99 == 75.0&#10; +  where 1001714.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance">self = &lt;unit.test_credit_service.TestCreditService object at 0x3425419a0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x34508c3b0&gt;
+
+    @pytest.mark.asyncio
+    async def test_deduct_credits_sufficient_balance(self, db_session):
+        """Test deducting credits when sufficient balance exists."""
+        user_id = 1
+    
+        # Top up first
+        await top_up(user_id, 100.0)
+    
+        # Deduct credits
+        await deduct(user_id, 25.0, "Test deduction")
+    
+        credits = await get_user_credits(user_id)
+&gt;       assert credits.balance == 75.0
+E       assert 1001714.99 == 75.0
+E        +  where 1001714.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance
+
+tests/unit/test_credit_service.py:70: AssertionError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_top_up_multiple_times" time="0.225"><failure message="assert 1001784.99 == 70.0&#10; +  where 1001784.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance">self = &lt;unit.test_credit_service.TestCreditService object at 0x342542b40&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x345072ae0&gt;
+
+    @pytest.mark.asyncio
+    async def test_top_up_multiple_times(self, db_session):
+        """Test multiple top-ups accumulate correctly."""
+        user_id = 1
+    
+        await top_up(user_id, 25.0)
+        await top_up(user_id, 30.0)
+        await top_up(user_id, 15.0)
+    
+        credits = await get_user_credits(user_id)
+&gt;       assert credits.balance == 70.0
+E       assert 1001784.99 == 70.0
+E        +  where 1001784.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance
+
+tests/unit/test_credit_service.py:56: AssertionError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_reserve_and_release_credits" time="0.226"><failure message="assert 1001854.99 == 70.0&#10; +  where 1001854.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance">self = &lt;unit.test_credit_service.TestCreditService object at 0x3425892e0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x345072420&gt;
+
+    @pytest.mark.asyncio
+    async def test_reserve_and_release_credits(self, db_session):
+        """Test credit reservation system."""
+        user_id = 1
+        await top_up(user_id, 100.0)
+    
+        # Reserve credits
+        await reserve_credits(user_id, 30.0, "GPU training reservation")
+    
+        credits = await get_user_credits(user_id)
+&gt;       assert credits.balance == 70.0  # Available balance reduced
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       assert 1001854.99 == 70.0
+E        +  where 1001854.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance
+
+tests/unit/test_credit_service.py:136: AssertionError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_charge_reserved_credits" time="0.227"><failure message="assert 1001919.99 == 65.0&#10; +  where 1001919.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance">self = &lt;unit.test_credit_service.TestCreditService object at 0x3425897f0&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x34503a540&gt;
+
+    @pytest.mark.asyncio
+    async def test_charge_reserved_credits(self, db_session):
+        """Test charging reserved credits."""
+        user_id = 1
+        await top_up(user_id, 100.0)
+    
+        # Reserve credits
+        await reserve_credits(user_id, 50.0, "GPU training")
+    
+        # Charge part of reservation (actual usage)
+        await charge_reserved(user_id, 35.0, "Actual GPU usage")
+    
+        # Release remaining reservation
+        await release_credits(user_id, 15.0, "Unused reservation")
+    
+        credits = await get_user_credits(user_id)
+&gt;       assert credits.balance == 65.0  # 100 - 35 charged
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       assert 1001919.99 == 65.0
+E        +  where 1001919.99 = &lt;app.services.credit_service.UserCredits object at 0x343f5bdd0&gt;.balance
+
+tests/unit/test_credit_service.py:161: AssertionError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_get_user_credits_new_user" time="0.226"><failure message="assert False&#10; +  where False = isinstance(&lt;app.services.credit_service.UserCredits object at 0x345250b30&gt;, UserCredits)">self = &lt;unit.test_credit_service.TestCreditService object at 0x342543a10&gt;
+db_session = &lt;sqlalchemy.orm.session.AsyncSession object at 0x344de8b30&gt;
+
+    @pytest.mark.asyncio
+    async def test_get_user_credits_new_user(self, db_session):
+        """Test getting credits for a new user."""
+        user_id = 999  # Non-existent user
+        credits = await get_user_credits(user_id)
+    
+&gt;       assert isinstance(credits, UserCredits)
+E       assert False
+E        +  where False = isinstance(&lt;app.services.credit_service.UserCredits object at 0x345250b30&gt;, UserCredits)
+
+tests/unit/test_credit_service.py:27: AssertionError</failure></testcase><testcase classname="unit.test_credit_service.TestCreditService" name="test_zero_amounts_rejected" time="0.227" /><testcase classname="unit.test_gpu_orchestrator.TestGPUInstanceManagement" name="test_instance_not_found" time="0.227" /><testcase classname="unit.test_gpu_orchestrator.TestGPUInstanceManagement" name="test_stop_instance_failure" time="0.242" /><testcase classname="unit.test_gpu_orchestrator.TestGPUInstanceManagement" name="test_stop_instance_success" time="0.232" /><testcase classname="unit.test_gpu_orchestrator.TestGPUInstanceManagement" name="test_get_instance_status" time="0.230" /><testcase classname="unit.test_gpu_orchestrator.TestGPUProvisioning" name="test_provision_records_instance_in_db" time="0.230" /><testcase classname="unit.test_gpu_orchestrator.TestGPUProvisioning" name="test_provision_for_training_success" time="0.225" /><testcase classname="unit.test_gpu_orchestrator.TestGPUProvisioning" name="test_provision_with_budget_check" time="0.224" /><testcase classname="unit.test_gpu_orchestrator.TestGPUProvisioning" name="test_provision_for_training_provider_failure" time="0.228" /><testcase classname="unit.test_gpu_orchestrator.TestGPUOrchestratorEdgeCases" name="test_provider_failover" time="0.224" /><testcase classname="unit.test_gpu_orchestrator.TestGPUOrchestratorEdgeCases" name="test_provision_with_negative_max_hours" time="0.223" /><testcase classname="unit.test_gpu_orchestrator.TestGPUOrchestratorEdgeCases" name="test_provision_with_invalid_gpu_type" time="0.225" /><testcase classname="unit.test_gpu_orchestrator.TestGPUOrchestratorEdgeCases" name="test_provision_with_zero_max_hours" time="0.223" /><testcase classname="unit.test_gpu_orchestrator.TestGPUOrchestratorEdgeCases" name="test_concurrent_provisioning" time="0.225" /><testcase classname="unit.test_gpu_orchestrator.TestGPUOrchestratorPerformance" name="test_provider_selection_performance" time="0.326" /><testcase classname="unit.test_gpu_orchestrator.TestGPUOrchestratorPerformance" name="test_reconciliation_performance" time="0.226" /><testcase classname="unit.test_gpu_orchestrator.TestProviderSelection" name="test_select_provider_prefer_reliable" time="0.224" /><testcase classname="unit.test_gpu_orchestrator.TestProviderSelection" name="test_select_cheapest_provider" time="0.225" /><testcase classname="unit.test_gpu_orchestrator.TestProviderSelection" name="test_select_provider_skip_unavailable" time="0.226" /><testcase classname="unit.test_gpu_orchestrator.TestProviderSelection" name="test_select_provider_specific_gpu_type" time="0.224" /><testcase classname="unit.test_gpu_orchestrator.TestProviderSelection" name="test_select_provider_no_available" time="0.225" /><testcase classname="unit.test_gpu_orchestrator.TestInstanceReconciliation" name="test_reconcile_instances_basic" time="0.226" /><testcase classname="unit.test_gpu_orchestrator.TestInstanceReconciliation" name="test_reconcile_handles_provider_errors" time="0.225" /><testcase classname="unit.test_gpu_orchestrator.TestInstanceReconciliation" name="test_reconcile_finds_orphaned_instances" time="0.223" /><testcase classname="unit.test_gpu_orchestrator.TestInstanceReconciliation" name="test_reconcile_stops_overrun_instances" time="0.225" /><testcase classname="unit.test_security.TestRateLimiting" name="test_rate_limit_different_users" time="0.225" /><testcase classname="unit.test_security.TestRateLimiting" name="test_rate_limit_window_reset" time="1.331" /><testcase classname="unit.test_security.TestRateLimiting" name="test_rate_limit_allow_within_limit" time="0.246" /><testcase classname="unit.test_security.TestRateLimiting" name="test_peer_ip_extraction" time="0.229" /><testcase classname="unit.test_security.TestRateLimiting" name="test_rate_limit_deny_over_limit" time="0.231" /><testcase classname="unit.test_security.TestRateLimiting" name="test_rate_limit_edge_cases" time="0.229" /><testcase classname="unit.test_security.TestAPIKeyManagement" name="test_create_api_key" time="0.226"><failure message="AssertionError: assert 24 &gt;= 32&#10; +  where 24 = len('sk_1_test_key_1757890087')">self = &lt;unit.test_security.TestAPIKeyManagement object at 0x3425d22a0&gt;
+
+    def test_create_api_key(self):
+        """Test API key creation."""
+        user_id = 1
+        scope = "admin"
+    
+        api_key_data = create_api_key(user_id, "test_key", scope)
+    
+        assert "key" in api_key_data
+        assert "key_hash" in api_key_data
+        assert api_key_data["key"].startswith("sk_")  # Standard prefix
+&gt;       assert len(api_key_data["key"]) &gt;= 32  # Reasonable length
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert 24 &gt;= 32
+E        +  where 24 = len('sk_1_test_key_1757890087')
+
+tests/unit/test_security.py:99: AssertionError</failure></testcase><testcase classname="unit.test_security.TestAPIKeyManagement" name="test_verify_api_key_inactive" time="0.229"><failure message="TypeError: verify_api_key() missing 1 required positional argument: 'db'">self = &lt;unit.test_security.TestAPIKeyManagement object at 0x3425d1490&gt;
+
+    def test_verify_api_key_inactive(self):
+        """Test API key verification with inactive key."""
+        user_id = 1
+        api_key_data = create_api_key(user_id, "test_key", "viewer")
+        raw_key = api_key_data["key"]
+    
+        with patch('app.core.security.get_api_key_from_hash') as mock_get:
+            mock_get.return_value = {
+                "user_id": user_id,
+                "scope": "viewer",
+                "is_active": False,  # Inactive key
+                "id": "key_123"
+            }
+    
+&gt;           result = verify_api_key(raw_key)
+                     ^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: verify_api_key() missing 1 required positional argument: 'db'
+
+tests/unit/test_security.py:149: TypeError</failure></testcase><testcase classname="unit.test_security.TestAPIKeyManagement" name="test_api_key_format_validation" time="0.225"><failure message="TypeError: verify_api_key() missing 1 required positional argument: 'db'">self = &lt;unit.test_security.TestAPIKeyManagement object at 0x3425d2f30&gt;
+
+    def test_api_key_format_validation(self):
+        """Test API key format validation."""
+        # Valid formats
+        valid_keys = [
+            "sk_1234567890abcdef",
+            "sk_test_1234567890abcdef1234567890abcdef",
+            "sk_live_abcdef1234567890"
+        ]
+    
+        for key in valid_keys:
+            # Should not raise exception
+            try:
+&gt;               verify_api_key(key)
+E               TypeError: verify_api_key() missing 1 required positional argument: 'db'
+
+tests/unit/test_security.py:164: TypeError</failure></testcase><testcase classname="unit.test_security.TestAPIKeyManagement" name="test_verify_api_key_invalid" time="0.223"><failure message="TypeError: verify_api_key() missing 1 required positional argument: 'db'">self = &lt;unit.test_security.TestAPIKeyManagement object at 0x3425d2c00&gt;
+
+    def test_verify_api_key_invalid(self):
+        """Test API key verification with invalid key."""
+        invalid_key = "sk_invalid_key_12345"
+    
+        with patch('app.core.security.get_api_key_from_hash') as mock_get:
+            mock_get.return_value = None  # Key not found
+    
+&gt;           result = verify_api_key(invalid_key)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: verify_api_key() missing 1 required positional argument: 'db'
+
+tests/unit/test_security.py:132: TypeError</failure></testcase><testcase classname="unit.test_security.TestAPIKeyManagement" name="test_verify_api_key_valid" time="0.244"><failure message="TypeError: verify_api_key() missing 1 required positional argument: 'db'">self = &lt;unit.test_security.TestAPIKeyManagement object at 0x3425d2750&gt;
+
+    def test_verify_api_key_valid(self):
+        """Test API key verification with valid key."""
+        user_id = 1
+        scope = "editor"
+    
+        # Create key
+        api_key_data = create_api_key(user_id, "test_key", scope)
+        raw_key = api_key_data["key"]
+        key_hash = api_key_data["key_hash"]
+    
+        # Mock database lookup
+        with patch('app.core.security.get_api_key_from_hash') as mock_get:
+            mock_get.return_value = {
+                "user_id": user_id,
+                "scope": scope,
+                "is_active": True,
+                "id": "key_123"
+            }
+    
+&gt;           result = verify_api_key(raw_key)
+                     ^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: verify_api_key() missing 1 required positional argument: 'db'
+
+tests/unit/test_security.py:121: TypeError</failure></testcase><testcase classname="unit.test_security.TestSecurityHeaders" name="test_cors_headers" time="0.233"><failure message="assert 'Access-Control-Allow-Origin' in Headers({'vary': 'Origin', 'access-control-allow-methods': 'DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT', 'access-control-max-age': '600', 'access-control-allow-credentials': 'true', 'access-control-allow-headers': 'X-API-Key', 'content-length': '22', 'content-type': 'text/plain; charset=utf-8', 'strict-transport-security': 'max-age=31536000; includeSubDomains; preload', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'x-xss-protection': '1; mode=block', 'referrer-policy': 'no-referrer', 'permissions-policy': 'camera=(), microphone=(), geolocation=()', 'cross-origin-opener-policy': 'same-origin', 'content-security-policy': &quot;default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none';&quot;})&#10; +  where Headers({'vary': 'Origin', 'access-control-allow-methods': 'DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT', 'access-control-max-age': '600', 'access-control-allow-credentials': 'true', 'access-control-allow-headers': 'X-API-Key', 'content-length': '22', 'content-type': 'text/plain; charset=utf-8', 'strict-transport-security': 'max-age=31536000; includeSubDomains; preload', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'x-xss-protection': '1; mode=block', 'referrer-policy': 'no-referrer', 'permissions-policy': 'camera=(), microphone=(), geolocation=()', 'cross-origin-opener-policy': 'same-origin', 'content-security-policy': &quot;default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none';&quot;}) = &lt;Response [400 Bad Request]&gt;.headers">self = &lt;unit.test_security.TestSecurityHeaders object at 0x342543a70&gt;
+
+    def test_cors_headers(self):
+        """Test CORS headers configuration."""
+        from fastapi.testclient import TestClient
+        from app.main import app
+    
+        client = TestClient(app)
+    
+        # Preflight request
+        response = client.options(
+            "/api/v1/agents",
+            headers={
+                "Origin": "https://app.ragnetic.ai",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "X-API-Key"
+            }
+        )
+    
+        # Should allow the origin
+&gt;       assert "Access-Control-Allow-Origin" in response.headers
+E       assert 'Access-Control-Allow-Origin' in Headers({'vary': 'Origin', 'access-control-allow-methods': 'DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT', 'access-control-max-age': '600', 'access-control-allow-credentials': 'true', 'access-control-allow-headers': 'X-API-Key', 'content-length': '22', 'content-type': 'text/plain; charset=utf-8', 'strict-transport-security': 'max-age=31536000; includeSubDomains; preload', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'x-xss-protection': '1; mode=block', 'referrer-policy': 'no-referrer', 'permissions-policy': 'camera=(), microphone=(), geolocation=()', 'cross-origin-opener-policy': 'same-origin', 'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none';"})
+E        +  where Headers({'vary': 'Origin', 'access-control-allow-methods': 'DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT', 'access-control-max-age': '600', 'access-control-allow-credentials': 'true', 'access-control-allow-headers': 'X-API-Key', 'content-length': '22', 'content-type': 'text/plain; charset=utf-8', 'strict-transport-security': 'max-age=31536000; includeSubDomains; preload', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'x-xss-protection': '1; mode=block', 'referrer-policy': 'no-referrer', 'permissions-policy': 'camera=(), microphone=(), geolocation=()', 'cross-origin-opener-policy': 'same-origin', 'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none';"}) = &lt;Response [400 Bad Request]&gt;.headers
+
+tests/unit/test_security.py:446: AssertionError</failure></testcase><testcase classname="unit.test_security.TestSecurityHeaders" name="test_security_headers_present" time="0.243" /><testcase classname="unit.test_security.TestPasswordSecurity" name="test_verify_password_empty" time="0.244" /><testcase classname="unit.test_security.TestPasswordSecurity" name="test_hash_password" time="0.226"><failure message="AssertionError: assert '$' in '67dafc9ecaa7d08d35bc0ab67dde6ac29aec6faf70c17266be868f097d262dc1'">self = &lt;unit.test_security.TestPasswordSecurity object at 0x3425b3bc0&gt;
+
+    def test_hash_password(self):
+        """Test password hashing."""
+        password = "test_password_123"
+        hashed = hash_password(password)
+    
+        assert hashed != password  # Should be different from plaintext
+        assert len(hashed) &gt; 50  # Reasonable hash length
+&gt;       assert "$" in hashed  # Should contain bcrypt markers
+        ^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert '$' in '67dafc9ecaa7d08d35bc0ab67dde6ac29aec6faf70c17266be868f097d262dc1'
+
+tests/unit/test_security.py:29: AssertionError</failure></testcase><testcase classname="unit.test_security.TestPasswordSecurity" name="test_password_unicode_support" time="0.232" /><testcase classname="unit.test_security.TestPasswordSecurity" name="test_long_password" time="0.227" /><testcase classname="unit.test_security.TestPasswordSecurity" name="test_verify_password_malformed_hash" time="0.228" /><testcase classname="unit.test_security.TestPasswordSecurity" name="test_hash_password_different_salts" time="0.229"><failure message="AssertionError: assert '5b048e41c930ae49b86ba46e429f2116131a68e713f78f48df0867cfd38f3c64' != '5b048e41c930ae49b86ba46e429f2116131a68e713f78f48df0867cfd38f3c64'">self = &lt;unit.test_security.TestPasswordSecurity object at 0x3425d00b0&gt;
+
+    def test_hash_password_different_salts(self):
+        """Test that same password produces different hashes."""
+        password = "same_password"
+        hash1 = hash_password(password)
+        hash2 = hash_password(password)
+    
+&gt;       assert hash1 != hash2  # Different salts should produce different hashes
+        ^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert '5b048e41c930ae49b86ba46e429f2116131a68e713f78f48df0867cfd38f3c64' != '5b048e41c930ae49b86ba46e429f2116131a68e713f78f48df0867cfd38f3c64'
+
+tests/unit/test_security.py:37: AssertionError</failure></testcase><testcase classname="unit.test_security.TestPasswordSecurity" name="test_verify_password_incorrect" time="0.227" /><testcase classname="unit.test_security.TestPasswordSecurity" name="test_verify_password_correct" time="0.227" /><testcase classname="unit.test_security.TestSecurityPerformance" name="test_password_verification_performance" time="1.234" /><testcase classname="unit.test_security.TestSecurityPerformance" name="test_password_hashing_performance" time="0.338" /><testcase classname="unit.test_security.TestSecurityPerformance" name="test_api_key_verification_performance" time="0.226"><failure message="TypeError: verify_api_key() missing 1 required positional argument: 'db'">self = &lt;unit.test_security.TestSecurityPerformance object at 0x3425ee150&gt;
+benchmark = &lt;pytest_benchmark.fixture.BenchmarkFixture object at 0x345559730&gt;
+
+    def test_api_key_verification_performance(self, benchmark):
+        """Benchmark API key verification performance."""
+        user_id = 1
+        api_key_data = create_api_key(user_id, "test_key", "admin")
+        raw_key = api_key_data["key"]
+    
+        with patch('app.core.security.get_api_key_from_hash') as mock_get:
+            mock_get.return_value = {
+                "user_id": user_id,
+                "scope": "admin",
+                "is_active": True,
+                "id": "key_123"
+            }
+    
+            def verify_key_bench():
+                return verify_api_key(raw_key)
+    
+&gt;           result = benchmark(verify_key_bench)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_security.py:656: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+env/lib/python3.12/site-packages/pytest_benchmark/fixture.py:156: in __call__
+    return self._raw(function_to_benchmark, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+env/lib/python3.12/site-packages/pytest_benchmark/fixture.py:180: in _raw
+    duration, iterations, loops_range = self._calibrate_timer(runner)
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+env/lib/python3.12/site-packages/pytest_benchmark/fixture.py:318: in _calibrate_timer
+    duration = runner(loops_range)
+               ^^^^^^^^^^^^^^^^^^^
+env/lib/python3.12/site-packages/pytest_benchmark/fixture.py:109: in runner
+    function_to_benchmark(*args, **kwargs)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def verify_key_bench():
+&gt;       return verify_api_key(raw_key)
+               ^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: verify_api_key() missing 1 required positional argument: 'db'
+
+tests/unit/test_security.py:654: TypeError</failure></testcase><testcase classname="unit.test_security.TestPermissionChecker" name="test_permission_checker_missing_permission" time="0.227"><failure message="pydantic_core._pydantic_core.ValidationError: 4 validation errors for User&#10;hashed_password&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'te...se, 'roles': ['viewer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;created_at&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'te...se, 'roles': ['viewer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;updated_at&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'te...se, 'roles': ['viewer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;roles.0&#10;  Input should be a valid dictionary or object to extract fields from [type=model_attributes_type, input_value='viewer', input_type=str]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/model_attributes_type">self = &lt;unit.test_security.TestPermissionChecker object at 0x3425d39e0&gt;
+
+    def test_permission_checker_missing_permission(self):
+        """Test permission checker with missing permissions."""
+        required_perms = ["admin:users"]
+        checker = PermissionChecker(required_perms)
+    
+&gt;       user = User(
+            id=1,
+            username="test_user",
+            email="test@example.com",
+            first_name="Test",
+            last_name="User",
+            is_active=True,
+            is_superuser=False,
+            roles=["viewer"]
+        )
+E       pydantic_core._pydantic_core.ValidationError: 4 validation errors for User
+E       hashed_password
+E         Field required [type=missing, input_value={'id': 1, 'username': 'te...se, 'roles': ['viewer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       created_at
+E         Field required [type=missing, input_value={'id': 1, 'username': 'te...se, 'roles': ['viewer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       updated_at
+E         Field required [type=missing, input_value={'id': 1, 'username': 'te...se, 'roles': ['viewer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       roles.0
+E         Input should be a valid dictionary or object to extract fields from [type=model_attributes_type, input_value='viewer', input_type=str]
+E           For further information visit https://errors.pydantic.dev/2.11/v/model_attributes_type
+
+tests/unit/test_security.py:214: ValidationError</failure></testcase><testcase classname="unit.test_security.TestPermissionChecker" name="test_permission_checker_superuser_bypass" time="0.227"><failure message="pydantic_core._pydantic_core.ValidationError: 4 validation errors for User&#10;hashed_password&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'ad...rue, 'roles': ['admin']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;created_at&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'ad...rue, 'roles': ['admin']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;updated_at&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'ad...rue, 'roles': ['admin']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;roles.0&#10;  Input should be a valid dictionary or object to extract fields from [type=model_attributes_type, input_value='admin', input_type=str]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/model_attributes_type">self = &lt;unit.test_security.TestPermissionChecker object at 0x3425d3e90&gt;
+
+    def test_permission_checker_superuser_bypass(self):
+        """Test that superusers bypass permission checks."""
+        required_perms = ["admin:everything"]
+        checker = PermissionChecker(required_perms)
+    
+&gt;       superuser = User(
+            id=1,
+            username="admin",
+            email="admin@example.com",
+            first_name="Admin",
+            last_name="User",
+            is_active=True,
+            is_superuser=True,  # Superuser
+            roles=["admin"]
+        )
+E       pydantic_core._pydantic_core.ValidationError: 4 validation errors for User
+E       hashed_password
+E         Field required [type=missing, input_value={'id': 1, 'username': 'ad...rue, 'roles': ['admin']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       created_at
+E         Field required [type=missing, input_value={'id': 1, 'username': 'ad...rue, 'roles': ['admin']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       updated_at
+E         Field required [type=missing, input_value={'id': 1, 'username': 'ad...rue, 'roles': ['admin']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       roles.0
+E         Input should be a valid dictionary or object to extract fields from [type=model_attributes_type, input_value='admin', input_type=str]
+E           For further information visit https://errors.pydantic.dev/2.11/v/model_attributes_type
+
+tests/unit/test_security.py:239: ValidationError</failure></testcase><testcase classname="unit.test_security.TestPermissionChecker" name="test_permission_checker_inactive_user" time="0.221"><failure message="pydantic_core._pydantic_core.ValidationError: 4 validation errors for User&#10;hashed_password&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'in...se, 'roles': ['viewer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;created_at&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'in...se, 'roles': ['viewer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;updated_at&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'in...se, 'roles': ['viewer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;roles.0&#10;  Input should be a valid dictionary or object to extract fields from [type=model_attributes_type, input_value='viewer', input_type=str]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/model_attributes_type">self = &lt;unit.test_security.TestPermissionChecker object at 0x3425e0380&gt;
+
+    def test_permission_checker_inactive_user(self):
+        """Test permission checker with inactive user."""
+        required_perms = ["read:agents"]
+        checker = PermissionChecker(required_perms)
+    
+&gt;       inactive_user = User(
+            id=1,
+            username="inactive",
+            email="inactive@example.com",
+            first_name="Inactive",
+            last_name="User",
+            is_active=False,  # Inactive
+            is_superuser=False,
+            roles=["viewer"]
+        )
+E       pydantic_core._pydantic_core.ValidationError: 4 validation errors for User
+E       hashed_password
+E         Field required [type=missing, input_value={'id': 1, 'username': 'in...se, 'roles': ['viewer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       created_at
+E         Field required [type=missing, input_value={'id': 1, 'username': 'in...se, 'roles': ['viewer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       updated_at
+E         Field required [type=missing, input_value={'id': 1, 'username': 'in...se, 'roles': ['viewer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       roles.0
+E         Input should be a valid dictionary or object to extract fields from [type=model_attributes_type, input_value='viewer', input_type=str]
+E           For further information visit https://errors.pydantic.dev/2.11/v/model_attributes_type
+
+tests/unit/test_security.py:259: ValidationError</failure></testcase><testcase classname="unit.test_security.TestPermissionChecker" name="test_permission_checker_multiple_permissions" time="0.226"><failure message="pydantic_core._pydantic_core.ValidationError: 4 validation errors for User&#10;hashed_password&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'de... 'roles': ['developer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;created_at&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'de... 'roles': ['developer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;updated_at&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'de... 'roles': ['developer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;roles.0&#10;  Input should be a valid dictionary or object to extract fields from [type=model_attributes_type, input_value='developer', input_type=str]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/model_attributes_type">self = &lt;unit.test_security.TestPermissionChecker object at 0x3425e0830&gt;
+
+    def test_permission_checker_multiple_permissions(self):
+        """Test permission checker with multiple required permissions."""
+        required_perms = ["read:agents", "write:agents", "delete:agents"]
+        checker = PermissionChecker(required_perms)
+    
+&gt;       user = User(
+            id=1,
+            username="developer",
+            email="dev@example.com",
+            first_name="Dev",
+            last_name="User",
+            is_active=True,
+            is_superuser=False,
+            roles=["developer"]
+        )
+E       pydantic_core._pydantic_core.ValidationError: 4 validation errors for User
+E       hashed_password
+E         Field required [type=missing, input_value={'id': 1, 'username': 'de... 'roles': ['developer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       created_at
+E         Field required [type=missing, input_value={'id': 1, 'username': 'de... 'roles': ['developer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       updated_at
+E         Field required [type=missing, input_value={'id': 1, 'username': 'de... 'roles': ['developer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       roles.0
+E         Input should be a valid dictionary or object to extract fields from [type=model_attributes_type, input_value='developer', input_type=str]
+E           For further information visit https://errors.pydantic.dev/2.11/v/model_attributes_type
+
+tests/unit/test_security.py:281: ValidationError</failure></testcase><testcase classname="unit.test_security.TestPermissionChecker" name="test_permission_checker_valid_permission" time="0.223"><failure message="pydantic_core._pydantic_core.ValidationError: 4 validation errors for User&#10;hashed_password&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'te... 'roles': ['developer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;created_at&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'te... 'roles': ['developer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;updated_at&#10;  Field required [type=missing, input_value={'id': 1, 'username': 'te... 'roles': ['developer']}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/missing&#10;roles.0&#10;  Input should be a valid dictionary or object to extract fields from [type=model_attributes_type, input_value='developer', input_type=str]&#10;    For further information visit https://errors.pydantic.dev/2.11/v/model_attributes_type">self = &lt;unit.test_security.TestPermissionChecker object at 0x3425d3530&gt;
+
+    def test_permission_checker_valid_permission(self):
+        """Test permission checker with valid permissions."""
+        required_perms = ["read:agents", "write:agents"]
+        checker = PermissionChecker(required_perms)
+    
+        # Mock user with required permissions
+&gt;       user = User(
+            id=1,
+            username="test_user",
+            email="test@example.com",
+            first_name="Test",
+            last_name="User",
+            is_active=True,
+            is_superuser=False,
+            roles=["developer"]
+        )
+E       pydantic_core._pydantic_core.ValidationError: 4 validation errors for User
+E       hashed_password
+E         Field required [type=missing, input_value={'id': 1, 'username': 'te... 'roles': ['developer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       created_at
+E         Field required [type=missing, input_value={'id': 1, 'username': 'te... 'roles': ['developer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       updated_at
+E         Field required [type=missing, input_value={'id': 1, 'username': 'te... 'roles': ['developer']}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.11/v/missing
+E       roles.0
+E         Input should be a valid dictionary or object to extract fields from [type=model_attributes_type, input_value='developer', input_type=str]
+E           For further information visit https://errors.pydantic.dev/2.11/v/model_attributes_type
+
+tests/unit/test_security.py:191: ValidationError</failure></testcase><testcase classname="unit.test_security.TestInputValidation" name="test_command_injection_prevention" time="0.221" /><testcase classname="unit.test_security.TestInputValidation" name="test_xss_prevention" time="0.218" /><testcase classname="unit.test_security.TestInputValidation" name="test_path_traversal_prevention" time="0.216" /><testcase classname="unit.test_security.TestInputValidation" name="test_sql_injection_prevention" time="0.223" /><testcase classname="unit.test_security.TestSessionSecurity" name="test_session_regeneration" time="0.221"><failure message="AssertionError: assert 9 == 10&#10; +  where 9 = len({'02ee92e428ea2e7557b290d2be3c0958f2d33f60e9065386bb83c307b8d82380', '3d3db76aa31b95fb06582e07ffd11cefb0bd76b20c19b7abdd6388316b8d54cb', '61ca7f7d33ef2804922385cf86754c5f8d13de02013f2c877702b678bcc7fe20', '66dcafda74a49227f198e06e4a6a806b6007f451ee1fed390ecc4b0f50be4f69', '69c0815ed5b3ee7a68373182a430c9cc9fd1d6f29077fc5d28bdcdf937726016', '81610778f455dc08e967998e254516531507d98a9cc0bc8903706e4ed56143a2', ...})&#10; +    where {'02ee92e428ea2e7557b290d2be3c0958f2d33f60e9065386bb83c307b8d82380', '3d3db76aa31b95fb06582e07ffd11cefb0bd76b20c19b7abdd6388316b8d54cb', '61ca7f7d33ef2804922385cf86754c5f8d13de02013f2c877702b678bcc7fe20', '66dcafda74a49227f198e06e4a6a806b6007f451ee1fed390ecc4b0f50be4f69', '69c0815ed5b3ee7a68373182a430c9cc9fd1d6f29077fc5d28bdcdf937726016', '81610778f455dc08e967998e254516531507d98a9cc0bc8903706e4ed56143a2', ...} = set(['61ca7f7d33ef2804922385cf86754c5f8d13de02013f2c877702b678bcc7fe20', '81610778f455dc08e967998e254516531507d98a9cc0bc8903706e4ed56143a2', '02ee92e428ea2e7557b290d2be3c0958f2d33f60e9065386bb83c307b8d82380', 'a8fd265ce2ef9022cb6abf15f0ffbcc1bba40b5d4b54eaf410a51ea45d8ceed1', '66dcafda74a49227f198e06e4a6a806b6007f451ee1fed390ecc4b0f50be4f69', '69c0815ed5b3ee7a68373182a430c9cc9fd1d6f29077fc5d28bdcdf937726016', ...])">self = &lt;unit.test_security.TestSessionSecurity object at 0x3425ec2f0&gt;
+
+    def test_session_regeneration(self):
+        """Test session ID regeneration."""
+        from app.core.security import generate_session_id
+    
+        # Generate multiple session IDs
+        session_ids = [generate_session_id() for _ in range(10)]
+    
+        # All should be unique
+&gt;       assert len(set(session_ids)) == 10
+E       AssertionError: assert 9 == 10
+E        +  where 9 = len({'02ee92e428ea2e7557b290d2be3c0958f2d33f60e9065386bb83c307b8d82380', '3d3db76aa31b95fb06582e07ffd11cefb0bd76b20c19b7abdd6388316b8d54cb', '61ca7f7d33ef2804922385cf86754c5f8d13de02013f2c877702b678bcc7fe20', '66dcafda74a49227f198e06e4a6a806b6007f451ee1fed390ecc4b0f50be4f69', '69c0815ed5b3ee7a68373182a430c9cc9fd1d6f29077fc5d28bdcdf937726016', '81610778f455dc08e967998e254516531507d98a9cc0bc8903706e4ed56143a2', ...})
+E        +    where {'02ee92e428ea2e7557b290d2be3c0958f2d33f60e9065386bb83c307b8d82380', '3d3db76aa31b95fb06582e07ffd11cefb0bd76b20c19b7abdd6388316b8d54cb', '61ca7f7d33ef2804922385cf86754c5f8d13de02013f2c877702b678bcc7fe20', '66dcafda74a49227f198e06e4a6a806b6007f451ee1fed390ecc4b0f50be4f69', '69c0815ed5b3ee7a68373182a430c9cc9fd1d6f29077fc5d28bdcdf937726016', '81610778f455dc08e967998e254516531507d98a9cc0bc8903706e4ed56143a2', ...} = set(['61ca7f7d33ef2804922385cf86754c5f8d13de02013f2c877702b678bcc7fe20', '81610778f455dc08e967998e254516531507d98a9cc0bc8903706e4ed56143a2', '02ee92e428ea2e7557b290d2be3c0958f2d33f60e9065386bb83c307b8d82380', 'a8fd265ce2ef9022cb6abf15f0ffbcc1bba40b5d4b54eaf410a51ea45d8ceed1', '66dcafda74a49227f198e06e4a6a806b6007f451ee1fed390ecc4b0f50be4f69', '69c0815ed5b3ee7a68373182a430c9cc9fd1d6f29077fc5d28bdcdf937726016', ...])
+
+tests/unit/test_security.py:553: AssertionError</failure></testcase><testcase classname="unit.test_security.TestSessionSecurity" name="test_session_timeout" time="0.222" /><testcase classname="unit.test_security.TestCryptographicSecurity" name="test_constant_time_comparison" time="0.217" /><testcase classname="unit.test_security.TestCryptographicSecurity" name="test_timing_attack_resistance" time="0.227"><failure message="assert (0.0006722079706378281 / 0.0003950629907194525) &lt; 0.5">self = &lt;unit.test_security.TestCryptographicSecurity object at 0x3425ed220&gt;
+
+    def test_timing_attack_resistance(self):
+        """Test resistance to timing attacks."""
+        import time
+        from app.core.security import constant_time_compare
+    
+        # Measure time for correct comparison
+        start = time.perf_counter()
+        for _ in range(1000):
+            constant_time_compare("correct_password", "correct_password")
+        correct_time = time.perf_counter() - start
+    
+        # Measure time for incorrect comparison
+        start = time.perf_counter()
+        for _ in range(1000):
+            constant_time_compare("correct_password", "wrong_password")
+        incorrect_time = time.perf_counter() - start
+    
+        # Times should be similar (within 50% difference)
+        time_diff = abs(correct_time - incorrect_time)
+        avg_time = (correct_time + incorrect_time) / 2
+&gt;       assert time_diff / avg_time &lt; 0.5
+E       assert (0.0006722079706378281 / 0.0003950629907194525) &lt; 0.5
+
+tests/unit/test_security.py:611: AssertionError</failure></testcase><testcase classname="unit.test_security.TestCryptographicSecurity" name="test_secure_random_generation" time="0.250" /></testsuite></testsuites>

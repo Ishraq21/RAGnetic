@@ -322,6 +322,7 @@ MODEL_PROVIDERS = {
     "Google (Gemini)": "GOOGLE_API_KEY",
     "Pinecone": "PINECONE_API_KEY",
     "MongoDB Atlas": "MONGODB_CONN_STRING",
+    "RunPod (GPU Services)": "RUNPOD_API_KEY",
     "Brave Search": "BRAVE_SEARCH_API_KEY",
     "Hugging Face": None,
     "Ollama (Local LLMs)": None,
@@ -919,6 +920,112 @@ def set_api():
         if not typer.confirm("Do you want to set another API key?", default=False):
             break
     typer.echo("\nAPI key configuration complete.")
+
+
+@app.command(name="set-runpod-key", help="Set RunPod API key for GPU services.")
+def set_runpod_key(
+    api_key: str = typer.Option(None, "--key", help="RunPod API key"),
+    environment: str = typer.Option("production", "--env", help="Environment (development/production)")
+):
+    """Set RunPod API key for GPU services."""
+    typer.secho("--- RunPod GPU Services Configuration ---", bold=True)
+    
+    if not api_key:
+        api_key = typer.prompt("Enter your RunPod API key", hide_input=True)
+    
+    if not api_key:
+        typer.secho("Error: API key cannot be empty.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    
+    # Update environment file
+    env_updates = {
+        "RUNPOD_API_KEY": api_key,
+        "ENVIRONMENT": environment
+    }
+    
+    _update_env_file(env_updates)
+    
+    typer.secho("✅ Successfully configured RunPod GPU services!", fg=typer.colors.GREEN)
+    typer.echo(f"   - API Key: {'*' * (len(api_key) - 4) + api_key[-4:]}")
+    typer.echo(f"   - Environment: {environment}")
+    
+    if environment == "production":
+        typer.echo("\n🚀 RunPod GPU services are now enabled!")
+        typer.echo("   - Real GPU instances will be provisioned")
+        typer.echo("   - Live pricing and availability")
+        typer.echo("   - Full RunPod API integration")
+    else:
+        typer.echo("\n🧪 Development mode enabled")
+        typer.echo("   - Mock GPU service will be used")
+        typer.echo("   - No real GPU provisioning")
+        typer.echo("   - Safe for testing")
+
+
+@app.command(name="test-runpod", help="Test RunPod API connection and GPU availability.")
+def test_runpod():
+    """Test RunPod API connection and display available GPUs."""
+    typer.secho("--- RunPod API Connection Test ---", bold=True)
+    
+    # Check if API key is set
+    api_key = os.getenv("RUNPOD_API_KEY")
+    if not api_key:
+        typer.secho("❌ RunPod API key not found!", fg=typer.colors.RED)
+        typer.echo("   Run: ragnetic set-runpod-key --key YOUR_API_KEY")
+        raise typer.Exit(1)
+    
+    typer.echo("🔑 API Key found")
+    typer.echo("🌐 Testing RunPod API connection...")
+    
+    try:
+        # Test API connection
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        response = requests.get(
+            "https://api.runpod.io/v2/gpu-types",
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            gpus = data.get("data", [])
+            
+            typer.secho("✅ RunPod API connection successful!", fg=typer.colors.GREEN)
+            typer.echo(f"📊 Available GPUs: {len(gpus)}")
+            
+            if gpus:
+                typer.echo("\n🖥️  Available GPU Types:")
+                for gpu in gpus[:5]:  # Show first 5 GPUs
+                    name = gpu.get("displayName", "Unknown")
+                    memory = gpu.get("memoryInGb", 0)
+                    secure_price = gpu.get("securePrice", 0)
+                    community_price = gpu.get("communityPrice", 0)
+                    
+                    typer.echo(f"   - {name}: {memory}GB")
+                    if secure_price > 0:
+                        typer.echo(f"     Secure: ${secure_price:.2f}/hour")
+                    if community_price > 0:
+                        typer.echo(f"     Community: ${community_price:.2f}/hour")
+                
+                if len(gpus) > 5:
+                    typer.echo(f"   ... and {len(gpus) - 5} more GPUs")
+            
+            typer.echo("\n🎉 RunPod integration is ready!")
+            
+        else:
+            typer.secho(f"❌ RunPod API error: {response.status_code}", fg=typer.colors.RED)
+            typer.echo(f"   Response: {response.text}")
+            raise typer.Exit(1)
+            
+    except requests.exceptions.RequestException as e:
+        typer.secho(f"❌ Connection failed: {str(e)}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.secho(f"❌ Unexpected error: {str(e)}", fg=typer.colors.RED)
+        raise typer.Exit(1)
 
 
 @app.command("gdrive", help="Authenticate with Google Drive securely.")

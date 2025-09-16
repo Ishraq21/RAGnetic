@@ -208,6 +208,155 @@ class BenchmarkConfig(BaseModel):
     request_delay_seconds: float = Field(2.0, ge=0.0, le=60.0, description="Delay between benchmark requests to avoid rate limiting (seconds).")
 
 
+class GPUConfig(BaseModel):
+    """Configuration for GPU requirements and provisioning following RunPod architecture."""
+    
+    # Platform Selection
+    platform: Literal["native", "runpod"] = Field(
+        "native",
+        description="Platform to use: 'native' for local/cloud platform, 'runpod' for RunPod GPU instances."
+    )
+    
+    # RunPod-specific configuration (only used when platform="runpod")
+    enabled: bool = Field(
+        False,
+        description="Whether GPU acceleration is enabled for this agent (RunPod only)."
+    )
+    
+    gpu_type: Optional[str] = Field(
+        None,
+        description="Required GPU type following RunPod naming (e.g., 'NVIDIA RTX 4090', 'NVIDIA A100 80GB PCIe')."
+    )
+    
+    provider: Optional[str] = Field(
+        None,
+        description="RunPod provider tier: 'RunPod' (secure), 'RunPod Community' (community), 'RunPod Spot' (spot pricing)."
+    )
+    
+    max_hours: Optional[float] = Field(
+        None,
+        ge=0.1,
+        le=168.0,  # Max 1 week
+        description="Maximum hours to run the GPU instance (0.1 to 168 hours)."
+    )
+    
+    auto_provision: bool = Field(
+        True,
+        description="Whether to automatically provision GPU when agent is deployed."
+    )
+    
+    # GPU Requirements
+    min_memory_gb: Optional[int] = Field(
+        None,
+        ge=4,
+        le=320,
+        description="Minimum GPU memory requirement in GB (4-320 GB)."
+    )
+    
+    min_cuda_cores: Optional[int] = Field(
+        None,
+        ge=1000,
+        le=20000,
+        description="Minimum CUDA cores requirement (1000-20000)."
+    )
+    
+    # RunPod Instance Configuration
+    container_disk_gb: Optional[int] = Field(
+        50,
+        ge=10,
+        le=500,
+        description="Container disk size in GB (10-500 GB)."
+    )
+    
+    volume_gb: Optional[int] = Field(
+        0,
+        ge=0,
+        le=1000,
+        description="Additional volume size in GB (0-1000 GB)."
+    )
+    
+    volume_mount_path: Optional[str] = Field(
+        "/workspace",
+        description="Volume mount path for persistent storage."
+    )
+    
+    # Network and Ports
+    ports: Optional[str] = Field(
+        "8000/http",
+        description="Ports to expose (e.g., '8000/http,8080/http')."
+    )
+    
+    # Environment Variables
+    environment_vars: Optional[Dict[str, str]] = Field(
+        default_factory=dict,
+        description="Environment variables for the GPU instance."
+    )
+    
+    # Docker Configuration
+    docker_args: Optional[str] = Field(
+        "",
+        description="Additional Docker arguments."
+    )
+    
+    # RunPod Features
+    start_jupyter: bool = Field(
+        False,
+        description="Whether to start Jupyter Lab on the instance."
+    )
+    
+    start_ssh: bool = Field(
+        True,
+        description="Whether to enable SSH access to the instance."
+    )
+    
+    # Purpose and Use Case
+    purpose: Literal["training", "inference", "both", "development"] = Field(
+        "inference",
+        description="Primary purpose for GPU usage."
+    )
+    
+    # Cost and Billing
+    max_cost_per_hour: Optional[float] = Field(
+        None,
+        ge=0.1,
+        le=10.0,
+        description="Maximum cost per hour willing to pay (0.1-10.0 USD)."
+    )
+    
+    # Scheduling
+    schedule_start: Optional[str] = Field(
+        None,
+        description="Scheduled start time (ISO format) for the instance."
+    )
+    
+    schedule_stop: Optional[str] = Field(
+        None,
+        description="Scheduled stop time (ISO format) for the instance."
+    )
+    
+    @model_validator(mode='after')
+    def validate_gpu_config(self):
+        """Validate GPU configuration consistency."""
+        if self.platform == "runpod" and self.enabled:
+            if not self.gpu_type:
+                raise ValueError("gpu_type is required when RunPod GPU is enabled")
+            if not self.provider:
+                raise ValueError("provider is required when RunPod GPU is enabled")
+            if not self.max_hours:
+                raise ValueError("max_hours is required when RunPod GPU is enabled")
+            
+            # Validate provider options
+            valid_providers = ["RunPod", "RunPod Community", "RunPod Spot"]
+            if self.provider not in valid_providers:
+                raise ValueError(f"provider must be one of: {', '.join(valid_providers)}")
+            
+            # Validate cost limits
+            if self.max_cost_per_hour and self.max_cost_per_hour < 0.1:
+                raise ValueError("max_cost_per_hour must be at least 0.1 USD")
+        
+        return self
+
+
 class AgentConfig(BaseModel):
     name: str
     display_name: Optional[str] = None
@@ -278,6 +427,11 @@ class AgentConfig(BaseModel):
     benchmark: BenchmarkConfig = Field(
         default_factory=BenchmarkConfig,
         description="Benchmark/eval-time overrides (context budget, truncation, etc.)."
+    )
+
+    gpu: GPUConfig = Field(
+        default_factory=GPUConfig,
+        description="GPU configuration for acceleration and provisioning."
     )
 
 # --- Agent Inspection Response Models ---

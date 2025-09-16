@@ -62,6 +62,13 @@ class FineTuningJobConfig(BaseModel):
     device: Optional[Literal['cpu', 'cuda', 'mps']] = Field(
         None, description="Force device if set; otherwise auto-detect."
     )
+    
+    # GPU Infrastructure fields
+    use_gpu: bool = Field(False, description="Whether to use GPU infrastructure for training.")
+    gpu_type: Optional[str] = Field(None, description="Specific GPU type to use (e.g., 'RTX 4090', 'A100').")
+    gpu_provider: Optional[str] = Field(None, description="GPU provider to use (e.g., 'runpod').")
+    max_hours: Optional[float] = Field(None, description="Maximum hours to run the GPU instance.")
+    gpu_instance_id: Optional[str] = Field(None, description="GPU instance ID assigned during provisioning.")
 
     # Optional: ignore unknown keys to avoid Celery failures on forward-compat JSON
     model_config = ConfigDict(extra="ignore")

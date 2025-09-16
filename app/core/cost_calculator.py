@@ -159,22 +159,33 @@ def count_tokens(text: str, model_name: str) -> int:
     return len(text) // 4  # Common approximation: 1 token = ~4 characters
 
 
-def calculate_cost(
+async def calculate_cost(
         llm_model_name: Optional[str] = None,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         embedding_model_name: Optional[str] = None,
-        embedding_tokens: int = 0
+        embedding_tokens: int = 0,
+        gpu_type: Optional[str] = None,
+        gpu_provider: Optional[str] = None,
+        gpu_hours: float = 0.0
 ) -> float:
     """
-    Calculates the estimated cost of LLM and embedding calls based on token counts.
+    Calculates the estimated cost of LLM, embedding, and GPU usage based on token counts and GPU hours.
     """
     total_cost = 0.0
 
     # Calculate LLM cost
     if llm_model_name:
         base_llm_model_name = llm_model_name.lower()
-        pricing = MODEL_PRICING.get(base_llm_model_name, MODEL_PRICING["unknown_chat"])
+        pricing = MODEL_PRICING.get(base_llm_model_name)
+        # Provide reasonable defaults for common aliases
+        if pricing is None:
+            if base_llm_model_name in ("gpt-4", "gpt-4-0613", "gpt-4-turbo"):
+                pricing = MODEL_PRICING.get("gpt-4-0613")
+            elif base_llm_model_name in ("gpt-3.5-turbo", "gpt-3.5-turbo-0125"):
+                pricing = MODEL_PRICING.get("gpt-3.5-turbo-0125")
+            else:
+                pricing = MODEL_PRICING["unknown_chat"]
 
         if "gpt-4o-mini" in base_llm_model_name:
             pricing = MODEL_PRICING.get("gpt-4o-mini-2024-07-18", pricing)
@@ -242,5 +253,29 @@ def calculate_cost(
 
         embedding_cost = (embedding_tokens / 1_000_000) * embedding_price_per_million
         total_cost += embedding_cost
+
+    # NEW: Calculate GPU cost
+    if gpu_type and gpu_provider and gpu_hours > 0:
+        try:
+            # Import here to avoid circular imports
+            from app.services.gpu_service_factory import get_gpu_service_instance
+            
+            gpu_service = get_gpu_service_instance()
+            providers = await gpu_service.get_gpu_providers()
+            
+            cost_per_hour = 1.89  # Default fallback
+            for provider in providers:
+                if provider["gpu_type"] == gpu_type and provider["name"] == gpu_provider:
+                    cost_per_hour = provider["cost_per_hour"]
+                    break
+            
+            gpu_cost = gpu_hours * cost_per_hour
+            total_cost += gpu_cost
+            
+            logger.debug(f"GPU cost: {gpu_type} via {gpu_provider} for {gpu_hours} hours = ${gpu_cost:.2f}")
+            
+        except Exception as e:
+            logger.error(f"Error calculating GPU cost: {e}")
+            # Continue without GPU cost if there's an error
 
     return total_cost

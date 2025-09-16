@@ -8,6 +8,8 @@ class Dashboard {
         this.agentList = [];
         this.agentsPage = 1;
         this.agentsPerPage = 8;
+        this._isLoadingAgents = false;
+        this._actionLocks = new Map();
         this.recentActivityPage = 1;
         this.recentActivityPageSize = 5;
         this.lastDataHash = null; // Track data changes
@@ -107,7 +109,8 @@ class Dashboard {
         console.log('🔄 Starting to load overview data...');
         try {
             await Promise.all([
-                this.loadAgents(),
+                // Skip agents loading if inline renderer controls the Agents tab
+                (window.USE_INLINE_AGENT_RENDERER ? Promise.resolve() : this.loadAgents()),
                 this.loadRecentActivity(),
                 this.loadMetricsSummary(),
                 this.loadLatencyMetrics(),
@@ -332,6 +335,8 @@ class Dashboard {
     }
 
     async loadAgents() {
+        if (this._isLoadingAgents) return;
+        this._isLoadingAgents = true;
         try {
             const response = await fetch(`${API_BASE_URL}/agents`, {
                 headers: { 'X-API-Key': loggedInUserToken }
@@ -340,6 +345,10 @@ class Dashboard {
             if (response.ok) {
                 this.agents = await response.json();
                 console.log('Loaded agents:', this.agents);
+                
+                // Load deployment status for each agent
+                await this.loadAgentDeploymentStatuses();
+                
                 this.agentList = this.agents;
                 this.agentsPage = 1;
                 this.renderAgents();
@@ -349,7 +358,48 @@ class Dashboard {
         } catch (error) {
             console.error('Failed to load agents:', error);
             this.showToast('Failed to load agents', 'error');
+        } finally {
+            this._isLoadingAgents = false;
         }
+    }
+
+    async loadAgentDeploymentStatuses() {
+        if (!this.agents || this.agents.length === 0) return;
+        
+        // Load deployment status for each agent in parallel
+        const deploymentPromises = this.agents.map(async (agent) => {
+            try {
+                const response = await fetch(`${API_BASE_URL}/agents/${agent.name}/inspection`, {
+                    headers: { 'X-API-Key': loggedInUserToken }
+                });
+                
+                if (response.ok) {
+                    const inspection = await response.json();
+                    console.log(`Inspection data for ${agent.name}:`, inspection);
+                    console.log(`Raw inspection values - is_deployed: ${inspection.is_deployed} (type: ${typeof inspection.is_deployed}), is_online: ${inspection.is_online} (type: ${typeof inspection.is_online})`);
+                    agent.is_deployed = inspection.is_deployed;
+                    agent.is_online = inspection.is_online;
+                    agent.is_ingesting = inspection.is_ingesting;
+                    agent.vector_store_status = inspection.vector_store_status;
+                    agent.last_run = inspection.last_run;
+                    agent.cost_this_month = inspection.cost_this_month || 0;
+                } else {
+                    console.warn(`Inspection failed for ${agent.name}: ${response.status}`);
+                    // If inspection fails, assume not deployed
+                    agent.is_deployed = false;
+                    agent.is_online = false;
+                    agent.is_ingesting = false;
+                }
+            } catch (error) {
+                console.error(`Failed to load deployment status for ${agent.name}:`, error);
+                agent.is_deployed = false;
+                agent.is_online = false;
+                agent.is_ingesting = false;
+            }
+        });
+        
+        await Promise.all(deploymentPromises);
+        console.log('Loaded deployment statuses for all agents');
     }
 
 
@@ -691,25 +741,47 @@ class Dashboard {
     }
 
     renderAgents() {
+        // Check if we're using the new agent tab structure
+        const tableBody = document.getElementById('agent-table-body');
+        const cardsGrid = document.getElementById('agent-cards-grid');
+        const loadingState = document.getElementById('agent-loading');
+        const emptyState = document.getElementById('agent-empty');
+        
+        // Hide loading state
+        if (loadingState) loadingState.style.display = 'none';
+        
         const container = document.getElementById('agents-grid');
-        if (!container) return;
+        if (!container && !tableBody && !cardsGrid) return;
 
         const list = this.agentList && this.agentList.length ? this.agentList : this.agents;
 
         if (!list || list.length === 0) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                        <circle cx="9" cy="7" r="4"></circle>
-                    </svg>
-                    <h3>No agents yet</h3>
-                    <p>Create your first AI agent to get started</p>
-                    <button class="btn-primary" onclick="dashboard.showCreateAgentModal()">Create Agent</button>
-                </div>
-            `;
+            // Show empty state for new agent tab
+            if (emptyState) {
+                emptyState.style.display = 'flex';
+            }
+            // Hide table and grid views
+            if (tableBody) tableBody.innerHTML = '';
+            if (cardsGrid) cardsGrid.innerHTML = '';
+            // Fallback to old structure
+            if (container) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="9" cy="7" r="4"></circle>
+                        </svg>
+                        <h3>No agents yet</h3>
+                        <p>Create your first AI agent to get started</p>
+                        <button class="btn-primary" onclick="dashboard.showCreateAgentModal()">Create Agent</button>
+                    </div>
+                `;
+            }
             return;
         }
+
+        // Hide empty state
+        if (emptyState) emptyState.style.display = 'none';
 
         const totalPages = Math.max(1, Math.ceil(list.length / this.agentsPerPage));
         if (this.agentsPage > totalPages) this.agentsPage = totalPages;
@@ -717,18 +789,119 @@ class Dashboard {
         const end = start + this.agentsPerPage;
         const pageAgents = list.slice(start, end);
 
-        const agentsHtml = pageAgents.map(agent => this.renderAgentCard(agent)).join('');
-        const hasPrev = this.agentsPage > 1;
-        const hasNext = this.agentsPage < totalPages;
+        // Render in new agent tab structure if available
+        if (tableBody || cardsGrid) {
+            if (tableBody) {
+                tableBody.innerHTML = pageAgents.map(agent => this.renderAgentTableRow(agent)).join('');
+            }
+            if (cardsGrid) {
+                cardsGrid.innerHTML = pageAgents.map(agent => this.renderAgentCard(agent)).join('');
+            }
+        } else if (container) {
+            // Fallback to old structure
+            const agentsHtml = pageAgents.map(agent => this.renderAgentCard(agent)).join('');
+            const hasPrev = this.agentsPage > 1;
+            const hasNext = this.agentsPage < totalPages;
+            
+            container.innerHTML = `
+                <div class="list-header">Agents</div>
+                ${agentsHtml}
+                <div class="pager">
+                    <button class="pager-btn" onclick="dashboard.changeAgentsPage(-1)" ${hasPrev ? '' : 'disabled'} aria-label="Previous page">‹</button>
+                    <span class="pager-info">Page ${this.agentsPage} / ${totalPages}</span>
+                    <button class="pager-btn" onclick="dashboard.changeAgentsPage(1)" ${hasNext ? '' : 'disabled'} aria-label="Next page">›</button>
+                </div>
+            `;
+        }
+    }
+
+    renderAgentTableRow(agent) {
+        // Use the deployment status from the inspection endpoint
+        const isDeployed = agent.is_deployed === true;
+        const isOnline = agent.is_online === true;
         
-        container.innerHTML = `
-            <div class="list-header">Agents</div>
-            ${agentsHtml}
-            <div class="pager">
-                <button class="pager-btn" onclick="dashboard.changeAgentsPage(-1)" ${hasPrev ? '' : 'disabled'} aria-label="Previous page">‹</button>
-                <span class="pager-info">Page ${this.agentsPage} / ${totalPages}</span>
-                <button class="pager-btn" onclick="dashboard.changeAgentsPage(1)" ${hasNext ? '' : 'disabled'} aria-label="Next page">›</button>
-            </div>
+        // Determine status: online (deployed and running), offline (deployed but not running), or offline (not deployed)
+        let statusClass, statusText;
+        if (isDeployed && isOnline) {
+            statusClass = 'online';
+            statusText = 'online';
+        } else {
+            statusClass = 'offline';
+            statusText = 'offline';
+        }
+        
+        const deploymentStatus = isDeployed ? 'deployed' : 'N/A';
+        const lastRun = agent.last_run ? new Date(agent.last_run).toLocaleString() : 'Never';
+        const cost = agent.cost_this_month || 0;
+        
+        return `
+            <tr>
+                <td>
+                    <div class="agent-name" onclick="dashboard.openAgentDetail('${agent.name}')">${agent.name || agent.display_name || 'Unnamed Agent'}</div>
+                    <div class="agent-description">${agent.description || 'No description'}</div>
+                </td>
+                <td>
+                    <div class="status-pill ${statusClass}">
+                        <div class="status-dot"></div>
+                        ${statusText}
+                    </div>
+                </td>
+                <td>
+                    <div class="model-info">
+                        <div class="model-name">${agent.llm_model || 'GPT-4'}</div>
+                        <div class="embedding-name">${agent.embedding_model || 'text-embedding-3-small'}</div>
+                    </div>
+                </td>
+                <td>
+                    <div class="embedding-name">${agent.embedding_model || 'text-embedding-3-small'}</div>
+                </td>
+                <td>
+                    <div class="deployment-status">
+                        <div class="deployment-badge ${deploymentStatus === 'N/A' ? 'n-a' : deploymentStatus}">${deploymentStatus}</div>
+                    </div>
+                </td>
+                <td>
+                    <div class="last-run">${lastRun}</div>
+                </td>
+                <td>
+                    <div class="cost-amount">$${cost.toFixed(2)}</div>
+                </td>
+                <td>
+                    <div class="agent-actions">
+                        ${!isDeployed ? 
+                            `<button class="action-btn primary" onclick="dashboard.deployAgent('${agent.name}')" title="Deploy">
+                                <svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\">
+                                    <path d=\"M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z\"></path>
+                                </svg>
+                            </button>` :
+                            `<button class="action-btn" onclick="dashboard.shutdownAgent('${agent.name}')" title="Shutdown">
+                                <svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\">
+                                    <path d=\"M12 2v10\"></path>
+                                    <path d=\"M5.5 5.5a7 7 0 1 0 13 0\"></path>
+                                </svg>
+                            </button>`
+                        }
+                        <button class="action-btn" onclick="dashboard.openAgentDetail('${agent.name}')" title="View details">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="22" y1="22" x2="18" y2="18"></line>
+                            </svg>
+                        </button>
+                        <button class="action-btn" onclick="dashboard.showEditAgentModal('${agent.name}')" title="Edit">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                            </svg>
+                        </button>
+                        <button class="action-btn" onclick="dashboard.deleteAgent('${agent.name}')" title="Delete">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="3,6 5,6 21,6"></polyline>
+                                <path d="M19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </td>
+            </tr>
         `;
     }
 
@@ -748,11 +921,17 @@ class Dashboard {
             return '';
         }
         
-        const status = this.getAgentStatus(agent);
-        const statusClass = status === 'online' ? 'online' : status === 'deploying' ? 'deploying' : 'offline';
+        const isDeployed = agent.is_deployed === true;
+        const isOnline = agent.is_online === true;
+        const status = isOnline ? 'online' : 'offline';
+        const statusClass = status;
+        
+        // Debug logging for button logic
+        console.log(`Agent ${agent.name}: isDeployed=${isDeployed}, isOnline=${isOnline}, status=${status}`);
+        console.log(`Button logic: !isOnline=${!isOnline}, will show ${!isOnline ? 'Deploy' : 'Shutdown'} button`);
         
         return `
-            <div class="agent-card" onclick="dashboard.showAgentDetails('${agent.name}')">
+            <div class="agent-card" onclick="dashboard.openAgentDetail('${agent.name}')">
                 <div class="agent-header">
                     <div class="agent-info">
                         <h3>${agent.display_name || agent.name}</h3>
@@ -775,15 +954,14 @@ class Dashboard {
                     </span>
                 </div>
                 <div class="agent-actions">
-                    <button class="btn-secondary" onclick="event.stopPropagation(); dashboard.deployAgent('${agent.name}')">
-                        Deploy
-                    </button>
-                    <button class="btn-text" onclick="event.stopPropagation(); dashboard.editAgent('${agent.name}')">
-                        Edit
-                    </button>
-                    <button class="btn-danger" onclick="event.stopPropagation(); console.log('Delete button clicked for agent:', '${agent.name}'); dashboard.deleteAgent('${agent.name}')">
-                        Delete
-                    </button>
+                    ${!isOnline ? `
+                        <button class="btn-secondary" onclick="event.stopPropagation(); dashboard.deployAgent('${agent.name}')">Deploy</button>
+                    ` : `
+                        <button class="btn-secondary" onclick="event.stopPropagation(); dashboard.shutdownAgent('${agent.name}')">Shutdown</button>
+                    `}
+                    <button class="btn-text" onclick="event.stopPropagation(); dashboard.openAgentDetail('${agent.name}')">View</button>
+                    <button class="btn-text" onclick="event.stopPropagation(); dashboard.showEditAgentModal('${agent.name}')">Edit</button>
+                    <button class="btn-danger" onclick="event.stopPropagation(); dashboard.deleteAgent('${agent.name}')">Delete</button>
                 </div>
             </div>
         `;
@@ -944,7 +1122,9 @@ class Dashboard {
 
         // Load view-specific data
         if (view === 'agents') {
-            this.loadAgents();
+            if (!window.USE_INLINE_AGENT_RENDERER) {
+                this.loadAgents();
+            }
         } else if (view === 'training') {
             // Initialize training dashboard if not already done
             if (typeof trainingDashboard !== 'undefined') {
@@ -981,11 +1161,16 @@ class Dashboard {
         const modal = document.getElementById(modalId);
         if (modal) {
             modal.classList.add('show');
+            document.body.style.overflow = 'hidden';
         }
     }
 
-    hideModal(modal) {
-        modal.classList.remove('show');
+    hideModal(modalId) {
+        const modal = typeof modalId === 'string' ? document.getElementById(modalId) : modalId;
+        if (modal) {
+            modal.classList.remove('show');
+            document.body.style.overflow = '';
+        }
     }
 
     showCreateAgentModal() {
@@ -993,12 +1178,35 @@ class Dashboard {
     }
 
     hideCreateAgentModal() {
-        this.hideModal(document.getElementById('create-agent-modal'));
+        this.hideModal('create-agent-modal');
     }
 
-    showEditAgentModal(agent) {
-        this.populateEditForm(agent);
-        this.showModal('edit-agent-modal');
+    async showEditAgentModal(agentNameOrObject) {
+        try {
+            let agent;
+            
+            // If a string is passed, it's the agent name - load the full agent data
+            if (typeof agentNameOrObject === 'string') {
+                const response = await fetch(`${API_BASE_URL}/agents/${agentNameOrObject}`, {
+                    headers: { 'X-API-Key': loggedInUserToken }
+                });
+                
+                if (response.ok) {
+                    agent = await response.json();
+                } else {
+                    throw new Error('Failed to load agent data');
+                }
+            } else {
+                // If an object is passed, use it directly
+                agent = agentNameOrObject;
+            }
+            
+            this.populateEditForm(agent);
+            this.showModal('edit-agent-modal');
+        } catch (error) {
+            console.error('Failed to load agent for editing:', error);
+            this.showToast('Failed to load agent data for editing', 'error');
+        }
     }
 
     hideEditAgentModal() {
@@ -1012,23 +1220,44 @@ class Dashboard {
     }
 
     hideAgentDetailsModal() {
-        this.hideModal(document.getElementById('agent-details-modal'));
+        this.hideModal('agent-details-modal');
     }
 
 
     // Agent Management
     populateEditForm(agent) {
         const form = document.getElementById('edit-agent-form');
-        if (!form) return;
+        if (!form) {
+            console.error('Edit agent form not found');
+            return;
+        }
 
-        // Populate basic fields
-        form.querySelector('#edit-agent-name').value = agent.name;
-        form.querySelector('#edit-agent-display-name').value = agent.display_name || '';
-        form.querySelector('#edit-agent-description').value = agent.description || '';
-        form.querySelector('#edit-agent-persona').value = agent.persona_prompt || '';
-        form.querySelector('#edit-agent-execution-prompt').value = agent.execution_prompt || '';
-        form.querySelector('#edit-agent-llm-model').value = agent.llm_model;
-        form.querySelector('#edit-agent-embedding-model').value = agent.embedding_model;
+        if (!agent || typeof agent !== 'object') {
+            console.error('Invalid agent object:', agent);
+            this.showToast('Invalid agent data', 'error');
+            return;
+        }
+
+        // Populate basic fields safely
+        const nameField = form.querySelector('#edit-agent-name');
+        if (nameField) nameField.value = agent.name || '';
+        const displayNameField = form.querySelector('#edit-agent-display-name');
+        if (displayNameField) displayNameField.value = agent.display_name || '';
+        
+        const descriptionField = form.querySelector('#edit-agent-description');
+        if (descriptionField) descriptionField.value = agent.description || '';
+        
+        const personaField = form.querySelector('#edit-agent-persona');
+        if (personaField) personaField.value = agent.persona_prompt || '';
+        
+        const executionPromptField = form.querySelector('#edit-agent-execution-prompt');
+        if (executionPromptField) executionPromptField.value = agent.execution_prompt || '';
+        
+        const llmModelField = form.querySelector('#edit-agent-llm-model');
+        if (llmModelField) llmModelField.value = agent.llm_model || '';
+        
+        const embeddingModelField = form.querySelector('#edit-agent-embedding-model');
+        if (embeddingModelField) embeddingModelField.value = agent.embedding_model || '';
         
         // Populate vector store settings
         if (agent.vector_store) {
@@ -1108,14 +1337,12 @@ class Dashboard {
             checkbox.checked = agent.tools && agent.tools.includes(checkbox.value);
         });
 
-        // Populate data sources
-        console.log('Debug: Full agent object:', agent);
-        console.log('Debug: Agent sources:', agent.sources);
-        console.log('Debug: Sources type:', typeof agent.sources);
-        console.log('Debug: Sources length:', (agent.sources || []).length);
-        console.log('Debug: Agent keys:', Object.keys(agent));
-        console.log('Debug: Agent has sources property:', 'sources' in agent);
-        this.populateEditDataSources(agent.sources || []);
+        // Populate data sources safely
+        if (agent && typeof agent === 'object' && agent.sources) {
+            this.populateEditDataSources(agent.sources);
+        } else {
+            this.populateEditDataSources([]);
+        }
 
         // Populate data policies
         if (agent.data_policies && agent.data_policies.length > 0) {
@@ -1414,29 +1641,295 @@ class Dashboard {
     }
 
     async deployAgent(agentName) {
+        if (this._actionLocks.get(agentName)) return;
+        this._actionLocks.set(agentName, true);
         try {
-            this.showToast(`Checking agent ${agentName} deployment status...`, 'info');
-            
-            // Check agent inspection to see deployment status
-            const response = await fetch(`${API_BASE_URL}/agents/${agentName}/inspection`, {
+            this.showToast(`Starting deployment for ${agentName}...`, 'info');
+            const response = await fetch(`${API_BASE_URL}/agents/${agentName}/deploy`, {
+                method: 'POST',
                 headers: { 'X-API-Key': loggedInUserToken }
             });
 
-            if (response.ok) {
-                const inspection = await response.json();
-                if (inspection.is_deployed) {
-                    this.showToast(`Agent ${agentName} is already deployed and ready`, 'success');
-                } else {
-                    this.showToast(`Agent ${agentName} is not yet deployed. Data embedding may still be in progress.`, 'warning');
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || 'Failed to start deployment');
+            }
+
+            const result = await response.json();
+            this.showToast(result.message || `Deployment started for ${agentName}.`, 'success');
+            
+            // Refresh agents list and deployment statuses to update button states
+            await this.loadAgents();
+            
+            // Force a re-render of the agents to ensure UI is updated
+            this.renderAgents();
+        } catch (error) {
+            console.error('Failed to deploy agent:', error);
+            this.showToast(error.message || 'Failed to deploy agent', 'error');
+        } finally {
+            this._actionLocks.delete(agentName);
+        }
+    }
+
+    async shutdownAgent(agentName) {
+        if (this._actionLocks.get(agentName)) return;
+        this._actionLocks.set(agentName, true);
+        try {
+            this.showToast(`Shutting down ${agentName}...`, 'info');
+            const response = await fetch(`${API_BASE_URL}/agents/${agentName}/shutdown`, {
+                method: 'POST',
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                if (response.status === 429) {
+                    this.showToast('Too many requests. Please wait a moment and try again.', 'warning');
+                    return;
                 }
-                this.loadAgents(); // Refresh the list
+                throw new Error(err.detail || 'Failed to shutdown agent');
+            }
+
+            const result = await response.json();
+            this.showToast(result.message || `${agentName} is now offline.`, 'success');
+            
+            // Refresh agents list and deployment statuses to update button states
+            await this.loadAgents();
+            
+            // Force a re-render of the agents to ensure UI is updated
+            this.renderAgents();
+        } catch (error) {
+            console.error('Failed to shutdown agent:', error);
+            this.showToast(error.message || 'Failed to shutdown agent', 'error');
+        } finally {
+            this._actionLocks.delete(agentName);
+        }
+    }
+
+    // Agent detail and action methods for new agent tab
+    async openAgentDetail(agentName) {
+        console.log('Opening agent detail for:', agentName);
+        
+        // Show loading modal immediately
+        this.showAgentDetailsLoadingModal(agentName);
+        
+        try {
+            // Load full agent data and inspection details
+            const [agentResponse, inspectionResponse] = await Promise.all([
+                fetch(`${API_BASE_URL}/agents/${agentName}`, {
+                    headers: { 'X-API-Key': loggedInUserToken }
+                }),
+                fetch(`${API_BASE_URL}/agents/${agentName}/inspection`, {
+                    headers: { 'X-API-Key': loggedInUserToken }
+                })
+            ]);
+            
+            if (agentResponse.ok && inspectionResponse.ok) {
+                const agent = await agentResponse.json();
+                const inspection = await inspectionResponse.json();
+                
+                // Hide loading modal and show agent details modal
+                this.hideModal('agent-details-loading-modal');
+                this.showAgentDetailsModal(agent, inspection);
             } else {
-                throw new Error('Failed to check deployment status');
+                const agentError = agentResponse.ok ? null : `Agent data: ${agentResponse.status}`;
+                const inspectionError = inspectionResponse.ok ? null : `Inspection data: ${inspectionResponse.status}`;
+                const errors = [agentError, inspectionError].filter(Boolean);
+                throw new Error(`Failed to load agent details (${errors.join(', ')})`);
             }
         } catch (error) {
-            console.error('Failed to check agent deployment:', error);
-            this.showToast('Failed to check agent deployment status', 'error');
+            console.error('Failed to load agent details:', error);
+            this.hideModal('agent-details-loading-modal');
+            this.showToast(`Failed to load agent details: ${error.message}`, 'error');
         }
+    }
+
+    showAgentDetailsLoadingModal(agentName) {
+        // Create or update the loading modal
+        let modal = document.getElementById('agent-details-loading-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'agent-details-loading-modal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h2>Loading Agent Details</h2>
+                        <button class="close-btn" onclick="dashboard.hideModal('agent-details-loading-modal')">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="loading-container">
+                            <div class="spinner"></div>
+                            <p>Loading details for ${agentName}...</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        } else {
+            // Update the agent name in the existing modal
+            const loadingText = modal.querySelector('.loading-container p');
+            if (loadingText) {
+                loadingText.textContent = `Loading details for ${agentName}...`;
+            }
+        }
+        
+        // Show the modal
+        this.showModal('agent-details-loading-modal');
+    }
+
+    showAgentDetailsModal(agent, inspection) {
+        // Create or update the agent details modal
+        let modal = document.getElementById('agent-details-modal');
+        if (!modal) {
+            modal = this.createAgentDetailsModal();
+        }
+        
+        // Populate the modal with agent data
+        this.populateAgentDetailsModal(agent, inspection);
+        
+        // Show the modal
+        this.showModal('agent-details-modal');
+    }
+
+    createAgentDetailsModal() {
+        const modal = document.createElement('div');
+        modal.id = 'agent-details-modal';
+        modal.className = 'modal';
+        modal.innerHTML = `
+            <div class="modal-content large">
+                <div class="modal-header">
+                    <h2 id="agent-details-title">Agent Details</h2>
+                    <button class="close-btn" onclick="dashboard.hideModal('agent-details-modal')">&times;</button>
+                </div>
+                <div class="modal-body" id="agent-details-body">
+                    <!-- Content will be populated here -->
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        return modal;
+    }
+
+    populateAgentDetailsModal(agent, inspection) {
+        const title = document.getElementById('agent-details-title');
+        const body = document.getElementById('agent-details-body');
+        
+        if (title) title.textContent = `${agent.name} - Details`;
+        
+        if (body) {
+            body.innerHTML = `
+                <div class="agent-details-grid">
+                    <div class="details-section">
+                        <h3>Basic Information</h3>
+                        <div class="detail-item">
+                            <label>Name:</label>
+                            <span>${agent.name}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Display Name:</label>
+                            <span>${agent.display_name || 'N/A'}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Description:</label>
+                            <span>${agent.description || 'N/A'}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>LLM Model:</label>
+                            <span>${agent.llm_model}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Embedding Model:</label>
+                            <span>${agent.embedding_model}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="details-section">
+                        <h3>Deployment Status</h3>
+                        <div class="detail-item">
+                            <label>Deployed:</label>
+                            <span class="status-badge ${inspection.is_deployed ? 'deployed' : 'not-deployed'}">
+                                ${inspection.is_deployed ? 'Yes' : 'N/A'}
+                            </span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Online:</label>
+                            <span class="status-badge ${inspection.is_online ? 'online' : 'offline'}">
+                                ${inspection.is_online ? 'Yes' : (inspection.is_deployed ? 'No' : 'N/A')}
+                            </span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Ingesting:</label>
+                            <span class="status-badge ${inspection.is_ingesting ? 'ingesting' : 'idle'}">
+                                ${inspection.is_ingesting ? 'Yes' : (inspection.is_deployed ? 'No' : 'N/A')}
+                            </span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Vector Store Status:</label>
+                            <span class="status-badge ${inspection.vector_store_status?.status?.toLowerCase() || 'unknown'}">
+                                ${inspection.vector_store_status?.status || (inspection.is_deployed ? 'Unknown' : 'N/A')}
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div class="details-section">
+                        <h3>Configuration</h3>
+                        <div class="detail-item">
+                            <label>Vector Store Type:</label>
+                            <span>${agent.vector_store?.type || 'N/A'}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Chunking Mode:</label>
+                            <span>${agent.chunking?.mode || 'N/A'}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Chunk Size:</label>
+                            <span>${agent.chunking?.chunk_size || 'N/A'}</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Tools:</label>
+                            <span>${agent.tools?.length ? agent.tools.join(', ') : 'None'}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="details-section">
+                        <h3>Data Sources</h3>
+                        <div class="sources-list">
+                            ${agent.sources?.length ? 
+                                agent.sources.map(source => `
+                                    <div class="source-item">
+                                        <strong>${source.type}</strong>: ${source.path || source.url || 'N/A'}
+                                    </div>
+                                `).join('') : 
+                                '<div class="no-sources">No data sources configured</div>'
+                            }
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="modal-actions">
+                    <button class="btn-secondary" onclick="dashboard.hideModal('agent-details-modal')">Close</button>
+                    ${!inspection.is_online ? `
+                        <button class="btn-primary" onclick="dashboard.deployAgent('${agent.name}'); dashboard.hideModal('agent-details-modal')">Deploy</button>
+                    ` : `
+                        <button class="btn-warning" onclick="dashboard.shutdownAgent('${agent.name}'); dashboard.hideModal('agent-details-modal')">Shutdown</button>
+                    `}
+                    <button class="btn-secondary" onclick="dashboard.showEditAgentModal('${agent.name}')">Edit Agent</button>
+                </div>
+            `;
+        }
+    }
+
+    cloneAgent(agentName) {
+        console.log('Cloning agent:', agentName);
+        // TODO: Implement agent cloning
+        this.showToast('Agent cloning coming soon!', 'info');
+    }
+
+    testAgent(agentName) {
+        console.log('Testing agent:', agentName);
+        // TODO: Implement agent testing
+        this.showToast('Agent testing coming soon!', 'info');
     }
 
     async editAgent(agentName) {
@@ -2748,22 +3241,6 @@ class FineTunedModelsManager {
                 modelSelect.value = `fine_tuned:${adapterId}`;
             }
         }, 100);
-    }
-
-    showModal(modalId) {
-        const modal = document.getElementById(modalId);
-        if (modal) {
-            modal.classList.add('show');
-            document.body.style.overflow = 'hidden';
-        }
-    }
-
-    hideModal(modalId) {
-        const modal = document.getElementById(modalId);
-        if (modal) {
-            modal.classList.remove('show');
-            document.body.style.overflow = '';
-        }
     }
 
     showSuccess(message) {

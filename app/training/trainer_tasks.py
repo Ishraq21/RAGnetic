@@ -15,7 +15,10 @@ from app.db import get_sync_db_engine
 from app.schemas.fine_tuning import FineTuningJobConfig, FineTuningStatus
 from app.training.trainer import LLMFineTuner
 from app.db.models import fine_tuned_models_table
+from app.executors.gpu_training_executor import GPUTrainingExecutor
 from sqlalchemy import update, select
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
 
 
 logger = logging.getLogger(__name__)
@@ -93,12 +96,52 @@ def fine_tune_llm_task(job_config_dict: Dict[str, Any], user_id: int):
                 )
                 return  # no-op duplicate
 
-        # Proceed with training
-        fine_tuner = LLMFineTuner(db_engine)
-        fine_tuner.fine_tune_llm(job_config, user_id)
+        # Check if this is a GPU job
+        if job_config.use_gpu and job_config.gpu_instance_id:
+            # Execute on GPU infrastructure
+            logger.info(f"Executing GPU training for job '{job_config.job_name}' on instance {job_config.gpu_instance_id}")
+            import asyncio
+            asyncio.run(execute_gpu_training(job_config_dict, user_id))
+        else:
+            # Execute locally
+            logger.info(f"Executing local training for job '{job_config.job_name}'")
+            fine_tuner = LLMFineTuner(db_engine)
+            fine_tuner.fine_tune_llm(job_config, user_id)
+        
         logger.info(f"Fine-tuning task '{job_config.job_name}' completed successfully.")
 
     except Exception as e:
         job_name_for_logging = job_config.job_name if job_config else job_config_dict.get('job_name', 'Unknown Job')
         logger.error(f"Fine-tuning task failed for job '{job_name_for_logging}': {e}", exc_info=True)
+        raise
+
+
+async def execute_gpu_training(job_config_dict: Dict[str, Any], user_id: int) -> None:
+    """
+    Execute training on GPU infrastructure using the GPU training executor.
+    """
+    try:
+        # Get database connection
+        db_uri = get_db_connection("default")
+        if not db_uri:
+            raise ValueError("No database connection configured")
+        
+        # Create async database session
+        engine = create_async_engine(db_uri)
+        async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        
+        async with async_session() as db:
+            # Create GPU training executor
+            gpu_executor = GPUTrainingExecutor(db)
+            
+            # Execute the training job
+            success = await gpu_executor.execute_training_job(job_config_dict, user_id)
+            
+            if not success:
+                raise Exception("GPU training execution failed")
+            
+            logger.info(f"GPU training completed successfully for user {user_id}")
+            
+    except Exception as e:
+        logger.error(f"GPU training execution failed: {e}", exc_info=True)
         raise

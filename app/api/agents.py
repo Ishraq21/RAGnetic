@@ -12,8 +12,9 @@ from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundT
 from app.core.config import get_path_settings, get_api_key
 from app.core.security import get_http_api_key, PermissionChecker, \
     get_current_user_from_api_key  # Import PermissionChecker and get_current_user_from_api_key
+from app.core.rate_limit import rate_limiter as rate_limit_dep
 from app.schemas.agent import AgentConfig, AgentInspectionResponse, ValidationReport, DocumentMetadata, ConnectionCheck, \
-    VectorStoreConfig
+    VectorStoreConfig, GPUConfig
 from app.agents.config_manager import get_agent_configs, load_agent_config, save_agent_config
 from app.pipelines.embed import embed_agent_data
 from app.core.embed_config import get_embedding_model
@@ -21,6 +22,7 @@ from app.schemas.agent import DataSource
 from app.schemas.security import User
 from app.db import AsyncSessionLocal, get_db # Keep AsyncSessionLocal for now, but not directly used in background task
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, and_
 
 import logging
 
@@ -46,8 +48,273 @@ _AGENTS_DIR = _APP_PATHS["AGENTS_DIR"]
 _VECTORSTORE_DIR = _APP_PATHS["VECTORSTORE_DIR"]
 _DATA_DIR = _APP_PATHS["DATA_DIR"]
 
+# DB models for syncing deployments
+from app.db.models import deployments_table, api_keys_table, agents_table
+
+
+async def validate_gpu_config(gpu_config: GPUConfig, db: AsyncSession) -> Dict[str, Any]:
+    """Validate GPU configuration and check availability."""
+    # If using native platform, no validation needed
+    if gpu_config.platform == "native":
+        return {"valid": True, "message": "Using native platform - no GPU validation needed"}
+    
+    # If RunPod platform but GPU not enabled, that's valid too
+    if gpu_config.platform == "runpod" and not gpu_config.enabled:
+        return {"valid": True, "message": "RunPod platform selected but GPU not enabled"}
+    
+    # Only validate if RunPod platform with GPU enabled
+    if gpu_config.platform == "runpod" and gpu_config.enabled:
+        try:
+            # Import here to avoid circular imports
+            from app.services.gpu_service_factory import get_gpu_service_instance
+            
+            # Check if GPU type is available
+            gpu_service = get_gpu_service_instance()
+            available_gpus = await gpu_service.get_available_gpus()
+            gpu_found = False
+            selected_gpu = None
+            
+            for gpu in available_gpus:
+                if gpu_config.gpu_type in gpu["displayName"] or gpu_config.gpu_type == gpu["id"]:
+                    gpu_found = True
+                    selected_gpu = gpu
+                    break
+            
+            if not gpu_found:
+                return {
+                    "valid": False,
+                    "message": f"GPU type '{gpu_config.gpu_type}' not found in available GPUs"
+                }
+            
+            # Check memory requirement
+            if gpu_config.min_memory_gb and selected_gpu["memoryInGb"] < gpu_config.min_memory_gb:
+                return {
+                    "valid": False, 
+                    "message": f"GPU {gpu_config.gpu_type} has {selected_gpu['memoryInGb']}GB memory, but {gpu_config.min_memory_gb}GB required"
+                }
+            
+            # Check CUDA cores requirement
+            if gpu_config.min_cuda_cores and selected_gpu["cudaCores"] < gpu_config.min_cuda_cores:
+                return {
+                    "valid": False,
+                    "message": f"GPU {gpu_config.gpu_type} has {selected_gpu['cudaCores']} CUDA cores, but {gpu_config.min_cuda_cores} required"
+                }
+            
+            # Check provider availability and pricing
+            providers = await gpu_service.get_gpu_providers()
+            provider_found = False
+            provider_cost = None
+            
+            for provider in providers:
+                if (provider["name"] == gpu_config.provider and 
+                    gpu_config.gpu_type in provider["gpu_type"]):
+                    provider_found = True
+                    provider_cost = provider["cost_per_hour"]
+                    break
+            
+            if not provider_found:
+                return {
+                    "valid": False,
+                    "message": f"Provider '{gpu_config.provider}' not available for GPU type '{gpu_config.gpu_type}'"
+                }
+            
+            # Check cost limits
+            if gpu_config.max_cost_per_hour and provider_cost > gpu_config.max_cost_per_hour:
+                return {
+                    "valid": False,
+                    "message": f"Provider '{gpu_config.provider}' costs ${provider_cost:.2f}/hour, but max cost is ${gpu_config.max_cost_per_hour:.2f}/hour"
+                }
+            
+            # Calculate estimated total cost
+            estimated_cost = provider_cost * gpu_config.max_hours
+            
+            return {
+                "valid": True, 
+                "message": f"GPU configuration valid: {gpu_config.gpu_type} via {gpu_config.provider}",
+                "details": {
+                    "gpu_type": gpu_config.gpu_type,
+                    "provider": gpu_config.provider,
+                    "cost_per_hour": provider_cost,
+                    "max_hours": gpu_config.max_hours,
+                    "estimated_total_cost": estimated_cost,
+                    "memory_gb": selected_gpu["memoryInGb"],
+                    "cuda_cores": selected_gpu["cudaCores"]
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error validating GPU config: {e}")
+            return {
+                "valid": False,
+                "message": f"Error validating GPU configuration: {str(e)}"
+            }
+    
+    return {"valid": True, "message": "GPU configuration valid"}
+
+
+async def provision_gpu_for_agent(agent_config: AgentConfig, user_id: int, project_id: int, db: AsyncSession) -> Optional[Dict[str, Any]]:
+    """Provision GPU for an agent if RunPod platform with GPU enabled and auto_provision is True."""
+    # Only provision if RunPod platform with GPU enabled and auto_provision is True
+    if (agent_config.gpu.platform != "runpod" or 
+        not agent_config.gpu.enabled or 
+        not agent_config.gpu.auto_provision):
+        return None
+    
+    try:
+        # Import here to avoid circular imports
+        from app.services.gpu_service_factory import get_gpu_service_instance
+        
+        # Create GPU instance with enhanced configuration
+        gpu_service = get_gpu_service_instance()
+        instance = await gpu_service.create_instance(
+            gpu_type=agent_config.gpu.gpu_type,
+            provider=agent_config.gpu.provider,
+            user_id=user_id,
+            project_id=project_id,
+            container_disk_gb=agent_config.gpu.container_disk_gb,
+            volume_gb=agent_config.gpu.volume_gb,
+            ports=agent_config.gpu.ports,
+            environment_vars=agent_config.gpu.environment_vars,
+            docker_args=agent_config.gpu.docker_args,
+            start_jupyter=agent_config.gpu.start_jupyter,
+            start_ssh=agent_config.gpu.start_ssh
+        )
+        
+        # Add RunPod-specific configuration to the instance
+        instance.update({
+            "platform": agent_config.gpu.platform,
+            "container_disk_gb": agent_config.gpu.container_disk_gb,
+            "volume_gb": agent_config.gpu.volume_gb,
+            "volume_mount_path": agent_config.gpu.volume_mount_path,
+            "ports": agent_config.gpu.ports,
+            "environment_vars": agent_config.gpu.environment_vars,
+            "docker_args": agent_config.gpu.docker_args,
+            "start_jupyter": agent_config.gpu.start_jupyter,
+            "start_ssh": agent_config.gpu.start_ssh,
+            "purpose": agent_config.gpu.purpose,
+            "max_cost_per_hour": agent_config.gpu.max_cost_per_hour,
+            "schedule_start": agent_config.gpu.schedule_start,
+            "schedule_stop": agent_config.gpu.schedule_stop
+        })
+        
+        logger.info(f"Provisioned RunPod GPU instance {instance['id']} for agent {agent_config.name}")
+        
+        return {
+            "instance_id": instance["id"],
+            "gpu_type": instance["gpu_type"],
+            "provider": instance["provider"],
+            "cost_per_hour": instance["cost_per_hour"],
+            "status": instance["status"],
+            "platform": instance["platform"],
+            "configuration": {
+                "container_disk_gb": instance["container_disk_gb"],
+                "volume_gb": instance["volume_gb"],
+                "ports": instance["ports"],
+                "start_jupyter": instance["start_jupyter"],
+                "start_ssh": instance["start_ssh"]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error provisioning GPU for agent {agent_config.name}: {e}")
+        return None
+
 # --- API v1 Router for Agents ---
 router = APIRouter(prefix="/api/v1/agents", tags=["Agents API"])
+
+
+@router.get("/gpu-options", response_model=Dict[str, Any])
+async def get_gpu_options_for_agents(
+    current_user: User = Depends(PermissionChecker(["read:agents"]))
+):
+    """
+    Get available GPU options for agent configuration.
+    Returns GPU types, providers, and pricing information.
+    """
+    try:
+        # Import here to avoid circular imports
+        from app.services.gpu_service_factory import get_gpu_service_instance
+        
+        # Get available GPUs and providers
+        gpu_service = get_gpu_service_instance()
+        available_gpus = await gpu_service.get_available_gpus()
+        providers = await gpu_service.get_gpu_providers()
+        pricing = await gpu_service.get_gpu_pricing()
+        
+        # Organize data for easy consumption by frontend
+        gpu_types = []
+        for gpu in available_gpus:
+            gpu_types.append({
+                "id": gpu["id"],
+                "display_name": gpu["displayName"],
+                "memory_gb": gpu["memoryInGb"],
+                "cuda_cores": gpu["cudaCores"],
+                "manufacturer": gpu["manufacturer"]
+            })
+        
+        # Group providers by GPU type
+        providers_by_gpu = {}
+        for provider in providers:
+            gpu_type = provider["gpu_type"]
+            if gpu_type not in providers_by_gpu:
+                providers_by_gpu[gpu_type] = []
+            providers_by_gpu[gpu_type].append({
+                "name": provider["name"],
+                "cost_per_hour": provider["cost_per_hour"],
+                "availability": provider["availability"],
+                "provider_type": provider.get("provider_type", "unknown")
+            })
+        
+        return {
+            "platforms": {
+                "native": {
+                    "name": "Native Platform",
+                    "description": "Use local or cloud platform without GPU provisioning",
+                    "features": ["No additional cost", "Local development", "Existing infrastructure"]
+                },
+                "runpod": {
+                    "name": "RunPod GPU Cloud",
+                    "description": "Provision GPU instances on RunPod cloud platform",
+                    "features": ["On-demand GPUs", "Multiple providers", "Cost optimization", "Auto-scaling"]
+                }
+            },
+            "gpu_types": gpu_types,
+            "providers_by_gpu": providers_by_gpu,
+            "pricing": pricing,
+            "recommendations": {
+                "inference": ["RTX 4090", "RTX 4080", "A100 80GB"],
+                "training": ["A100 80GB", "H100 PCIe", "H100 SXM"],
+                "budget": ["RTX 3080", "T4", "Tesla P100"],
+                "development": ["RTX 3080", "RTX 4080", "T4"]
+            },
+            "provider_tiers": {
+                "RunPod": {
+                    "name": "RunPod Secure",
+                    "description": "Premium secure cloud with guaranteed availability",
+                    "features": ["High availability", "Secure environment", "Priority support"],
+                    "best_for": ["Production workloads", "Critical applications", "Enterprise use"]
+                },
+                "RunPod Community": {
+                    "name": "RunPod Community",
+                    "description": "Community cloud with shared resources",
+                    "features": ["Lower cost", "Good availability", "Community support"],
+                    "best_for": ["Development", "Testing", "Cost-sensitive projects"]
+                },
+                "RunPod Spot": {
+                    "name": "RunPod Spot",
+                    "description": "Spot pricing with potential interruptions",
+                    "features": ["Lowest cost", "Best value", "May be interrupted"],
+                    "best_for": ["Batch jobs", "Non-critical workloads", "Cost optimization"]
+                }
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting GPU options: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get GPU options: {str(e)}"
+        )
 
 
 @router.get("", response_model=List[AgentConfig])
@@ -89,7 +356,7 @@ async def get_agent_by_name(
                             detail=f"An unexpected server error occurred while loading configuration for agent '{agent_name}'. Please check server logs.")
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(rate_limit_dep("agent_create", 5, 60))])
 async def create_new_agent(
         config: AgentConfig = Body(...),
         bg: BackgroundTasks = BackgroundTasks(),
@@ -110,19 +377,44 @@ async def create_new_agent(
         pass
 
     try:
+        # Validate GPU configuration
+        gpu_validation = await validate_gpu_config(config.gpu, db)
+        if not gpu_validation["valid"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"GPU configuration error: {gpu_validation['message']}"
+            )
+
         save_agent_config(config)
 
         # Pass the already acquired db session to the background task directly
         bg.add_task(embed_agent_data, config=config, db=db)
 
-        logger.info(f"User '{current_user.username}' created agent '{config.name}'.")
-        return {"status": "Agent config saved; embedding started.", "agent": config.name}
+        # Provision GPU if enabled and auto_provision is True
+        gpu_provisioning = None
+        if config.gpu.enabled and config.gpu.auto_provision:
+            # For now, use a default project_id of 1, but this should be passed from the request
+            gpu_provisioning = await provision_gpu_for_agent(config, current_user.id, 1, db)
+
+        response = {
+            "status": "Agent config saved; embedding started.", 
+            "agent": config.name,
+            "gpu_validation": gpu_validation
+        }
+        
+        if gpu_provisioning:
+            response["gpu_provisioning"] = gpu_provisioning
+
+        logger.info(f"User '{current_user.username}' created agent '{config.name}' with GPU config: {config.gpu.enabled}")
+        return response
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"API: Error creating agent '{config.name}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An unexpected server error occurred: {str(e)}")
 
 
-@router.put("/{agent_name}")
+@router.put("/{agent_name}", dependencies=[Depends(rate_limit_dep("agent_update", 10, 60))])
 async def update_agent_by_name(
         agent_name: str,
         config: AgentConfig = Body(...),
@@ -139,20 +431,45 @@ async def update_agent_by_name(
     try:
         load_agent_config(agent_name)
 
+        # Validate GPU configuration
+        gpu_validation = await validate_gpu_config(config.gpu, db)
+        if not gpu_validation["valid"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"GPU configuration error: {gpu_validation['message']}"
+            )
+
         save_agent_config(config)
 
         # Pass the already acquired db session to the background task directly
         bg.add_task(embed_agent_data, config=config, db=db)
 
-        logger.info(f"User '{current_user.username}' updated agent '{agent_name}'.")
-        return {"status": "Agent config updated; re-embedding started.", "agent": config.name}
+        # Provision GPU if enabled and auto_provision is True
+        gpu_provisioning = None
+        if config.gpu.enabled and config.gpu.auto_provision:
+            # For now, use a default project_id of 1, but this should be passed from the request
+            gpu_provisioning = await provision_gpu_for_agent(config, current_user.id, 1, db)
+
+        response = {
+            "status": "Agent config updated; re-embedding started.", 
+            "agent": config.name,
+            "gpu_validation": gpu_validation
+        }
+        
+        if gpu_provisioning:
+            response["gpu_provisioning"] = gpu_provisioning
+
+        logger.info(f"User '{current_user.username}' updated agent '{agent_name}' with GPU config: {config.gpu.enabled}")
+        return response
+    except HTTPException:
+        raise
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
     except Exception as e:
         logger.error(f"API: Error updating agent '{agent_name}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An unexpected server error occurred: {str(e)}")
 
-@router.delete("/{agent_name}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{agent_name}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(rate_limit_dep("agent_delete", 3, 60))])
 async def delete_agent_by_name(
         agent_name: str,
         # Only users with 'agent:delete' permission can delete agents
@@ -208,10 +525,12 @@ async def inspect_agent_api(
 
     # --- base status flags ---
     vs_dir = _VECTORSTORE_DIR / agent_name
+    offline_marker = vs_dir / ".offline"
     is_deployed = vs_dir.exists()
-    # you’ll need your own logic to detect ingesting / online:
+    # Detect basic ingesting/online states. Ingesting detection can be improved later.
     is_ingesting = False
-    is_online = True
+    # An agent is online only if it's deployed and not marked offline
+    is_online = bool(is_deployed and not offline_marker.exists())
 
     validation_errors = []
     document_metadata = None
@@ -340,9 +659,128 @@ async def inspect_agent_api(
     )
 
 
+@router.post("/{agent_name}/deploy", response_model=dict, dependencies=[Depends(rate_limit_dep("agent_deploy", 5, 60))])
+async def deploy_agent(
+        agent_name: str,
+        bg: BackgroundTasks = BackgroundTasks(),
+        current_user: User = Depends(PermissionChecker(["agent:update"])),
+        db: AsyncSession = Depends(get_db)
+):
+    """
+    Deploy an agent by (re)running the embedding pipeline and marking it online.
+    This ensures the vectorstore directory exists and clears any offline marker.
+    """
+    try:
+        # Ensure config exists
+        cfg = load_agent_config(agent_name)
+
+        # Ensure vectorstore directory exists
+        vs_dir = _VECTORSTORE_DIR / agent_name
+        os.makedirs(vs_dir, exist_ok=True)
+
+        # Remove offline marker if present
+        offline_marker = vs_dir / ".offline"
+        if offline_marker.exists():
+            try:
+                os.remove(offline_marker)
+            except Exception:
+                pass
+
+        # Trigger (re)embedding in background so status becomes deployed when finished
+        bg.add_task(embed_agent_data, config=cfg, db=db)
+
+        # Activate any existing deployments for this agent and ensure API keys active
+        try:
+            result = await db.execute(select(agents_table.c.id).where(agents_table.c.name == agent_name))
+            agent_row = result.fetchone()
+            if agent_row:
+                agent_id = agent_row.id
+                await db.execute(
+                    update(deployments_table)
+                    .where(deployments_table.c.agent_id == agent_id)
+                    .values(status="active")
+                )
+                # Activate associated API keys
+                # We need to look up deployments to get api_key_id
+                dep_rows = (await db.execute(select(deployments_table.c.api_key_id).where(deployments_table.c.agent_id == agent_id))).fetchall()
+                for dep in dep_rows:
+                    if dep.api_key_id:
+                        await db.execute(
+                            update(api_keys_table).where(api_keys_table.c.id == dep.api_key_id).values(is_active=True)
+                        )
+                await db.commit()
+        except Exception:
+            # Non-fatal; log and continue
+            logger.warning("Failed to activate deployments during deploy sync.", exc_info=True)
+
+        return {"status": "ok", "message": f"Deployment started for '{agent_name}'."}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Error deploying agent '{agent_name}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to deploy agent '{agent_name}'.")
 
 
-@router.post("/upload-file", summary="Upload a local file for ingestion", response_model=Dict[str, str])
+@router.post("/{agent_name}/shutdown", response_model=dict, dependencies=[Depends(rate_limit_dep("agent_shutdown", 5, 60))])
+async def shutdown_agent(
+        agent_name: str,
+        current_user: User = Depends(PermissionChecker(["agent:update"])),
+        db: AsyncSession = Depends(get_db)
+):
+    """
+    Gracefully take an agent offline without deleting its data by placing an '.offline' marker
+    in its vectorstore directory. This keeps it deployed but marked offline.
+    """
+    try:
+        # Ensure config exists
+        _ = load_agent_config(agent_name)
+
+        vs_dir = _VECTORSTORE_DIR / agent_name
+        if not vs_dir.exists():
+            # Not deployed yet; nothing to shutdown
+            raise HTTPException(status_code=409, detail=f"Agent '{agent_name}' is not deployed.")
+
+        offline_marker = vs_dir / ".offline"
+        # Create or update marker
+        with open(offline_marker, "w", encoding="utf-8") as f:
+            f.write(f"offline set at {datetime.utcnow().isoformat()}Z")
+
+        # Deactivate any existing deployments for this agent and disable API keys
+        try:
+            result = await db.execute(select(agents_table.c.id).where(agents_table.c.name == agent_name))
+            agent_row = result.fetchone()
+            if agent_row:
+                agent_id = agent_row.id
+                await db.execute(
+                    update(deployments_table)
+                    .where(deployments_table.c.agent_id == agent_id)
+                    .values(status="inactive")
+                )
+                dep_rows = (await db.execute(select(deployments_table.c.api_key_id).where(deployments_table.c.agent_id == agent_id))).fetchall()
+                for dep in dep_rows:
+                    if dep.api_key_id:
+                        await db.execute(
+                            update(api_keys_table).where(api_keys_table.c.id == dep.api_key_id).values(is_active=False)
+                        )
+                await db.commit()
+        except Exception:
+            logger.warning("Failed to deactivate deployments during shutdown sync.", exc_info=True)
+
+        return {"status": "ok", "message": f"Agent '{agent_name}' is now offline."}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Error shutting down agent '{agent_name}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to shutdown agent '{agent_name}'.")
+
+
+
+
+@router.post("/upload-file", summary="Upload a local file for ingestion", response_model=Dict[str, str], dependencies=[Depends(rate_limit_dep("agent_upload", 20, 60))])
 async def upload_file_for_ingestion(
     file: UploadFile = File(..., description="The file to upload."),
     current_user: User = Depends(PermissionChecker(["agent:create", "agent:update"]))
