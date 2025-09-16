@@ -377,7 +377,7 @@ async def startup_event():
         logger.error(f"'{_DATA_DIR}' not found. Please run 'ragnetic init'.")
         return
 
-    monitored_dirs = [str(_DATA_DIR)]
+    monitored_dirs = [str(_DATA_DIR), str(_APP_PATHS["AGENTS_DIR"])]
     _watcher_process = Process(target=start_watcher, args=(monitored_dirs,))
     _watcher_process.daemon = False
     _watcher_process.start()
