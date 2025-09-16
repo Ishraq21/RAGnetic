@@ -53,6 +53,28 @@ async def query_agent(
         current_user: User = Depends(PermissionChecker(["agent:query"])),
         db: AsyncSession = Depends(get_db),
 ):
+    # Check agent status first
+    from app.db.models import agents_table
+    result = await db.execute(
+        select(agents_table.c.status).where(agents_table.c.name == agent_name)
+    )
+    agent_status = result.scalar_one_or_none()
+    
+    if not agent_status:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+    
+    if agent_status == "stopped":
+        raise HTTPException(
+            status_code=409, 
+            detail=f"Agent '{agent_name}' is currently stopped. Please deploy the agent before sending queries."
+        )
+    
+    if agent_status == "error":
+        raise HTTPException(
+            status_code=409, 
+            detail=f"Agent '{agent_name}' is in an error state. Please retry deployment or contact support."
+        )
+
     # Load agent configuration
     try:
         agent_config = load_agent_config(agent_name)

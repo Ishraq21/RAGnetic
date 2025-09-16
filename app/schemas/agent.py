@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -453,6 +454,22 @@ class ValidationReport(BaseModel):
     errors: List[str]
     warnings: Optional[List[str]] = Field(default_factory=list)
 
+
+class AgentDeploymentStatus(BaseModel):
+    """Agent deployment status information."""
+    name: str
+    status: str
+    created_at: datetime
+    total_cost: float
+    gpu_instance_id: Optional[str] = None
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    model_name: str
+    embedding_model: Optional[str] = None
+    last_run: Optional[datetime] = None
+    deployment_type: Optional[str] = None
+    project_id: Optional[int] = None
+    tags: Optional[List[str]] = None
 
 class AgentInspectionResponse(BaseModel):
     name: str

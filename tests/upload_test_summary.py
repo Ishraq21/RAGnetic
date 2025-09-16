@@ -185,8 +185,8 @@ class UploadTestSummary:
         total_areas = len(coverage_areas)
         total_coverage_points = sum(len(area["coverage"]) for area in coverage_areas.values())
         
-        print(f"   📋 Test Coverage Areas: {total_areas}")
-        print(f"   📋 Total Coverage Points: {total_coverage_points}")
+        print(f"    Test Coverage Areas: {total_areas}")
+        print(f"    Total Coverage Points: {total_coverage_points}")
         
         for area_name, area_info in coverage_areas.items():
             print(f"\n   {area_name}:")
@@ -286,7 +286,7 @@ class UploadTestSummary:
                         "timestamp": report_data.get("timestamp", "Unknown")
                     }
                     
-                    print(f"   📄 {report_name}:")
+                    print(f"    {report_name}:")
                     print(f"      Status: {' PASSED' if report_data.get('overall_success') else ' FAILED'}")
                     print(f"      Tests: {report_data.get('successful_tests', 0)}/{report_data.get('total_tests', 0)}")
                     print(f"      Success Rate: {report_data.get('success_rate', 0):.2f}%")
@@ -348,7 +348,7 @@ class UploadTestSummary:
     def generate_final_report(self):
         """Generate final comprehensive report"""
         print("\n" + "="*60)
-        print("📋 COMPREHENSIVE UPLOAD TEST SUMMARY")
+        print(" COMPREHENSIVE UPLOAD TEST SUMMARY")
         print("="*60)
         
         # Run all analyses
@@ -380,7 +380,7 @@ class UploadTestSummary:
         with open(report_file, "w") as f:
             json.dump(final_report, f, indent=2, default=str)
         
-        print(f"\n📄 Final report saved to: {report_file}")
+        print(f"\n Final report saved to: {report_file}")
         
         # Print summary
         print(f"\n SUMMARY:")

@@ -404,18 +404,19 @@ let agents = [];
 
 // Initialize agent tab
 function initializeAgentTab() {
-    console.log('🔄 initializeAgentTab() called');
-    console.log('🔄 typeof loadAgentsInline:', typeof loadAgentsInline);
+    console.log('initializeAgentTab() called');
+    console.log('typeof loadAgentsInline:', typeof loadAgentsInline);
     try {
-        console.log('🔄 About to call loadAgentsInline()');
+        console.log('About to call loadAgentsInline()');
+        loadFilterOptions();
         if (typeof loadAgentsInline === 'function') {
             loadAgentsInline();
-            console.log('🔄 loadAgentsInline() call completed');
+            console.log('loadAgentsInline() call completed');
         } else {
-            console.error('🔄 loadAgentsInline is not a function!');
+            console.error('loadAgentsInline is not a function!');
         }
     } catch (error) {
-        console.error('🔄 Error calling loadAgentsInline():', error);
+        console.error('Error calling loadAgentsInline():', error);
     }
     setupEventListeners();
 }
@@ -429,6 +430,19 @@ function setupEventListeners() {
     }
     
     // Filter functionality
+    const statusFilter = document.getElementById('status-filter');
+    const modelFilter = document.getElementById('model-filter');
+    const deploymentFilter = document.getElementById('deployment-filter');
+    
+    if (statusFilter) {
+        statusFilter.addEventListener('change', handleFilterChange);
+    }
+    if (modelFilter) {
+        modelFilter.addEventListener('change', handleFilterChange);
+    }
+    if (deploymentFilter) {
+        deploymentFilter.addEventListener('change', handleFilterChange);
+    }
     const filters = document.querySelectorAll('.filter-select');
     filters.forEach(filter => {
         filter.addEventListener('change', handleFilter);
@@ -441,24 +455,100 @@ function setupEventListeners() {
     });
 }
 
+// Load filter options from API
+async function loadFilterOptions() {
+    try {
+        const response = await fetch('/api/v1/agents/filters/options', {
+            headers: { 'X-API-Key': loggedInUserToken }
+        });
+        
+        if (response.ok) {
+            const options = await response.json();
+            
+            // Update status filter
+            const statusFilter = document.getElementById('status-filter');
+            if (statusFilter && options.statuses) {
+                const currentValue = statusFilter.value;
+                statusFilter.innerHTML = '<option value="">All Status</option>';
+                options.statuses.forEach(status => {
+                    const option = document.createElement('option');
+                    option.value = status;
+                    option.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+                    statusFilter.appendChild(option);
+                });
+                statusFilter.value = currentValue;
+            }
+            
+            // Update model filter
+            const modelFilter = document.getElementById('model-filter');
+            if (modelFilter && options.models) {
+                const currentValue = modelFilter.value;
+                modelFilter.innerHTML = '<option value="">All Models</option>';
+                options.models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    modelFilter.appendChild(option);
+                });
+                modelFilter.value = currentValue;
+            }
+            
+            // Update deployment filter
+            const deploymentFilter = document.getElementById('deployment-filter');
+            if (deploymentFilter && options.deployment_types) {
+                const currentValue = deploymentFilter.value;
+                deploymentFilter.innerHTML = '<option value="">All Deployments</option>';
+                options.deployment_types.forEach(type => {
+                    const option = document.createElement('option');
+                    option.value = type;
+                    option.textContent = type.charAt(0).toUpperCase() + type.slice(1);
+                    deploymentFilter.appendChild(option);
+                });
+                deploymentFilter.value = currentValue;
+            }
+        }
+    } catch (error) {
+        console.warn('Failed to load filter options:', error);
+    }
+}
+
 // Load agents from API
 async function loadAgentsInline() {
-    console.log('🔄 Inline loadAgentsInline() called');
+    console.log(' Inline loadAgentsInline() called');
     const loadingState = document.getElementById('agent-loading');
     const tableBody = document.getElementById('agent-table-body');
     const cardsGrid = document.getElementById('agent-cards-grid');
     const emptyState = document.getElementById('agent-empty');
     
     try {
-        console.log('🔄 Setting loading state...');
+        console.log(' Setting loading state...');
         loadingState.style.display = 'flex';
         tableBody.innerHTML = '';
         cardsGrid.innerHTML = '';
         emptyState.style.display = 'none';
         
-        console.log('🔄 Fetching agents from API...');
-        // Load agents from the correct API endpoint
-        const response = await fetch('/api/v1/agents', {
+        console.log(' Fetching agents from API...');
+        // Load agents status from the status API with filtering
+        const searchParams = new URLSearchParams();
+        const searchInput = document.querySelector('.search-input');
+        const statusFilter = document.getElementById('status-filter');
+        const modelFilter = document.getElementById('model-filter');
+        const deploymentFilter = document.getElementById('deployment-filter');
+        
+        if (searchInput && searchInput.value.trim()) {
+            searchParams.append('search', searchInput.value.trim());
+        }
+        if (statusFilter && statusFilter.value) {
+            searchParams.append('status', statusFilter.value);
+        }
+        if (modelFilter && modelFilter.value) {
+            searchParams.append('model', modelFilter.value);
+        }
+        if (deploymentFilter && deploymentFilter.value) {
+            searchParams.append('deployment_type', deploymentFilter.value);
+        }
+        
+        const response = await fetch(`/api/v1/agents/status-all?${searchParams.toString()}`, {
             headers: { 'X-API-Key': loggedInUserToken }
         });
         
@@ -467,112 +557,103 @@ async function loadAgentsInline() {
         }
         
         agents = await response.json();
-        console.log('🔄 Loaded agents:', agents);
+        console.log(' Loaded agents status:', agents);
         
-        // Load inspection data for each agent to determine deployment status
-        console.log('🔄 Loading inspection data for', agents.length, 'agents...');
-        for (let agent of agents) {
-            try {
-                console.log(`🔄 Loading inspection for ${agent.name}...`);
-                const inspectionResponse = await fetch(`/api/v1/agents/${agent.name}/inspection`, {
-                    headers: { 'X-API-Key': loggedInUserToken }
-                });
-                if (inspectionResponse.ok) {
-                    const inspection = await inspectionResponse.json();
-                    console.log(`🔄 Inspection for ${agent.name}:`, inspection);
-                    // Use is_online to determine if agent is actually running
-                    agent.deployment = inspection.is_online ? 'deployed' : 'not-deployed';
-                    agent.status = inspection.is_online ? 'deployed' : 'not-deployed';
-                    console.log(`🔄 Set ${agent.name} deployment: ${agent.deployment}, status: ${agent.status}`);
-                } else {
-                    console.warn(`🔄 Inspection failed for ${agent.name}: ${inspectionResponse.status}`);
-                    agent.deployment = 'not-deployed';
-                    agent.status = 'not-deployed';
-                }
-                
-                // Set default values for missing properties
-                agent.model = agent.model || 'gpt-4';
-                agent.embedding = agent.embedding || 'text-embedding-3-small';
-                agent.lastRun = agent.lastRun || 'Never';
-                agent.costThisMonth = agent.costThisMonth || 0;
-            } catch (error) {
-                console.warn(`🔄 Failed to load inspection for ${agent.name}:`, error);
-                agent.deployment = 'not-deployed';
-                agent.status = 'not-deployed';
-            }
-        }
+        // Normalize fields for table/card rendering
+        agents = agents.map(a => ({
+            name: a.name,
+            description: a.description || '',
+            status: a.status || 'created',
+            model: a.model_name || 'gpt-4',
+            embedding: a.embedding_model || 'text-embedding-3-small',
+            deployment: a.deployment_type || (a.status === 'deployed' ? 'deployed' : 'not deployed'),
+            created_at: a.created_at,
+            lastRun: a.last_run || null,
+            costThisMonth: typeof a.total_cost === 'number' ? a.total_cost : 0,
+            project_id: a.project_id,
+            tags: a.tags || []
+        }));
         
-        console.log('🔄 Finished loading inspection data, rendering agents...');
+        console.log(' Finished preparing agents data, rendering agents...');
         if (agents.length === 0) {
-            console.log('🔄 No agents found, showing empty state');
+            console.log(' No agents found, showing empty state');
             showEmptyState();
         } else {
-            console.log('🔄 Rendering', agents.length, 'agents');
+            console.log(' Rendering', agents.length, 'agents');
             renderAgents();
         }
     } catch (error) {
-        console.error('🔄 Error loading agents:', error);
+        console.error(' Error loading agents:', error);
         showErrorState();
     } finally {
-        console.log('🔄 Hiding loading state');
+        console.log(' Hiding loading state');
         loadingState.style.display = 'none';
     }
 }
 
 // Render agents in current view
 function renderAgents() {
-    console.log('🔄 renderAgents() called, currentAgentView:', currentAgentView);
+    console.log(' renderAgents() called, currentAgentView:', currentAgentView);
     if (currentAgentView === 'table') {
-        console.log('🔄 Rendering table view');
+        console.log(' Rendering table view');
         renderTableView();
     } else {
-        console.log('🔄 Rendering grid view');
+        console.log(' Rendering grid view');
         renderGridView();
     }
 }
 
 // Render table view
 function renderTableView() {
-    console.log('🔄 renderTableView() called with', agents.length, 'agents');
+    console.log(' renderTableView() called with', agents.length, 'agents');
     const tableBody = document.getElementById('agent-table-body');
     if (!tableBody) {
-        console.error('🔄 agent-table-body not found!');
+        console.error(' agent-table-body not found!');
         return;
     }
     tableBody.innerHTML = '';
     
     agents.forEach(agent => {
-        console.log('🔄 Creating table row for agent:', agent.name);
+        console.log(' Creating table row for agent:', agent.name);
         const row = createAgentTableRow(agent);
         tableBody.appendChild(row);
+        
+        // Load actions asynchronously for table view
+        loadTableAgentActions(agent.name);
     });
-    console.log('🔄 Table view rendered');
+    console.log(' Table view rendered');
 }
 
 // Render grid view
 function renderGridView() {
-    console.log('🔄 renderGridView() called with', agents.length, 'agents');
+    console.log(' renderGridView() called with', agents.length, 'agents');
     const cardsGrid = document.getElementById('agent-cards-grid');
     if (!cardsGrid) {
-        console.error('🔄 agent-cards-grid not found!');
+        console.error(' agent-cards-grid not found!');
         return;
     }
     cardsGrid.innerHTML = '';
     
     agents.forEach(agent => {
-        console.log('🔄 Creating card for agent:', agent.name);
+        console.log(' Creating card for agent:', agent.name);
         const card = createAgentCard(agent);
         cardsGrid.appendChild(card);
+        
+        // Load actions asynchronously
+        loadAgentActions(agent.name);
     });
-    console.log('🔄 Grid view rendered');
+    console.log(' Grid view rendered');
 }
 
 // Create agent table row
 function createAgentTableRow(agent) {
     const row = document.createElement('tr');
+    const createdAt = agent.created_at ? new Date(agent.created_at).toLocaleString() : 'Unknown';
+    const cost = typeof agent.costThisMonth === 'number' ? agent.costThisMonth : 0;
+    
     row.innerHTML = `
         <td>
-            <div class="agent-name" onclick="openAgentDetail('${agent.id}')">${agent.name}</div>
+            <div class="agent-name" onclick="openAgentDetail('${agent.name}')">${agent.name}</div>
             <div class="agent-description">${agent.description || 'No description'}</div>
         </td>
         <td>
@@ -583,57 +664,289 @@ function createAgentTableRow(agent) {
         </td>
         <td>
             <div class="model-info">
-                <div class="model-name">${agent.model}</div>
-                <div class="embedding-name">${agent.embedding}</div>
+                <div class="model-name">${agent.model || 'gpt-4'}</div>
             </div>
         </td>
         <td>
-            <div class="embedding-name">${agent.embedding}</div>
+            <div class="embedding-name">${agent.embedding || 'text-embedding-3-small'}</div>
         </td>
         <td>
-            <div class="deployment-status">
-                <div class="deployment-badge ${agent.deployment}">${agent.deployment}</div>
-            </div>
+            <div class="deployment-badge ${agent.deployment}">${agent.deployment}</div>
         </td>
         <td>
             <div class="last-run">${formatLastRun(agent.lastRun)}</div>
         </td>
         <td>
-            <div class="cost-amount">$${agent.costThisMonth}</div>
+            <div class="created-at">${createdAt}</div>
         </td>
         <td>
-            <div class="agent-actions">
-                ${agent.deployment === 'not-deployed' ? 
-                    `<button class="action-btn primary" onclick="deployAgent('${agent.name}')" title="Deploy">Deploy</button>` : 
-                    `<button class="action-btn warning" onclick="shutdownAgent('${agent.name}')" title="Shutdown">Shutdown</button>`
-                }
-                <button class="action-btn" onclick="editAgent('${agent.id}')" title="Edit">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                    </svg>
-                </button>
-                <button class="action-btn" onclick="cloneAgent('${agent.id}')" title="Clone">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
-                </button>
-                <button class="action-btn" onclick="testAgent('${agent.id}')" title="Test">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polygon points="5,3 19,12 5,21"></polygon>
-                    </svg>
-                </button>
-                <button class="action-btn" onclick="deleteAgent('${agent.id}')" title="Delete">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="3,6 5,6 21,6"></polyline>
-                        <path d="M19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2"></path>
-                    </svg>
-                </button>
-            </div>
+            <div class="cost-amount">$${cost.toFixed(2)}</div>
+        </td>
+        <td>
+            <div class="agent-actions" id="table-actions-${agent.name}">Loading...</div>
         </td>
     `;
     return row;
+}
+
+// Get agent actions based on status
+async function getAgentActions(agent) {
+    // Get actual status from the new status API
+    let status = agent.status || 'created';
+    try {
+        const response = await fetch(`/api/v1/agents/${agent.name}/status`, {
+            headers: { 'X-API-Key': getApiKey() }
+        });
+        if (response.ok) {
+            const statusData = await response.json();
+            status = statusData.actual_status;
+        }
+    } catch (error) {
+        console.error('Error getting actual status:', error);
+    }
+    
+    const actions = [];
+    
+    switch (status) {
+        case 'created':
+            actions.push(`<button class="action-btn primary" onclick="deployAgentState('${agent.name}')" title="Deploy">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5,3 19,12 5,21"></polygon>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agent.name}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="editAgent('${agent.name}')" title="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>`);
+            break;
+        case 'deploying':
+            actions.push(`<button class="action-btn" onclick="stopAgentState('${agent.name}')" title="Stop">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="6" y="6" width="12" height="12"></rect>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agent.name}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            break;
+        case 'deployed':
+            actions.push(`<button class="action-btn" onclick="stopAgentState('${agent.name}')" title="Shutdown">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="6" y="6" width="12" height="12"></rect>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agent.name}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="editAgent('${agent.name}')" title="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgentLogs('${agent.name}')" title="View Logs">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14,2 14,8 20,8"></polyline>
+                </svg>
+            </button>`);
+            break;
+        case 'idle':
+            actions.push(`<button class="action-btn primary" onclick="resumeAgentState('${agent.name}')" title="Resume">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5,3 19,12 5,21"></polygon>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="stopAgentState('${agent.name}')" title="Shutdown">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="6" y="6" width="12" height="12"></rect>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agent.name}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="editAgent('${agent.name}')" title="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgentLogs('${agent.name}')" title="View Logs">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14,2 14,8 20,8"></polyline>
+                </svg>
+            </button>`);
+            break;
+        case 'error':
+            actions.push(`<button class="action-btn warning" onclick="retryAgentDeployment('${agent.name}')" title="Retry">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="23,4 23,10 17,10"></polyline>
+                    <path d="M20.49,15a9,9 0 1,1-2.12-9.36L23,10"></path>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="stopAgentState('${agent.name}')" title="Stop">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="6" y="6" width="12" height="12"></rect>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agent.name}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="editAgent('${agent.name}')" title="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgentLogs('${agent.name}')" title="View Logs">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14,2 14,8 20,8"></polyline>
+                </svg>
+            </button>`);
+            break;
+        case 'stopped':
+            actions.push(`<button class="action-btn primary" onclick="deployAgentState('${agent.name}')" title="Deploy">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5,3 19,12 5,21"></polygon>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agent.name}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="editAgent('${agent.name}')" title="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn danger" onclick="deleteAgent('${agent.name}')" title="Delete">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3,6 5,6 21,6"></polyline>
+                    <path d="M19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2"></path>
+                </svg>
+            </button>`);
+            break;
+    }
+    
+    return actions.join('');
+}
+
+// Agent state management functions
+async function deployAgentState(agentName) {
+    try {
+        const response = await fetch(`/api/v1/agents/${agentName}/deploy-state`, {
+            method: 'POST',
+            headers: { 'X-API-Key': loggedInUserToken }
+        });
+        if (response.ok) {
+            console.log(`Agent ${agentName} deployment started`);
+            loadAgentsInline();
+        } else {
+            console.error(`Failed to deploy agent ${agentName}`);
+        }
+    } catch (error) {
+        console.error(`Error deploying agent ${agentName}:`, error);
+    }
+}
+
+async function stopAgentState(agentName) {
+    try {
+        const response = await fetch(`/api/v1/agents/${agentName}/stop-state`, {
+            method: 'POST',
+            headers: { 'X-API-Key': loggedInUserToken }
+        });
+        if (response.ok) {
+            console.log(`Agent ${agentName} stopped`);
+            loadAgentsInline();
+        } else {
+            console.error(`Failed to stop agent ${agentName}`);
+        }
+    } catch (error) {
+        console.error(`Error stopping agent ${agentName}:`, error);
+    }
+}
+
+async function resumeAgentState(agentName) {
+    try {
+        const response = await fetch(`/api/v1/agents/${agentName}/resume`, {
+            method: 'POST',
+            headers: { 'X-API-Key': loggedInUserToken }
+        });
+        if (response.ok) {
+            console.log(`Agent ${agentName} resumed`);
+            loadAgentsInline();
+        } else {
+            console.error(`Failed to resume agent ${agentName}`);
+        }
+    } catch (error) {
+        console.error(`Error resuming agent ${agentName}:`, error);
+    }
+}
+
+async function retryAgentDeployment(agentName) {
+    try {
+        const response = await fetch(`/api/v1/agents/${agentName}/retry`, {
+            method: 'POST',
+            headers: { 'X-API-Key': loggedInUserToken }
+        });
+        if (response.ok) {
+            console.log(`Agent ${agentName} retry started`);
+            loadAgentsInline();
+        } else {
+            console.error(`Failed to retry agent ${agentName}`);
+        }
+    } catch (error) {
+        console.error(`Error retrying agent ${agentName}:`, error);
+    }
+}
+
+async function viewAgentLogs(agentName) {
+    console.log(`View logs for agent ${agentName} - feature not implemented yet`);
+    // TODO: Implement log viewing
+}
+
+async function deleteAgent(agentName) {
+    if (confirm(`Are you sure you want to delete agent ${agentName}?`)) {
+        try {
+            const response = await fetch(`/api/v1/agents/${agentName}`, {
+                method: 'DELETE',
+                headers: { 'X-API-Key': loggedInUserToken }
+            });
+            if (response.ok) {
+                console.log(`Agent ${agentName} deleted`);
+                loadAgentsInline();
+            } else {
+                console.error(`Failed to delete agent ${agentName}`);
+            }
+        } catch (error) {
+            console.error(`Error deleting agent ${agentName}:`, error);
+        }
+    }
 }
 
 // Create agent card
@@ -678,27 +991,202 @@ function createAgentCard(agent) {
         </div>
         
         <div class="agent-card-footer">
-            <div class="agent-card-cost">$${agent.costThisMonth} this month</div>
-            <div class="agent-card-actions">
-                ${agent.deployment === 'not-deployed' ? 
-                    `<button class="action-btn primary" onclick="deployAgent('${agent.name}')" title="Deploy">Deploy</button>` : 
-                    `<button class="action-btn warning" onclick="shutdownAgent('${agent.name}')" title="Shutdown">Shutdown</button>`
-                }
-                <button class="action-btn" onclick="editAgent('${agent.id}')" title="Edit">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                    </svg>
-                </button>
-                <button class="action-btn" onclick="testAgent('${agent.id}')" title="Test">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polygon points="5,3 19,12 5,21"></polygon>
-                    </svg>
-                </button>
-            </div>
+            <div class="agent-card-cost">$${(agent.costThisMonth || 0).toFixed(2)} this month</div>
+            <div class="agent-card-actions" id="actions-${agent.name}">Loading...</div>
         </div>
     `;
     return card;
+}
+
+// Load agent actions asynchronously for grid view
+async function loadAgentActions(agentName) {
+    const actionsElement = document.getElementById(`actions-${agentName}`);
+    if (!actionsElement) return;
+    
+    try {
+        const response = await fetch(`/api/v1/agents/${agentName}/status`, {
+            headers: { 'X-API-Key': getApiKey() }
+        });
+        
+        if (response.ok) {
+            const statusData = await response.json();
+            const status = statusData.actual_status;
+            const actions = getAgentActionsSync(status, agentName);
+            actionsElement.innerHTML = actions;
+        } else {
+            actionsElement.innerHTML = '<span class="error">Error loading status</span>';
+        }
+    } catch (error) {
+        console.error('Error loading agent actions:', error);
+        actionsElement.innerHTML = '<span class="error">Error loading actions</span>';
+    }
+}
+
+// Load agent actions asynchronously for table view
+async function loadTableAgentActions(agentName) {
+    const actionsElement = document.getElementById(`table-actions-${agentName}`);
+    if (!actionsElement) return;
+    
+    try {
+        const response = await fetch(`/api/v1/agents/${agentName}/status`, {
+            headers: { 'X-API-Key': getApiKey() }
+        });
+        
+        if (response.ok) {
+            const statusData = await response.json();
+            const status = statusData.actual_status;
+            const actions = getAgentActionsSync(status, agentName);
+            actionsElement.innerHTML = actions;
+        } else {
+            actionsElement.innerHTML = '<span class="error">Error loading status</span>';
+        }
+    } catch (error) {
+        console.error('Error loading table agent actions:', error);
+        actionsElement.innerHTML = '<span class="error">Error loading actions</span>';
+    }
+}
+
+// Synchronous version of getAgentActions for use with actual status
+function getAgentActionsSync(status, agentName) {
+    const actions = [];
+    
+    switch (status) {
+        case 'created':
+            actions.push(`<button class="action-btn primary" onclick="deployAgentState('${agentName}')" title="Deploy">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5,3 19,12 5,21"></polygon>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agentName}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="editAgent('${agentName}')" title="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>`);
+            break;
+        case 'deploying':
+            actions.push(`<button class="action-btn" onclick="stopAgentState('${agentName}')" title="Stop">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="6" y="6" width="12" height="12"></rect>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agentName}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            break;
+        case 'deployed':
+            actions.push(`<button class="action-btn" onclick="stopAgentState('${agentName}')" title="Shutdown">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="6" y="6" width="12" height="12"></rect>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agentName}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="editAgent('${agentName}')" title="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>`);
+            break;
+        case 'idle':
+            actions.push(`<button class="action-btn primary" onclick="resumeAgentState('${agentName}')" title="Resume">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5,3 19,12 5,21"></polygon>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="stopAgentState('${agentName}')" title="Shutdown">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="6" y="6" width="12" height="12"></rect>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agentName}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="editAgent('${agentName}')" title="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgentLogs('${agentName}')" title="View Logs">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14,2 14,8 20,8"></polyline>
+                </svg>
+            </button>`);
+            break;
+        case 'error':
+            actions.push(`<button class="action-btn primary" onclick="retryAgentDeployment('${agentName}')" title="Retry">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="23,4 23,10 17,10"></polyline>
+                    <polyline points="1,20 1,14 7,14"></polyline>
+                    <path d="M20.49,9A9,9,0,0,0,5.64,5.64L1,10m22,4L18.36,18.36A9,9,0,0,1,3.51,15"></path>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agentName}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="editAgent('${agentName}')" title="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgentLogs('${agentName}')" title="View Logs">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14,2 14,8 20,8"></polyline>
+                </svg>
+            </button>`);
+            break;
+        case 'stopped':
+            actions.push(`<button class="action-btn primary" onclick="deployAgentState('${agentName}')" title="Deploy">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5,3 19,12 5,21"></polygon>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="viewAgent('${agentName}')" title="View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn" onclick="editAgent('${agentName}')" title="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>`);
+            actions.push(`<button class="action-btn danger" onclick="deleteAgent('${agentName}')" title="Delete">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3,6 5,6 21,6"></polyline>
+                    <path d="M19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2"></path>
+                </svg>
+            </button>`);
+            break;
+    }
+    
+    return actions.join('');
 }
 
 // Toggle between table and grid view
@@ -727,10 +1215,14 @@ function toggleAgentView(view) {
 
 // Handle search
 function handleSearch(event) {
-    const query = event.target.value.toLowerCase();
-    // Filter agents based on search query
-    // This would typically filter the agents array and re-render
-    console.log('Searching for:', query);
+    console.log('Search triggered, reloading agents...');
+    loadAgentsInline();
+}
+
+// Handle filter changes
+function handleFilterChange() {
+    console.log('Filter changed, reloading agents...');
+    loadAgentsInline();
 }
 
 // Handle filter changes
@@ -769,12 +1261,12 @@ function showEmptyState() {
 
 // Show error state
 function showErrorState() {
-    console.error('🔄 Showing error state');
+    console.error(' Showing error state');
     const loadingState = document.getElementById('agent-loading');
     const emptyState = document.getElementById('agent-empty');
     if (loadingState) loadingState.style.display = 'none';
     if (emptyState) {
-        emptyState.innerHTML = '<div class="empty-icon">⚠️</div><p>Failed to load agents. Please try again.</p>';
+        emptyState.innerHTML = '<div class="empty-icon">!</div><p>Failed to load agents. Please try again.</p>';
         emptyState.style.display = 'flex';
     }
 }
@@ -895,14 +1387,14 @@ function debounce(func, wait) {
 
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('🔄 DOMContentLoaded event fired');
-    console.log('🔄 USE_INLINE_AGENT_RENDERER:', window.USE_INLINE_AGENT_RENDERER);
+    console.log(' DOMContentLoaded event fired');
+    console.log(' USE_INLINE_AGENT_RENDERER:', window.USE_INLINE_AGENT_RENDERER);
     // Only initialize if we're on the agents tab
     if (document.getElementById('agents-view')) {
-        console.log('🔄 Found agents-view, initializing agent tab');
+        console.log(' Found agents-view, initializing agent tab');
         initializeAgentTab();
     } else {
-        console.log('🔄 agents-view not found, skipping agent tab initialization');
+        console.log(' agents-view not found, skipping agent tab initialization');
     }
 });
 
@@ -1287,12 +1779,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
                 
                 <div class="filters-section">
-                    <select class="filter-select" id="status-filter">
-                        <option value="">All Status</option>
-                        <option value="online">Online</option>
-                        <option value="offline">Offline</option>
-                        <option value="error">Error</option>
-                    </select>
+        <select class="filter-select" id="status-filter">
+            <option value="">All Status</option>
+            <option value="created">Created</option>
+            <option value="deploying">Deploying</option>
+            <option value="deployed">Deployed</option>
+            <option value="idle">Idle</option>
+            <option value="error">Error</option>
+            <option value="stopped">Stopped</option>
+        </select>
                     
                     <select class="filter-select" id="model-filter">
                         <option value="">All Models</option>
@@ -1335,13 +1830,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     <table class="agent-table">
                         <thead>
                             <tr>
-                                <th class="sortable" data-sort="name">Agent Name</th>
+                                <th class="sortable" data-sort="name">Agent</th>
                                 <th class="sortable" data-sort="status">Status</th>
                                 <th class="sortable" data-sort="model">Model</th>
                                 <th class="sortable" data-sort="embedding">Embedding</th>
                                 <th class="sortable" data-sort="deployment">Deployment</th>
                                 <th class="sortable" data-sort="last-run">Last Run</th>
-                                <th class="sortable" data-sort="cost">Cost This Month</th>
+                                <th class="sortable" data-sort="created-at">Created At</th>
+                                <th class="sortable" data-sort="cost">Cost</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -1747,7 +2243,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
                         <!-- GPU Cost Breakdown -->
                         <div class="cost-section">
-                            <h3>🚀 GPU Compute Costs</h3>
+                            <h3> GPU Compute Costs</h3>
                             <div class="cost-charts">
                                 <div class="chart-container large">
                     <div class="chart-header">
@@ -1999,7 +2495,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
                         <!-- Performance Metrics -->
                         <div class="agent-section">
-                            <h3>🎯 Performance Metrics</h3>
+                            <h3> Performance Metrics</h3>
                             <div class="agent-charts">
                                 <div class="chart-container large">
                                     <div class="chart-header">

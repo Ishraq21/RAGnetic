@@ -795,7 +795,7 @@ body {
     font-size: var(--font-size-sm);
 }
 
-.last-updated {
+.created-at {
     font-size: var(--font-size-xs);
     color: var(--text-muted);
 }
@@ -5925,7 +5925,7 @@ input[type="range"]::-moz-range-thumb:hover {
     100% { transform: scale(1); }
 }
 
-.overview-controls .last-updated {
+.overview-controls .created-at {
     color: var(--text-secondary);
     font-size: var(--font-size-xs);
     padding-left: 12px;
@@ -7867,6 +7867,7 @@ body {
 
 .table-container {
     overflow-x: auto;
+    overflow-y: hidden;
 }
 
 .agent-table {
@@ -7884,7 +7885,7 @@ body {
     border-bottom: 1px solid var(--border-color);
     position: sticky;
     top: 0;
-    z-index: 10;
+    z-index: 2;
 }
 
 .agent-table th.sortable {
@@ -7975,6 +7976,38 @@ body {
     background: rgba(239, 68, 68, 0.1);
     color: #ef4444;
     border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* State Machine Status Pills */
+.status-pill.created {
+    background: rgba(156, 163, 175, 0.1);
+    color: #9ca3af;
+    border: 1px solid rgba(156, 163, 175, 0.2);
+}
+
+
+.status-pill.deploying {
+    background: rgba(245, 158, 11, 0.1);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.status-pill.deployed {
+    background: rgba(16, 185, 129, 0.1);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.status-pill.idle {
+    background: rgba(139, 92, 246, 0.1);
+    color: #8b5cf6;
+    border: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.status-pill.stopped {
+    background: rgba(156, 163, 175, 0.1);
+    color: #9ca3af;
+    border: 1px solid rgba(156, 163, 175, 0.2);
 }
 
 .status-dot {
@@ -8073,6 +8106,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    margin: 0 2px;
 }
 
 .action-btn:hover {
@@ -8089,6 +8123,28 @@ body {
 
 .action-btn.primary:hover {
     background: var(--accent-hover);
+}
+
+.action-btn.warning {
+    background: #f59e0b;
+    color: white;
+    border-color: #f59e0b;
+}
+
+.action-btn.warning:hover {
+    background: #d97706;
+    border-color: #d97706;
+}
+
+.action-btn.danger {
+    background: #ef4444;
+    color: white;
+    border-color: #ef4444;
+}
+
+.action-btn.danger:hover {
+    background: #dc2626;
+    border-color: #dc2626;
 }
 
 /* Agent Grid View */
