@@ -191,22 +191,169 @@ function switchView(view) {
 
 function showCreateAgentModal() {
     console.log('Show create agent modal');
+    showModalById('create-agent-modal');
 }
 
 function hideCreateAgentModal() {
     console.log('Hide create agent modal');
+    hideModalById('create-agent-modal');
 }
 
 function showEditAgentModal(agentName) {
     console.log('Show edit agent modal for:', agentName);
+    // Load agent data and populate form
+    loadAgentForEdit(agentName);
+    showModalById('edit-agent-modal');
 }
 
 function hideEditAgentModal() {
     console.log('Hide edit agent modal');
+    hideModalById('edit-agent-modal');
 }
 
-async function deleteAgent(agentName) {
-    if (!confirm(`Are you sure you want to delete agent ${agentName}? This action cannot be undone.`)) {
+// Consistent modal helpers
+function showModalById(modalId) {
+    const modal = document.getElementById(modalId);
+    if (!modal) {
+        console.error(`Modal not found: ${modalId}`);
+        return;
+    }
+    modal.classList.add('show');
+    modal.style.removeProperty('display');
+    modal.style.removeProperty('visibility');
+    document.body.style.overflow = 'hidden';
+}
+
+function hideModalById(modalId) {
+    const modal = document.getElementById(modalId);
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.style.removeProperty('visibility');
+    modal.style.display = 'none';
+    document.body.style.overflow = 'auto';
+}
+
+async function loadAgentForEdit(agentName) {
+    console.log('Loading agent data for edit:', agentName);
+    try {
+        const response = await fetch(`/api/v1/agents/${agentName}`, {
+            headers: { 'X-API-Key': getApiKey() }
+        });
+        
+        console.log('Agent API response status:', response.status);
+        
+        if (response.ok) {
+            const agent = await response.json();
+            console.log('Agent data loaded:', agent);
+            
+            // Populate edit form
+            const nameField = document.getElementById('edit-agent-name');
+            const displayNameField = document.getElementById('edit-agent-display-name');
+            const descriptionField = document.getElementById('edit-agent-description');
+            
+            console.log('Form fields found:', {
+                name: !!nameField,
+                displayName: !!displayNameField,
+                description: !!descriptionField
+            });
+            
+            if (nameField) nameField.value = agent.name || '';
+            if (displayNameField) displayNameField.value = agent.display_name || '';
+            if (descriptionField) descriptionField.value = agent.description || '';
+            
+            // Populate other fields as needed
+            if (agent.llm_model) {
+                const llmSelect = document.getElementById('edit-agent-llm-model');
+                if (llmSelect) {
+                    llmSelect.value = agent.llm_model;
+                    console.log('Set LLM model to:', agent.llm_model);
+                } else {
+                    console.error('LLM model select not found');
+                }
+            }
+            
+            if (agent.embedding_model) {
+                const embeddingSelect = document.getElementById('edit-agent-embedding-model');
+                if (embeddingSelect) {
+                    embeddingSelect.value = agent.embedding_model;
+                    console.log('Set embedding model to:', agent.embedding_model);
+                } else {
+                    console.error('Embedding model select not found');
+                }
+            }
+            
+            // Populate persona prompt
+            if (agent.persona_prompt) {
+                const personaField = document.getElementById('edit-agent-persona');
+                if (personaField) {
+                    personaField.value = agent.persona_prompt;
+                    console.log('Set persona prompt');
+                }
+            }
+            
+            // Populate execution prompt
+            if (agent.execution_prompt) {
+                const executionField = document.getElementById('edit-agent-execution-prompt');
+                if (executionField) {
+                    executionField.value = agent.execution_prompt;
+                    console.log('Set execution prompt');
+                }
+            }
+            
+            console.log('Form populated successfully');
+
+            // Populate existing sources
+            try {
+                const editContainer = document.getElementById('edit-data-sources-container');
+                if (editContainer) {
+                    editContainer.innerHTML = '';
+                    const sources = Array.isArray(agent.sources) ? agent.sources : [];
+                    for (const s of sources) {
+                        const id = `eds-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                        const block = document.createElement('div');
+                        block.className = 'data-source-block';
+                        block.dataset.sourceId = id;
+                        block.innerHTML = createDataSourceHTML(id, 'edit');
+                        editContainer.appendChild(block);
+                        
+                        // Populate the fields with existing data
+                        setTimeout(() => {
+                            populateDataSourceFields(id, s);
+                        }, 100);
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to populate edit sources', e);
+            }
+        } else {
+            console.error('Failed to load agent data:', response.status);
+            alert('Failed to load agent data');
+        }
+    } catch (error) {
+        console.error('Error loading agent:', error);
+        alert('Error loading agent data');
+    }
+}
+
+function deleteAgent(agentName) {
+    console.log('Showing delete confirmation for agent:', agentName);
+    // Set the agent name in the modal
+    const agentNameElement = document.getElementById('delete-agent-name');
+    if (agentNameElement) {
+        agentNameElement.textContent = agentName;
+    }
+    
+    // Store the agent name for the confirm function
+    window.pendingDeleteAgent = agentName;
+    
+    // Show the delete confirmation modal
+    showModalById('delete-confirmation-modal');
+}
+
+async function confirmDeleteAgent() {
+    const agentName = window.pendingDeleteAgent;
+    if (!agentName) {
+        console.error('No agent name for deletion');
         return;
     }
     
@@ -218,34 +365,457 @@ async function deleteAgent(agentName) {
         });
         
         if (response.ok) {
-            showToast(`Agent ${agentName} deleted successfully!`, 'success');
-            // Reload agents to update list
-            if (typeof loadAgentsInline === 'function') {
-                loadAgentsInline();
+            console.log('Agent deleted successfully');
+            showToast('Agent deleted successfully', 'success');
+            // Reload agents list
+            if (window.loadAgentsInline) {
+                window.loadAgentsInline();
             }
         } else {
             const error = await response.json().catch(() => ({}));
-            showToast(`Failed to delete agent: ${error.detail || 'Unknown error'}`, 'error');
+            console.error('Delete failed:', error);
+            showToast('Failed to delete agent: ' + (error.detail || 'Unknown error'), 'error');
         }
     } catch (error) {
-        showToast(`Delete error: ${error.message}`, 'error');
+        console.error('Delete error:', error);
+        showToast('Failed to delete agent: ' + error.message, 'error');
+    } finally {
+        // Hide the modal and clear the pending delete
+        hideDeleteConfirmationModal();
+        window.pendingDeleteAgent = null;
     }
+}
+
+// Form submission handlers
+document.addEventListener('DOMContentLoaded', function() {
+    // Create agent form
+    const createForm = document.getElementById('create-agent-form');
+    if (createForm) {
+        createForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            await handleCreateAgent();
+        });
+    }
+    
+    // Edit agent form
+    const editForm = document.getElementById('edit-agent-form');
+    console.log('Edit form found during setup:', !!editForm);
+    if (editForm) {
+        editForm.addEventListener('submit', async function(e) {
+            console.log('Edit form submitted');
+            e.preventDefault();
+            await handleEditAgent();
+        });
+        console.log('Edit form event listener added');
+    } else {
+        console.error('Edit form not found during setup!');
+    }
+});
+
+async function handleCreateAgent() {
+    const form = document.getElementById('create-agent-form');
+    const formData = new FormData(form);
+    const sources = collectSources('#data-sources-container');
+    
+    const agentData = {
+        name: formData.get('name'),
+        display_name: formData.get('display_name'),
+        description: formData.get('description'),
+        persona_prompt: formData.get('persona_prompt') || 'You are a helpful assistant.',
+        llm_model: formData.get('llm_model') || 'gpt-4o-mini',
+        embedding_model: formData.get('embedding_model') || 'text-embedding-3-small',
+        sources,
+        tools: ['retriever'],
+        vector_store: {
+            type: 'faiss',
+            retrieval_strategy: 'hybrid'
+        },
+        gpu: {
+            enabled: false
+        }
+    };
+    
+    try {
+        const response = await fetch('/api/v1/agents', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': getApiKey()
+            },
+            body: JSON.stringify(agentData)
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            console.log('Agent created:', result);
+            showToast('Agent created successfully', 'success');
+            hideCreateAgentModal();
+            // Reload agents list
+            if (window.loadAgentsInline) {
+                window.loadAgentsInline();
+            }
+        } else {
+            const error = await response.json().catch(() => ({}));
+            console.error('Create failed:', error);
+            showToast('Failed to create agent: ' + (error.detail || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        console.error('Create error:', error);
+        showToast('Failed to create agent: ' + error.message, 'error');
+    }
+}
+
+async function handleEditAgent() {
+    console.log('handleEditAgent called');
+    const form = document.getElementById('edit-agent-form');
+    console.log('Edit form found:', !!form);
+    
+    if (!form) {
+        console.error('Edit form not found!');
+        alert('Edit form not found!');
+        return;
+    }
+    
+    const formData = new FormData(form);
+    const agentName = formData.get('name');
+    console.log('Agent name from form:', agentName);
+    
+    const sources = collectSources('#edit-data-sources-container');
+    const agentData = {
+        name: agentName,
+        display_name: formData.get('display_name'),
+        description: formData.get('description'),
+        persona_prompt: formData.get('persona_prompt') || 'You are a helpful assistant.',
+        llm_model: formData.get('llm_model') || 'gpt-4o-mini',
+        embedding_model: formData.get('embedding_model') || 'text-embedding-3-small',
+        sources,
+        tools: ['retriever'],
+        vector_store: {
+            type: 'faiss',
+            retrieval_strategy: 'hybrid'
+        },
+        gpu: {
+            enabled: false
+        }
+    };
+    
+    console.log('Agent data to submit:', agentData);
+    
+    try {
+        const response = await fetch(`/api/v1/agents/${agentName}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': getApiKey()
+            },
+            body: JSON.stringify(agentData)
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            console.log('Agent updated:', result);
+            showToast('Agent updated successfully', 'success');
+            hideEditAgentModal();
+            // Reload agents list
+            if (window.loadAgentsInline) {
+                window.loadAgentsInline();
+            }
+        } else {
+            const error = await response.json().catch(() => ({}));
+            console.error('Update failed:', error);
+            showToast('Failed to update agent: ' + (error.detail || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        console.error('Update error:', error);
+        showToast('Failed to update agent: ' + error.message, 'error');
+    }
+}
+
+function collectSources(containerSelector) {
+    const container = document.querySelector(containerSelector);
+    if (!container) return [];
+    const blocks = Array.from(container.querySelectorAll('.data-source-block'));
+    return blocks.map(block => {
+        const sourceId = block.dataset.sourceId;
+        const type = block.querySelector('.ds-type')?.value || 'local';
+        const depth = parseInt(block.querySelector('.ds-depth')?.value || '2', 10);
+        
+        // Base source object
+        const source = {
+            type,
+            max_depth: Number.isFinite(depth) ? depth : 2,
+            file_types: null, // Automatic file type detection
+            headers: null,
+            params: null,
+            method: 'GET',
+            payload: null,
+            json_pointer: null
+        };
+        
+        // Add type-specific fields
+        switch (type) {
+            case 'local':
+                source.path = block.querySelector(`#ds-path-${sourceId}`)?.value || null;
+                break;
+                
+            case 'local_upload':
+                // Handle file uploads - this would need to be processed separately
+                source.path = 'uploaded_files'; // Placeholder for uploaded files
+                break;
+                
+            case 'url':
+            case 'web_crawler':
+                source.url = block.querySelector(`#ds-url-${sourceId}`)?.value || null;
+                source.method = block.querySelector(`#ds-method-${sourceId}`)?.value || 'GET';
+                const headersText = block.querySelector(`#ds-headers-${sourceId}`)?.value;
+                if (headersText) {
+                    try {
+                        source.headers = JSON.parse(headersText);
+                    } catch (e) {
+                        console.warn('Invalid headers JSON:', headersText);
+                    }
+                }
+                break;
+                
+            case 'code_repository':
+                source.path = block.querySelector(`#ds-repo-${sourceId}`)?.value || null;
+                const branch = block.querySelector(`#ds-branch-${sourceId}`)?.value;
+                const token = block.querySelector(`#ds-token-${sourceId}`)?.value;
+                if (branch) source.params = { branch };
+                if (token) source.headers = { Authorization: `Bearer ${token}` };
+                break;
+                
+            case 'db':
+                source.db_connection = block.querySelector(`#ds-connection-${sourceId}`)?.value || null;
+                const query = block.querySelector(`#ds-query-${sourceId}`)?.value;
+                if (query) source.params = { query };
+                break;
+                
+            case 'gdoc':
+                source.folder_id = block.querySelector(`#ds-folder-${sourceId}`)?.value || null;
+                const docIdsText = block.querySelector(`#ds-doc-ids-${sourceId}`)?.value;
+                if (docIdsText) {
+                    source.document_ids = docIdsText.split('\n').filter(id => id.trim());
+                }
+                break;
+                
+            case 'api':
+                source.url = block.querySelector(`#ds-api-url-${sourceId}`)?.value || null;
+                source.method = block.querySelector(`#ds-api-method-${sourceId}`)?.value || 'GET';
+                const apiHeadersText = block.querySelector(`#ds-api-headers-${sourceId}`)?.value;
+                if (apiHeadersText) {
+                    try {
+                        source.headers = JSON.parse(apiHeadersText);
+                    } catch (e) {
+                        console.warn('Invalid API headers JSON:', apiHeadersText);
+                    }
+                }
+                const payloadText = block.querySelector(`#ds-api-payload-${sourceId}`)?.value;
+                if (payloadText) {
+                    try {
+                        source.payload = JSON.parse(payloadText);
+                    } catch (e) {
+                        console.warn('Invalid API payload JSON:', payloadText);
+                    }
+                }
+                break;
+                
+            case 'notebook':
+            case 'parquet':
+            case 'csv':
+            case 'pdf':
+            case 'txt':
+            case 'docx':
+                source.path = block.querySelector(`#ds-file-path-${sourceId}`)?.value || null;
+                break;
+        }
+        
+        return source;
+    });
 }
 
 function hideDeleteConfirmationModal() {
     console.log('Hide delete confirmation modal');
+    hideModalById('delete-confirmation-modal');
+    // Clear the pending delete
+    window.pendingDeleteAgent = null;
+}
+
+function viewAgent(agentName) {
+    console.log('Viewing agent:', agentName);
+    // Show the agent details modal
+    showAgentDetails(agentName);
+}
+
+function editAgent(agentName) {
+    console.log('Editing agent:', agentName);
+    console.log('Calling showEditAgentModal with:', agentName);
+    showEditAgentModal(agentName);
 }
 
 function confirmDeleteAgent() {
     console.log('Confirm delete agent');
 }
 
-function showAgentDetails(agentName) {
-    console.log('Show agent details for:', agentName);
+async function showAgentDetails(agentName) {
+    console.log('Show agent details modal for:', agentName);
+    const modal = document.getElementById('agent-details-modal');
+    const title = document.getElementById('agent-details-title');
+    const content = document.getElementById('agent-details-content');
+    
+    if (modal && title && content) {
+        // Set the title
+        title.textContent = `Agent Details: ${agentName}`;
+        
+        // Show loading state
+        content.innerHTML = `
+            <div class="loading-state">
+                <div class="loading-spinner"></div>
+                <p>Loading agent details...</p>
+            </div>
+        `;
+        
+        // Show the modal
+        showModalById('agent-details-modal');
+        
+        // Load agent data
+        try {
+            const response = await fetch(`/api/v1/agents/${agentName}`, {
+                headers: { 'X-API-Key': getApiKey() }
+            });
+            
+            if (response.ok) {
+                const agent = await response.json();
+                console.log('Agent details loaded:', agent);
+                
+                // Get additional data from database
+                let dbData = {};
+                try {
+                    const dbResponse = await fetch(`/api/v1/agents/${agentName}/status`, {
+                        headers: { 'X-API-Key': getApiKey() }
+                    });
+                    if (dbResponse.ok) {
+                        dbData = await dbResponse.json();
+                    }
+                } catch (error) {
+                    console.log('Could not fetch database data:', error);
+                }
+                
+                // Populate the modal content
+                content.innerHTML = `
+                    <div class="agent-details">
+                        <div class="detail-section">
+                            <h3>Basic Information</h3>
+                            <div class="detail-grid">
+                                <div class="detail-item">
+                                    <label>Name:</label>
+                                    <span>${agent.name || 'N/A'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Display Name:</label>
+                                    <span>${agent.display_name || 'N/A'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Description:</label>
+                                    <span>${agent.description || 'No description'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Status:</label>
+                                    <span class="status-badge ${dbData.actual_status || 'unknown'}">${dbData.actual_status || 'Unknown'}</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="detail-section">
+                            <h3>AI Configuration</h3>
+                            <div class="detail-grid">
+                                <div class="detail-item">
+                                    <label>LLM Model:</label>
+                                    <span>${agent.llm_model || 'N/A'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Embedding Model:</label>
+                                    <span>${agent.embedding_model || 'N/A'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Vector Store:</label>
+                                    <span>${agent.vector_store?.type || 'N/A'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Temperature:</label>
+                                    <span>${agent.model_params?.temperature || 'N/A'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Max Tokens:</label>
+                                    <span>${agent.model_params?.max_tokens || 'N/A'}</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="detail-section">
+                            <h3>Sources & Tools</h3>
+                            <div class="detail-grid">
+                                <div class="detail-item">
+                                    <label>Sources:</label>
+                                    <span>${agent.sources?.length || 0} configured</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Tools:</label>
+                                    <span>${agent.tools?.join(', ') || 'None'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Chunk Size:</label>
+                                    <span>${agent.chunking?.chunk_size || 'N/A'}</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="detail-section">
+                            <h3>Deployment Information</h3>
+                            <div class="detail-grid">
+                                <div class="detail-item">
+                                    <label>Database Status:</label>
+                                    <span class="status-badge ${dbData.database_status || 'unknown'}">${dbData.database_status || 'Unknown'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Vectorstore Exists:</label>
+                                    <span>${dbData.vectorstore_exists ? 'Yes' : 'No'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Offline Marker:</label>
+                                    <span>${dbData.offline_marker_exists ? 'Yes' : 'No'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Last Updated:</label>
+                                    <span>${dbData.last_updated ? new Date(dbData.last_updated).toLocaleString() : 'N/A'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                content.innerHTML = `
+                    <div class="error-state">
+                        <p>Failed to load agent details. Please try again.</p>
+                    </div>
+                `;
+            }
+        } catch (error) {
+            console.error('Error loading agent details:', error);
+            content.innerHTML = `
+                <div class="error-state">
+                    <p>Error loading agent details: ${error.message}</p>
+                </div>
+            `;
+        }
+    } else {
+        console.error('Agent details modal not found!');
+    }
 }
 
 function hideAgentDetailsModal() {
     console.log('Hide agent details modal');
+    hideModalById('agent-details-modal');
 }
 
 function hideRunDetailsModal() {
@@ -259,15 +829,360 @@ function logout() {
 }
 
 function addDataSource() {
-    console.log('Add data source');
+    const container = document.getElementById('data-sources-container');
+    if (!container) return;
+    const id = `ds-${Date.now()}`;
+    const block = document.createElement('div');
+    block.className = 'data-source-block';
+    block.dataset.sourceId = id;
+    block.innerHTML = createDataSourceHTML(id, 'create');
+    container.appendChild(block);
+    
+    // Add event listeners for dynamic behavior
+    setupDataSourceEventListeners(block);
 }
 
 function addEditDataSource() {
-    console.log('Add edit data source');
+    const container = document.getElementById('edit-data-sources-container');
+    if (!container) return;
+    const id = `eds-${Date.now()}`;
+    const block = document.createElement('div');
+    block.className = 'data-source-block';
+    block.dataset.sourceId = id;
+    block.innerHTML = createDataSourceHTML(id, 'edit');
+    container.appendChild(block);
+    
+    // Add event listeners for dynamic behavior
+    setupDataSourceEventListeners(block);
 }
 
 function updateRangeValue(id, value) {
     console.log('Update range value:', id, value);
+}
+
+// Comprehensive data source HTML generation
+function createDataSourceHTML(id, mode = 'create') {
+    return `
+        <div class="data-source-block-content">
+            <div class="data-source-header">
+                <h4>Data Source Configuration</h4>
+                <button type="button" class="btn-text btn-danger" onclick="removeDataSource('${id}')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3,6 5,6 21,6"></polyline>
+                        <path d="m19,6v14a2,2 0 0,1 -2,2H7a2,2 0 0,1 -2,-2V6m3,0V4a2,2 0 0,1 2,-2h4a2,2 0 0,1 2,2v2"></path>
+                        <line x1="10" y1="11" x2="10" y2="17"></line>
+                        <line x1="14" y1="11" x2="14" y2="17"></line>
+                    </svg>
+                    Remove Source
+                </button>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="ds-type-${id}">Source Type *</label>
+                    <select id="ds-type-${id}" name="source_type" class="ds-type" onchange="updateSourceFields('${id}')">
+                        <option value="">Select source type...</option>
+                        <option value="local">Local File Path (server)</option>
+                        <option value="local_upload">File Upload (browser)</option>
+                        <option value="url">Web URL</option>
+                        <option value="web_crawler">Web Crawler</option>
+                        <option value="code_repository">Code Repository (Git)</option>
+                        <option value="db">Database (SQL)</option>
+                        <option value="gdoc">Google Docs</option>
+                        <option value="api">API Endpoint</option>
+                        <option value="notebook">Jupyter Notebook</option>
+                        <option value="parquet">Parquet File</option>
+                        <option value="csv">CSV File</option>
+                        <option value="pdf">PDF Document</option>
+                        <option value="txt">Text File</option>
+                        <option value="docx">Word Document</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="ds-max-depth-${id}">Max Depth</label>
+                    <input type="number" id="ds-max-depth-${id}" class="ds-depth" value="2" min="0" max="10" />
+                    <small>How deep to crawl (0 = no limit)</small>
+                </div>
+            </div>
+            
+            <div id="ds-fields-${id}" class="source-specific-fields">
+                <div class="source-placeholder">
+                    <p>Select a source type to configure specific options</p>
+                </div>
+            </div>
+            
+        </div>
+    `;
+}
+
+// Update source-specific fields based on type selection
+function updateSourceFields(sourceId) {
+    const typeSelect = document.getElementById(`ds-type-${sourceId}`);
+    const fieldsContainer = document.getElementById(`ds-fields-${sourceId}`);
+    const sourceType = typeSelect.value;
+    
+    if (!fieldsContainer) return;
+    
+    let fieldsHTML = '';
+    
+    switch (sourceType) {
+        case 'local':
+            fieldsHTML = `
+                <div class="form-group">
+                    <label for="ds-path-${sourceId}">File/Directory Path *</label>
+                    <input type="text" id="ds-path-${sourceId}" class="ds-path" placeholder="/path/to/file/or/directory" required />
+                    <small>Server-relative path to file or directory</small>
+                </div>
+            `;
+            break;
+            
+        case 'local_upload':
+            fieldsHTML = `
+                <div class="form-group">
+                    <label for="ds-upload-${sourceId}">Upload Files *</label>
+                    <input type="file" id="ds-upload-${sourceId}" class="ds-upload" multiple accept=".pdf,.docx,.txt,.csv,.json,.yaml,.yml,.md,.html,.ipynb,.log,.tf,.hcl" />
+                    <small>Select one or more files to upload (PDF, DOCX, TXT, CSV, JSON, YAML, MD, HTML, Jupyter, Log, Terraform, HCL)</small>
+                </div>
+            `;
+            break;
+            
+        case 'url':
+        case 'web_crawler':
+            fieldsHTML = `
+                <div class="form-group">
+                    <label for="ds-url-${sourceId}">URL *</label>
+                    <input type="url" id="ds-url-${sourceId}" class="ds-url" placeholder="https://example.com" required />
+                    <small>Web URL to crawl or scrape</small>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ds-method-${sourceId}">HTTP Method</label>
+                        <select id="ds-method-${sourceId}" class="ds-method">
+                            <option value="GET">GET</option>
+                            <option value="POST">POST</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="ds-headers-${sourceId}">Custom Headers (JSON)</label>
+                        <textarea id="ds-headers-${sourceId}" class="ds-headers" placeholder='{"Authorization": "Bearer token"}' rows="2"></textarea>
+                    </div>
+                </div>
+            `;
+            break;
+            
+        case 'code_repository':
+            fieldsHTML = `
+                <div class="form-group">
+                    <label for="ds-repo-${sourceId}">Repository URL *</label>
+                    <input type="url" id="ds-repo-${sourceId}" class="ds-repo" placeholder="https://github.com/user/repo" required />
+                    <small>Git repository URL (GitHub, GitLab, etc.)</small>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ds-branch-${sourceId}">Branch</label>
+                        <input type="text" id="ds-branch-${sourceId}" class="ds-branch" placeholder="main" />
+                    </div>
+                    <div class="form-group">
+                        <label for="ds-token-${sourceId}">Access Token</label>
+                        <input type="password" id="ds-token-${sourceId}" class="ds-token" placeholder="Optional: for private repos" />
+                    </div>
+                </div>
+            `;
+            break;
+            
+        case 'db':
+            fieldsHTML = `
+                <div class="form-group">
+                    <label for="ds-connection-${sourceId}">Database Connection *</label>
+                    <input type="text" id="ds-connection-${sourceId}" class="ds-connection" placeholder="postgresql://user:pass@host:port/db" required />
+                    <small>Database connection string</small>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ds-query-${sourceId}">SQL Query</label>
+                        <textarea id="ds-query-${sourceId}" class="ds-query" placeholder="SELECT * FROM table" rows="3"></textarea>
+                    </div>
+                </div>
+            `;
+            break;
+            
+        case 'gdoc':
+            fieldsHTML = `
+                <div class="form-group">
+                    <label for="ds-folder-${sourceId}">Google Drive Folder ID</label>
+                    <input type="text" id="ds-folder-${sourceId}" class="ds-folder" placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms" />
+                    <small>Google Drive folder ID (optional)</small>
+                </div>
+                <div class="form-group">
+                    <label for="ds-doc-ids-${sourceId}">Document IDs</label>
+                    <textarea id="ds-doc-ids-${sourceId}" class="ds-doc-ids" placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms&#10;1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms" rows="3"></textarea>
+                    <small>One document ID per line (optional)</small>
+                </div>
+            `;
+            break;
+            
+        case 'api':
+            fieldsHTML = `
+                <div class="form-group">
+                    <label for="ds-api-url-${sourceId}">API Endpoint *</label>
+                    <input type="url" id="ds-api-url-${sourceId}" class="ds-api-url" placeholder="https://api.example.com/data" required />
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ds-api-method-${sourceId}">HTTP Method</label>
+                        <select id="ds-api-method-${sourceId}" class="ds-api-method">
+                            <option value="GET">GET</option>
+                            <option value="POST">POST</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="ds-api-headers-${sourceId}">Headers (JSON)</label>
+                        <textarea id="ds-api-headers-${sourceId}" class="ds-api-headers" placeholder='{"Authorization": "Bearer token"}' rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="ds-api-payload-${sourceId}">Request Payload (JSON)</label>
+                    <textarea id="ds-api-payload-${sourceId}" class="ds-api-payload" placeholder='{"query": "data"}' rows="3"></textarea>
+                </div>
+            `;
+            break;
+            
+        case 'notebook':
+        case 'parquet':
+        case 'csv':
+        case 'pdf':
+        case 'txt':
+        case 'docx':
+            fieldsHTML = `
+                <div class="form-group">
+                    <label for="ds-file-path-${sourceId}">File Path *</label>
+                    <input type="text" id="ds-file-path-${sourceId}" class="ds-file-path" placeholder="/path/to/file" required />
+                    <small>Server path to the specific file</small>
+                </div>
+            `;
+            break;
+            
+        default:
+            fieldsHTML = `
+                <div class="source-placeholder">
+                    <p>Select a source type to configure specific options</p>
+                </div>
+            `;
+    }
+    
+    fieldsContainer.innerHTML = fieldsHTML;
+}
+
+// Setup event listeners for data source blocks
+function setupDataSourceEventListeners(block) {
+    const typeSelect = block.querySelector('.ds-type');
+    if (typeSelect) {
+        typeSelect.addEventListener('change', () => {
+            const sourceId = block.dataset.sourceId;
+            updateSourceFields(sourceId);
+        });
+    }
+}
+
+// Remove data source block
+function removeDataSource(sourceId) {
+    const block = document.querySelector(`[data-source-id="${sourceId}"]`);
+    if (block) {
+        block.remove();
+    }
+}
+
+// Populate data source fields with existing data
+function populateDataSourceFields(sourceId, sourceData) {
+    // Set source type first
+    const typeSelect = document.getElementById(`ds-type-${sourceId}`);
+    if (typeSelect && sourceData.type) {
+        typeSelect.value = sourceData.type;
+        updateSourceFields(sourceId);
+        
+        // Wait for fields to be rendered, then populate them
+        setTimeout(() => {
+            // Set max depth
+            const depthInput = document.getElementById(`ds-max-depth-${sourceId}`);
+            if (depthInput && sourceData.max_depth !== undefined) {
+                depthInput.value = sourceData.max_depth;
+            }
+            
+            
+            // Set type-specific fields
+            switch (sourceData.type) {
+                case 'local':
+                    const pathInput = document.getElementById(`ds-path-${sourceId}`);
+                    if (pathInput && sourceData.path) pathInput.value = sourceData.path;
+                    break;
+                    
+                case 'url':
+                case 'web_crawler':
+                    const urlInput = document.getElementById(`ds-url-${sourceId}`);
+                    if (urlInput && sourceData.url) urlInput.value = sourceData.url;
+                    const methodSelect = document.getElementById(`ds-method-${sourceId}`);
+                    if (methodSelect && sourceData.method) methodSelect.value = sourceData.method;
+                    const headersTextarea = document.getElementById(`ds-headers-${sourceId}`);
+                    if (headersTextarea && sourceData.headers) {
+                        headersTextarea.value = JSON.stringify(sourceData.headers, null, 2);
+                    }
+                    break;
+                    
+                case 'code_repository':
+                    const repoInput = document.getElementById(`ds-repo-${sourceId}`);
+                    if (repoInput && sourceData.path) repoInput.value = sourceData.path;
+                    const branchInput = document.getElementById(`ds-branch-${sourceId}`);
+                    if (branchInput && sourceData.params?.branch) branchInput.value = sourceData.params.branch;
+                    const tokenInput = document.getElementById(`ds-token-${sourceId}`);
+                    if (tokenInput && sourceData.headers?.Authorization) {
+                        tokenInput.value = sourceData.headers.Authorization.replace('Bearer ', '');
+                    }
+                    break;
+                    
+                case 'db':
+                    const connectionInput = document.getElementById(`ds-connection-${sourceId}`);
+                    if (connectionInput && sourceData.db_connection) connectionInput.value = sourceData.db_connection;
+                    const queryTextarea = document.getElementById(`ds-query-${sourceId}`);
+                    if (queryTextarea && sourceData.params?.query) queryTextarea.value = sourceData.params.query;
+                    break;
+                    
+                case 'gdoc':
+                    const folderInput = document.getElementById(`ds-folder-${sourceId}`);
+                    if (folderInput && sourceData.folder_id) folderInput.value = sourceData.folder_id;
+                    const docIdsTextarea = document.getElementById(`ds-doc-ids-${sourceId}`);
+                    if (docIdsTextarea && sourceData.document_ids) {
+                        docIdsTextarea.value = sourceData.document_ids.join('\n');
+                    }
+                    break;
+                    
+                case 'api':
+                    const apiUrlInput = document.getElementById(`ds-api-url-${sourceId}`);
+                    if (apiUrlInput && sourceData.url) apiUrlInput.value = sourceData.url;
+                    const apiMethodSelect = document.getElementById(`ds-api-method-${sourceId}`);
+                    if (apiMethodSelect && sourceData.method) apiMethodSelect.value = sourceData.method;
+                    const apiHeadersTextarea = document.getElementById(`ds-api-headers-${sourceId}`);
+                    if (apiHeadersTextarea && sourceData.headers) {
+                        apiHeadersTextarea.value = JSON.stringify(sourceData.headers, null, 2);
+                    }
+                    const payloadTextarea = document.getElementById(`ds-api-payload-${sourceId}`);
+                    if (payloadTextarea && sourceData.payload) {
+                        payloadTextarea.value = JSON.stringify(sourceData.payload, null, 2);
+                    }
+                    break;
+                    
+                case 'notebook':
+                case 'parquet':
+                case 'csv':
+                case 'pdf':
+                case 'txt':
+                case 'docx':
+                    const filePathInput = document.getElementById(`ds-file-path-${sourceId}`);
+                    if (filePathInput && sourceData.path) filePathInput.value = sourceData.path;
+                    break;
+            }
+        }, 200);
+    }
 }
 
 // Agent state management global functions
@@ -346,20 +1261,6 @@ async function retryAgentDeployment(agentName) {
     }
 }
 
-function viewAgentLogs(agentName) {
-    console.log('View agent logs:', agentName);
-    showToast(`Viewing logs for ${agentName} - feature coming soon!`, 'info');
-}
-
-function viewAgent(agentName) {
-    console.log('View agent:', agentName);
-    showToast(`Viewing details for ${agentName} - feature coming soon!`, 'info');
-}
-
-function editAgent(agentName) {
-    console.log('Edit agent:', agentName);
-    showToast(`Editing ${agentName} - feature coming soon!`, 'info');
-}
 
 function getApiKey() {
     return localStorage.getItem('ragnetic_api_key') || 'c9d0fbc5206419383fec57608202858bd9540e4a1210220f35760bf387656691';
