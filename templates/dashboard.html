@@ -930,24 +930,6 @@ async function viewAgentLogs(agentName) {
     // TODO: Implement log viewing
 }
 
-async function deleteAgent(agentName) {
-    if (confirm(`Are you sure you want to delete agent ${agentName}?`)) {
-        try {
-            const response = await fetch(`/api/v1/agents/${agentName}`, {
-                method: 'DELETE',
-                headers: { 'X-API-Key': loggedInUserToken }
-            });
-            if (response.ok) {
-                console.log(`Agent ${agentName} deleted`);
-                loadAgentsInline();
-            } else {
-                console.error(`Failed to delete agent ${agentName}`);
-            }
-        } catch (error) {
-            console.error(`Error deleting agent ${agentName}:`, error);
-        }
-    }
-}
 
 // Create agent card
 function createAgentCard(agent) {
@@ -1345,32 +1327,7 @@ async function shutdownAgent(agentName) {
     }
 }
 
-function editAgent(agentId) {
-    console.log('Editing agent:', agentId);
-    // Open edit modal or navigate to edit page
-}
 
-function cloneAgent(agentId) {
-    console.log('Cloning agent:', agentId);
-    // Open clone modal
-}
-
-function testAgent(agentId) {
-    console.log('Testing agent:', agentId);
-    // Open test interface
-}
-
-function deleteAgent(agentId) {
-    if (confirm('Are you sure you want to delete this agent?')) {
-        console.log('Deleting agent:', agentId);
-        // Delete agent via API
-    }
-}
-
-function showCreateAgentModal() {
-    console.log('Opening create agent modal');
-    // Open create agent modal
-}
 
 // Utility function for debouncing
 function debounce(func, wait) {
