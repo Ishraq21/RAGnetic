@@ -22,7 +22,7 @@ class RAGneticTestRunner:
         
     def run_command(self, cmd: List[str], description: str) -> Dict[str, Any]:
         """Run a command and return results."""
-        print(f"\n🔄 {description}")
+        print(f"\n {description}")
         print(f"Command: {' '.join(cmd)}")
         
         start_time = time.time()
@@ -40,7 +40,7 @@ class RAGneticTestRunner:
             duration = end_time - start_time
             
             if result.returncode == 0:
-                print(f"✅ {description} - PASSED ({duration:.1f}s)")
+                print(f" {description} - PASSED ({duration:.1f}s)")
                 return {
                     "success": True,
                     "duration": duration,
@@ -48,7 +48,7 @@ class RAGneticTestRunner:
                     "stderr": result.stderr
                 }
             else:
-                print(f"❌ {description} - FAILED ({duration:.1f}s)")
+                print(f" {description} - FAILED ({duration:.1f}s)")
                 print(f"Exit code: {result.returncode}")
                 if result.stdout:
                     print("STDOUT:", result.stdout[-1000:])  # Last 1000 chars
@@ -221,7 +221,7 @@ class RAGneticTestRunner:
     
     def setup_test_environment(self) -> bool:
         """Set up test environment."""
-        print("🔧 Setting up test environment...")
+        print(" Setting up test environment...")
         
         # Create test reports directory
         reports_dir = self.project_root / "test-reports"
@@ -236,7 +236,7 @@ class RAGneticTestRunner:
         result = self.run_command(cmd, "Installing test dependencies")
         
         if not result["success"]:
-            print("❌ Failed to install test dependencies")
+            print(" Failed to install test dependencies")
             return False
         
         # Set environment variables
@@ -245,13 +245,13 @@ class RAGneticTestRunner:
         os.environ["DISABLE_EXTERNAL_APIS"] = "true"
         os.environ["MOCK_PROVIDERS"] = "true"
         
-        print("✅ Test environment setup complete")
+        print(" Test environment setup complete")
         return True
     
     def generate_test_report(self, results: Dict[str, Any]) -> None:
         """Generate comprehensive test report."""
         print("\n" + "="*80)
-        print("📊 TEST EXECUTION SUMMARY")
+        print(" TEST EXECUTION SUMMARY")
         print("="*80)
         
         total_duration = 0
@@ -259,7 +259,7 @@ class RAGneticTestRunner:
         failed_suites = 0
         
         for suite_name, result in results.items():
-            status = "✅ PASSED" if result["success"] else "❌ FAILED"
+            status = " PASSED" if result["success"] else " FAILED"
             duration = result.get("duration", 0)
             total_duration += duration
             
@@ -337,7 +337,7 @@ def main():
         if not runner.setup_test_environment():
             sys.exit(1)
     
-    print(f"\n🚀 Starting RAGnetic test execution: {args.suite}")
+    print(f"\n Starting RAGnetic test execution: {args.suite}")
     print(f"Project root: {runner.project_root}")
     
     results = {}
@@ -389,7 +389,7 @@ def main():
                 
                 # Stop on failure unless continue-on-failure is set
                 if not result["success"] and not args.continue_on_failure:
-                    print(f"\n❌ Stopping due to failure in {suite_name}")
+                    print(f"\n Stopping due to failure in {suite_name}")
                     break
             
             # Run quality checks
@@ -398,7 +398,7 @@ def main():
                 results[f"Quality Check {i+1}"] = result
     
     except KeyboardInterrupt:
-        print("\n⚠️  Test execution interrupted by user")
+        print("\n  Test execution interrupted by user")
         sys.exit(1)
     
     # Generate report

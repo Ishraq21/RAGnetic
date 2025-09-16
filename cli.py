@@ -945,12 +945,12 @@ def set_runpod_key(
     
     _update_env_file(env_updates)
     
-    typer.secho("✅ Successfully configured RunPod GPU services!", fg=typer.colors.GREEN)
+    typer.secho("[OK] Successfully configured RunPod GPU services!", fg=typer.colors.GREEN)
     typer.echo(f"   - API Key: {'*' * (len(api_key) - 4) + api_key[-4:]}")
     typer.echo(f"   - Environment: {environment}")
     
     if environment == "production":
-        typer.echo("\n🚀 RunPod GPU services are now enabled!")
+        typer.echo("\n RunPod GPU services are now enabled!")
         typer.echo("   - Real GPU instances will be provisioned")
         typer.echo("   - Live pricing and availability")
         typer.echo("   - Full RunPod API integration")
@@ -969,7 +969,7 @@ def test_runpod():
     # Check if API key is set
     api_key = os.getenv("RUNPOD_API_KEY")
     if not api_key:
-        typer.secho("❌ RunPod API key not found!", fg=typer.colors.RED)
+        typer.secho(" RunPod API key not found!", fg=typer.colors.RED)
         typer.echo("   Run: ragnetic set-runpod-key --key YOUR_API_KEY")
         raise typer.Exit(1)
     
@@ -993,11 +993,11 @@ def test_runpod():
             data = response.json()
             gpus = data.get("data", [])
             
-            typer.secho("✅ RunPod API connection successful!", fg=typer.colors.GREEN)
-            typer.echo(f"📊 Available GPUs: {len(gpus)}")
+            typer.secho("[OK] RunPod API connection successful!", fg=typer.colors.GREEN)
+            typer.echo(f" Available GPUs: {len(gpus)}")
             
             if gpus:
-                typer.echo("\n🖥️  Available GPU Types:")
+                typer.echo("\n  Available GPU Types:")
                 for gpu in gpus[:5]:  # Show first 5 GPUs
                     name = gpu.get("displayName", "Unknown")
                     memory = gpu.get("memoryInGb", 0)
@@ -1013,18 +1013,18 @@ def test_runpod():
                 if len(gpus) > 5:
                     typer.echo(f"   ... and {len(gpus) - 5} more GPUs")
             
-            typer.echo("\n🎉 RunPod integration is ready!")
+            typer.echo("\n RunPod integration is ready!")
             
         else:
-            typer.secho(f"❌ RunPod API error: {response.status_code}", fg=typer.colors.RED)
+            typer.secho(f" RunPod API error: {response.status_code}", fg=typer.colors.RED)
             typer.echo(f"   Response: {response.text}")
             raise typer.Exit(1)
             
     except requests.exceptions.RequestException as e:
-        typer.secho(f"❌ Connection failed: {str(e)}", fg=typer.colors.RED)
+        typer.secho(f" Connection failed: {str(e)}", fg=typer.colors.RED)
         raise typer.Exit(1)
     except Exception as e:
-        typer.secho(f"❌ Unexpected error: {str(e)}", fg=typer.colors.RED)
+        typer.secho(f" Unexpected error: {str(e)}", fg=typer.colors.RED)
         raise typer.Exit(1)
 
 

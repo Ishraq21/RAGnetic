@@ -162,6 +162,25 @@ async def invoke_deployment(
         # Check user credits
         await credit_service.ensure_balance(user_id, estimated_cost)
         
+        # Check agent status first
+        from app.db.models import agents_table
+        result = await db.execute(
+            select(agents_table.c.status).where(agents_table.c.name == deployment.agent_id)
+        )
+        agent_status = result.scalar_one_or_none()
+        
+        if agent_status == "stopped":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Agent '{deployment.agent_id}' is currently stopped. Please deploy the agent before sending requests."
+            )
+        
+        if agent_status == "error":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Agent '{deployment.agent_id}' is in an error state. Please retry deployment or contact support."
+            )
+
         # Load agent configuration
         try:
             agent_config = load_agent_config(deployment.agent_id)

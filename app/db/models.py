@@ -20,6 +20,7 @@ metadata = MetaData(naming_convention=naming_convention)
 utc_timestamp = datetime.utcnow
 sender_enum = Enum("human", "ai", name="sender_enum")
 agent_status_enum = Enum("running", "completed", "failed", name="agent_status_enum")
+agent_deployment_status_enum = Enum("created", "deploying", "deployed", "idle", "error", "stopped", name="agent_deployment_status_enum")
 api_key_scope_enum = Enum("admin", "editor", "viewer", name="api_key_scope_enum")
 benchmark_status_enum = Enum('running', 'completed', 'failed', 'cancelled', name='benchmark_status')
 
@@ -126,6 +127,15 @@ agents_table = Table(
     Column("display_name", String(255), nullable=True),
     Column("description", Text, nullable=True),
     Column("model_name", String(255), nullable=False),
+    Column("embedding_model", String(255), nullable=True),
+    Column("status", agent_deployment_status_enum, nullable=False, default="created", index=True),
+    Column("last_updated", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
+    Column("last_run", DateTime, nullable=True),
+    Column("total_cost", Float(precision=10), nullable=False, default=0.0),
+    Column("gpu_instance_id", String(255), nullable=True),
+    Column("deployment_type", String(50), nullable=True),
+    Column("project_id", Integer, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True),
+    Column("tags", JSON, nullable=True),
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
     Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
 )

@@ -385,10 +385,10 @@ def performance_monitor():
     memory_diff = end_memory - start_memory
     
     if duration > 5.0:  # Warn if test takes > 5 seconds
-        print(f"⚠️  Slow test: {duration:.2f}s")
+        print(f"!  Slow test: {duration:.2f}s")
     
     if memory_diff > 50 * 1024 * 1024:  # Warn if memory usage > 50MB
-        print(f"⚠️  High memory usage: {memory_diff / 1024 / 1024:.1f}MB")
+        print(f"!  High memory usage: {memory_diff / 1024 / 1024:.1f}MB")
 
 # Async generator fixtures for streaming tests
 @pytest_asyncio.fixture

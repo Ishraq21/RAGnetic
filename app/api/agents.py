@@ -14,7 +14,7 @@ from app.core.security import get_http_api_key, PermissionChecker, \
     get_current_user_from_api_key  # Import PermissionChecker and get_current_user_from_api_key
 from app.core.rate_limit import rate_limiter as rate_limit_dep
 from app.schemas.agent import AgentConfig, AgentInspectionResponse, ValidationReport, DocumentMetadata, ConnectionCheck, \
-    VectorStoreConfig, GPUConfig
+    VectorStoreConfig, GPUConfig, AgentDeploymentStatus
 from app.agents.config_manager import get_agent_configs, load_agent_config, save_agent_config
 from app.pipelines.embed import embed_agent_data
 from app.core.embed_config import get_embedding_model
@@ -23,6 +23,8 @@ from app.schemas.security import User
 from app.db import AsyncSessionLocal, get_db # Keep AsyncSessionLocal for now, but not directly used in background task
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_
+from app.services.agent_manager import agent_manager
+from app.services.agent_sync_service import agent_sync_service
 
 import logging
 
@@ -335,6 +337,28 @@ async def get_all_agents(
                             detail="An unexpected error occurred while fetching all agent configurations. Please check server logs.")
 
 
+# Alias to avoid potential client conflicts with parameterized routes
+@router.get("/status-all", response_model=List[AgentDeploymentStatus])
+async def get_all_agents_status_alias(
+    search: Optional[str] = Query(None, description="Search agents by name, description, or tags"),
+    status: Optional[str] = Query(None, description="Filter by agent status"),
+    model: Optional[str] = Query(None, description="Filter by model name"),
+    deployment_type: Optional[str] = Query(None, description="Filter by deployment type"),
+    project_id: Optional[int] = Query(None, description="Filter by project ID"),
+    current_user: User = Depends(PermissionChecker(["read:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    return await get_all_agents_status(
+        search=search,
+        status=status,
+        model=model,
+        deployment_type=deployment_type,
+        project_id=project_id,
+        current_user=current_user,
+        db=db
+    )
+
+
 @router.get("/{agent_name}", response_model=AgentConfig)
 async def get_agent_by_name(
         agent_name: str,
@@ -386,6 +410,10 @@ async def create_new_agent(
             )
 
         save_agent_config(config)
+
+        # Sync agent to database
+        sync_result = await agent_sync_service.sync_agent_to_db(db, config, current_user.id)
+        logger.info(f"Synced agent {config.name} to database: {sync_result}")
 
         # Pass the already acquired db session to the background task directly
         bg.add_task(embed_agent_data, config=config, db=db)
@@ -441,6 +469,10 @@ async def update_agent_by_name(
 
         save_agent_config(config)
 
+        # Sync agent to database
+        sync_result = await agent_sync_service.sync_agent_to_db(db, config, current_user.id)
+        logger.info(f"Synced agent {config.name} to database: {sync_result}")
+
         # Pass the already acquired db session to the background task directly
         bg.add_task(embed_agent_data, config=config, db=db)
 
@@ -473,7 +505,8 @@ async def update_agent_by_name(
 async def delete_agent_by_name(
         agent_name: str,
         # Only users with 'agent:delete' permission can delete agents
-        current_user: User = Depends(PermissionChecker(["agent:delete"]))
+        current_user: User = Depends(PermissionChecker(["agent:delete"])),
+        db: AsyncSession = Depends(get_db)
 ):
     """
     Deletes an agent, its configuration, and all associated data.
@@ -481,6 +514,9 @@ async def delete_agent_by_name(
     """
     try:
         load_agent_config(agent_name)  # Ensure the agent exists
+
+        # Delete from database first
+        await agent_sync_service.delete_agent_from_db(db, agent_name)
 
         config_path = _AGENTS_DIR / f"{agent_name}.yaml"
         if os.path.exists(config_path):
@@ -753,6 +789,15 @@ async def shutdown_agent(
             agent_row = result.fetchone()
             if agent_row:
                 agent_id = agent_row.id
+                
+                # Update agent status to stopped
+                await db.execute(
+                    update(agents_table)
+                    .where(agents_table.c.name == agent_name)
+                    .values(status="stopped", last_updated=datetime.utcnow())
+                )
+                
+                # Update deployments table
                 await db.execute(
                     update(deployments_table)
                     .where(deployments_table.c.agent_id == agent_id)
@@ -765,6 +810,7 @@ async def shutdown_agent(
                             update(api_keys_table).where(api_keys_table.c.id == dep.api_key_id).values(is_active=False)
                         )
                 await db.commit()
+                logger.info(f"Agent {agent_name} status updated to stopped in database")
         except Exception:
             logger.warning("Failed to deactivate deployments during shutdown sync.", exc_info=True)
 
@@ -818,3 +864,329 @@ async def upload_file_for_ingestion(
         )
     finally:
         await file.close()
+
+
+# --- Agent State Machine Endpoints ---
+
+@router.get("/status", response_model=List[AgentDeploymentStatus])
+async def get_all_agents_status(
+    search: Optional[str] = Query(None, description="Search agents by name, description, or tags"),
+    status: Optional[str] = Query(None, description="Filter by agent status"),
+    model: Optional[str] = Query(None, description="Filter by model name"),
+    deployment_type: Optional[str] = Query(None, description="Filter by deployment type"),
+    project_id: Optional[int] = Query(None, description="Filter by project ID"),
+    current_user: User = Depends(PermissionChecker(["read:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get deployment status for all agents with optional filtering."""
+    try:
+        agents_status = await agent_manager.get_all_agents_status(db)
+        
+        # Apply filters
+        if search:
+            search_lower = search.lower()
+            agents_status = [
+                agent for agent in agents_status
+                if (search_lower in agent.get("name", "").lower() or
+                    search_lower in agent.get("description", "").lower() or
+                    any(search_lower in tag.lower() for tag in (agent.get("tags") or [])))
+            ]
+        
+        if status:
+            agents_status = [agent for agent in agents_status if agent.get("status") == status]
+        
+        if model:
+            agents_status = [agent for agent in agents_status if agent.get("model_name") == model]
+        
+        if deployment_type:
+            agents_status = [agent for agent in agents_status if agent.get("deployment_type") == deployment_type]
+        
+        if project_id:
+            agents_status = [agent for agent in agents_status if agent.get("project_id") == project_id]
+        
+        return agents_status
+    except Exception as e:
+        logger.error(f"Failed to get agents status: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get agents status: {e}"
+        )
+
+
+@router.get("/{agent_name}/status", response_model=dict)
+async def get_agent_status(
+    agent_name: str,
+    current_user: User = Depends(PermissionChecker(["read:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get deployment status for a specific agent with actual deployment status."""
+    try:
+        # Get database status
+        result = await db.execute(
+            select(agents_table.c.status, agents_table.c.last_updated)
+            .where(agents_table.c.name == agent_name)
+        )
+        agent_row = result.fetchone()
+        
+        if not agent_row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent {agent_name} not found"
+            )
+        
+        db_status = agent_row.status
+        last_updated = agent_row.last_updated
+        
+        # Check actual deployment status
+        vs_dir = _VECTORSTORE_DIR / agent_name
+        offline_marker = vs_dir / ".offline"
+        
+        actual_status = db_status
+        if vs_dir.exists():
+            if offline_marker.exists():
+                actual_status = "stopped"
+            else:
+                actual_status = "deployed"
+        else:
+            actual_status = "stopped"
+        
+        return {
+            "agent_name": agent_name,
+            "database_status": db_status,
+            "actual_status": actual_status,
+            "last_updated": last_updated.isoformat() if last_updated else None,
+            "vectorstore_exists": vs_dir.exists(),
+            "offline_marker_exists": offline_marker.exists() if vs_dir.exists() else False
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get agent status for {agent_name}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get agent status: {e}"
+        )
+
+@router.post("/{agent_name}/deploy-state", response_model=dict)
+async def deploy_agent_state(
+    agent_name: str,
+    current_user: User = Depends(PermissionChecker(["write:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Deploy an agent using the state machine."""
+    try:
+        success = await agent_manager.deploy_agent(db, agent_name)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to deploy agent {agent_name}"
+            )
+        return {"message": f"Agent {agent_name} deployment initiated", "status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to deploy agent {agent_name}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to deploy agent: {e}"
+        )
+
+@router.post("/{agent_name}/stop-state", response_model=dict)
+async def stop_agent_state(
+    agent_name: str,
+    current_user: User = Depends(PermissionChecker(["write:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Stop an agent using the state machine."""
+    try:
+        success = await agent_manager.stop_agent(db, agent_name)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to stop agent {agent_name}"
+            )
+        return {"message": f"Agent {agent_name} stopped", "status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to stop agent {agent_name}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to stop agent: {e}"
+        )
+
+@router.post("/{agent_name}/resume", response_model=dict)
+async def resume_agent_state(
+    agent_name: str,
+    current_user: User = Depends(PermissionChecker(["write:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Resume an idle agent."""
+    try:
+        success = await agent_manager.resume_agent(db, agent_name)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to resume agent {agent_name}"
+            )
+        return {"message": f"Agent {agent_name} resumed", "status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to resume agent {agent_name}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to resume agent: {e}"
+        )
+
+@router.post("/{agent_name}/retry", response_model=dict)
+async def retry_agent_deployment(
+    agent_name: str,
+    current_user: User = Depends(PermissionChecker(["write:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retry deployment for an agent in error state."""
+    try:
+        success = await agent_manager.retry_deployment(db, agent_name)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to retry deployment for agent {agent_name}"
+            )
+        return {"message": f"Agent {agent_name} deployment retry initiated", "status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to retry deployment for agent {agent_name}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retry deployment: {e}"
+        )
+
+@router.get("/{agent_name}/badge-info", response_model=dict)
+async def get_agent_badge_info(
+    agent_name: str,
+    current_user: User = Depends(PermissionChecker(["read:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get badge styling information for an agent."""
+    try:
+        agent_status = await agent_manager.get_agent_status(db, agent_name)
+        if not agent_status:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent {agent_name} not found"
+            )
+        
+        badge_info = agent_manager.get_status_badge_info(agent_status["status"])
+        actions = agent_manager.get_available_actions(agent_status["status"])
+        
+        return {
+            "badge_info": badge_info,
+            "actions": actions,
+            "status": agent_status["status"]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get badge info for agent {agent_name}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get badge info: {e}"
+        )
+
+@router.post("/sync", response_model=dict)
+async def sync_all_agents(
+    current_user: User = Depends(PermissionChecker(["write:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Sync all YAML agents to database."""
+    try:
+        sync_result = await agent_sync_service.sync_all_agents_to_db(db, current_user.id)
+        return {
+            "message": "Agent sync completed",
+            "results": sync_result
+        }
+    except Exception as e:
+        logger.error(f"Failed to sync agents: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to sync agents: {e}"
+        )
+
+@router.put("/{agent_name}/update-fields", response_model=dict)
+async def update_agent_fields(
+    agent_name: str,
+    fields: Dict[str, Any] = Body(...),
+    current_user: User = Depends(PermissionChecker(["write:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update specific fields of an agent."""
+    try:
+        from sqlalchemy import update
+        
+        # Allowed fields that can be updated
+        allowed_fields = {
+            'display_name', 'description', 'embedding_model', 
+            'deployment_type', 'project_id', 'tags'
+        }
+        
+        # Filter to only allowed fields
+        update_data = {k: v for k, v in fields.items() if k in allowed_fields}
+        
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid fields provided for update"
+            )
+        
+        # Add updated_at timestamp
+        update_data['updated_at'] = datetime.utcnow()
+        
+        stmt = update(agents_table).where(agents_table.c.name == agent_name).values(**update_data)
+        result = await db.execute(stmt)
+        await db.commit()
+        
+        if result.rowcount == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent {agent_name} not found"
+            )
+        
+        return {"message": f"Agent {agent_name} updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to update agent {agent_name}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update agent: {e}"
+        )
+
+@router.get("/filters/options", response_model=dict)
+async def get_filter_options(
+    current_user: User = Depends(PermissionChecker(["read:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get available filter options for agents."""
+    try:
+        from sqlalchemy import select, distinct
+        
+        # Get unique values for each filter
+        statuses = await db.execute(select(distinct(agents_table.c.status)))
+        models = await db.execute(select(distinct(agents_table.c.model_name)))
+        deployment_types = await db.execute(select(distinct(agents_table.c.deployment_type)))
+        
+        return {
+            "statuses": [row[0] for row in statuses.fetchall() if row[0]],
+            "models": [row[0] for row in models.fetchall() if row[0]],
+            "deployment_types": [row[0] for row in deployment_types.fetchall() if row[0]]
+        }
+    except Exception as e:
+        logger.error(f"Failed to get filter options: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get filter options: {e}"
+        )

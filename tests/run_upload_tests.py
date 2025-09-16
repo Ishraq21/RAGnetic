@@ -116,7 +116,7 @@ class MasterUploadTestRunner:
         print(f"   Total Duration: {total_duration:.2f} seconds")
         print(f"   Overall Status: {'PASSED' if self.overall_success else 'FAILED'}")
         
-        print(f"\n📋 Detailed Results:")
+        print(f"\n Detailed Results:")
         for suite_name, result in self.test_results.items():
             status = "PASSED" if result["success"] else "FAILED"
             duration = result["duration"]
@@ -143,7 +143,7 @@ class MasterUploadTestRunner:
         with open(report_file, "w") as f:
             json.dump(report_data, f, indent=2, default=str)
         
-        print(f"\n📄 Detailed report saved to: {report_file}")
+        print(f"\n Detailed report saved to: {report_file}")
         
         return report_data
     

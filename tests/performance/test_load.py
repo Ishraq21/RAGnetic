@@ -691,7 +691,7 @@ class TestStressTesting:
         
         # If success rate is too low, system might need optimization
         if successful_requests / num_concurrent_requests < 0.50:
-            print("⚠️  Warning: Success rate under extreme load is below 50%")
+            print("  Warning: Success rate under extreme load is below 50%")
     
     @pytest.mark.performance
     @pytest.mark.asyncio

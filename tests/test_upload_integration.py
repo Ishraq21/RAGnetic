@@ -490,7 +490,7 @@ class UploadIntegrationTests:
         with open(report_file, "w") as f:
             json.dump(report_data, f, indent=2)
         
-        print(f"\n📄 Report saved to: {report_file}")
+        print(f"\n Report saved to: {report_file}")
         
         return 0 if overall_success else 1
 
