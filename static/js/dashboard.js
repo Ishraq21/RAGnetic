@@ -1975,12 +1975,6 @@ function editAgentFromDetail() {
     }
 }
 
-function deployAgentFromDetail() {
-    const agentName = window.dashboard?.currentAgentName;
-    if (agentName) {
-        deployAgentState(agentName);
-    }
-}
 
 function copyYAML() {
     const yamlContent = document.getElementById('agent-yaml-content').textContent;
