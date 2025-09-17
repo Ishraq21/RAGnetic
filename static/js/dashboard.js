@@ -335,19 +335,32 @@ class Dashboard {
         }
     }
 
-    async loadAgentCostData(agentName) {
+    async loadAgentCostData(agentName, timeframe = 30) {
+        console.log('loadAgentCostData called with:', agentName, timeframe);
         try {
-            // Use the existing analytics endpoint instead of custom agent endpoint
-            const response = await fetch(`/api/v1/analytics/usage-summary?agent_name=${agentName}&limit=1`, {
+            // Calculate date range based on timeframe
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - timeframe);
+            
+            console.log('Date range:', startDate.toISOString(), 'to', endDate.toISOString());
+            
+            // Use the existing analytics endpoint with time filtering
+            const url = `/api/v1/analytics/usage-summary?agent_name=${agentName}&start_time=${startDate.toISOString()}&end_time=${endDate.toISOString()}&limit=1`;
+            console.log('Fetching from URL:', url);
+            
+            const response = await fetch(url, {
                 headers: { 'X-API-Key': this.getApiKey() }
             });
             
             if (response.ok) {
                 const analyticsData = await response.json();
+                console.log('Analytics response:', analyticsData);
                 const costData = analyticsData.length > 0 ? analyticsData[0] : null;
                 
                 if (costData) {
                     const costValue = (costData.total_estimated_cost_usd || 0).toFixed(4);
+                    console.log('Updating cost data:', costValue, costData);
                     // Update both header and analytics sections
                     document.getElementById('agent-monthly-cost').textContent = `$${costValue}`;
                     document.getElementById('agent-total-cost').textContent = `$${costValue}`;
@@ -355,6 +368,7 @@ class Dashboard {
                     document.getElementById('agent-token-usage').textContent = `${costData.total_tokens || '0'} tokens`;
                     document.getElementById('agent-api-calls').textContent = `${costData.total_requests || '0'} calls`;
                 } else {
+                    console.log('No cost data found');
                     // No data found - update both sections
                     document.getElementById('agent-monthly-cost').textContent = '$0.00';
                     document.getElementById('agent-total-cost').textContent = '$0.00';
@@ -362,6 +376,8 @@ class Dashboard {
                     document.getElementById('agent-token-usage').textContent = '0 tokens';
                     document.getElementById('agent-api-calls').textContent = '0 calls';
                 }
+            } else {
+                console.log('Response not ok:', response.status, response.statusText);
             }
         } catch (error) {
             console.log('Could not fetch cost data:', error);
@@ -2102,9 +2118,40 @@ function downloadLogs() {
     showToast('Logs downloaded', 'success');
 }
 
+// Global function to update cost timeframe - defined in global scope
+window.updateCostTimeframe = function() {
+    console.log('updateCostTimeframe called');
+    const timeframe = document.getElementById('cost-timeframe').value;
+    const agentName = document.getElementById('agent-detail-title').textContent;
+    
+    console.log('Timeframe:', timeframe, 'Agent:', agentName);
+    
+    // Update the period label based on timeframe
+    const periodLabels = {
+        '7': 'Last 7 days',
+        '30': 'Last 30 days', 
+        '90': 'Last 90 days',
+        '365': 'Last year'
+    };
+    
+    const periodLabel = document.getElementById('cost-period-label');
+    if (periodLabel) {
+        periodLabel.textContent = periodLabels[timeframe] || 'This Month';
+    }
+    
+    // Reload cost data with new timeframe
+    if (window.dashboardManager) {
+        console.log('Reloading cost data with timeframe:', timeframe);
+        window.dashboardManager.loadAgentCostData(agentName, parseInt(timeframe));
+    } else {
+        console.log('Dashboard manager not available');
+    }
+};
+
 // Initialize dashboard when DOM is loaded
 console.log('Setting up DOMContentLoaded event listener');
 document.addEventListener('DOMContentLoaded', function() {
     window.dashboard = new Dashboard();
+    window.dashboardManager = window.dashboard; // Make it accessible globally
     console.log('Dashboard initialized');
 });

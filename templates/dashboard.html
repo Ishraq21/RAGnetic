@@ -2246,18 +2246,28 @@ document.addEventListener('DOMContentLoaded', function() {
                         <!-- Cost & Billing Card -->
                         <div class="detail-card">
                             <div class="card-header">
-                                <h3>Cost & Billing</h3>
-                                <div class="card-icon">
-                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <line x1="12" y1="1" x2="12" y2="23"></line>
-                                        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
-                                    </svg>
+                                <div class="card-header-left">
+                                    <h3>Cost & Billing</h3>
+                                    <div class="card-icon">
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <line x1="12" y1="1" x2="12" y2="23"></line>
+                                            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                                        </svg>
+                                    </div>
+                                </div>
+                                <div class="timeframe-selector">
+                                    <select id="cost-timeframe" onchange="updateCostTimeframe()" class="timeframe-dropdown">
+                                        <option value="7">Last 7 days</option>
+                                        <option value="30" selected>Last 30 days</option>
+                                        <option value="90">Last 90 days</option>
+                                        <option value="365">Last year</option>
+                                    </select>
                                 </div>
                             </div>
                             <div class="card-content">
                                 <div class="metrics-grid">
                                     <div class="metric-item">
-                                        <div class="metric-label">This Month</div>
+                                        <div class="metric-label" id="cost-period-label">This Month</div>
                                         <div class="cost-value" id="agent-monthly-cost">$0.00</div>
                                     </div>
                                     <div class="metric-item">
