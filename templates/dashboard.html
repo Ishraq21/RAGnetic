@@ -2009,38 +2009,102 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="breadcrumb-current" id="agent-breadcrumb-name">Agent Details</span>
                 </div>
 
-                <!-- Agent Header -->
+                <!-- Enhanced Agent Header -->
                 <div class="agent-detail-header">
-                    <div class="agent-header-info">
-                        <div class="agent-title-section">
-                            <h1 class="agent-title" id="agent-detail-title">Agent Name</h1>
-                            <div class="agent-subtitle" id="agent-detail-subtitle">Professional AI Agent</div>
+                    <!-- Header Top Section -->
+                    <div class="agent-header-top">
+                        <div class="agent-avatar-section">
+                            <div class="agent-avatar" id="agent-avatar">
+                                <div class="avatar-icon">
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                        <circle cx="12" cy="7" r="4"></circle>
+                                    </svg>
+                                </div>
+                                <div class="status-indicator" id="agent-status-indicator"></div>
+                            </div>
+                            <div class="agent-basic-info">
+                                <h1 class="agent-title" id="agent-detail-title">Agent Name</h1>
+                                <div class="agent-subtitle" id="agent-detail-subtitle">Professional AI Agent</div>
+                                <div class="agent-meta">
+                                    <span class="meta-item">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <circle cx="12" cy="12" r="10"></circle>
+                                            <polyline points="12,6 12,12 16,14"></polyline>
+                                        </svg>
+                                        Created <span id="agent-created-date">2 days ago</span>
+                                    </span>
+                                    <span class="meta-item">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M3 3h18v18H3zM9 9h6v6H9z"></path>
+                                        </svg>
+                                        Last updated <span id="agent-updated-date">1 hour ago</span>
+                                    </span>
+                                </div>
+                            </div>
                         </div>
-                        <div class="agent-status-section">
-                            <div class="status-pill" id="agent-detail-status">
-                                <div class="status-dot"></div>
-                                <span id="agent-status-text">Active</span>
+                        
+                        <div class="agent-header-actions">
+                            <button class="btn-secondary" onclick="editAgentFromDetail()">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                    <path d="m18.5 2.5 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                </svg>
+                                Edit
+                            </button>
+                            <button class="btn-primary" onclick="deployAgentFromDetail()">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M8 2v4"></path>
+                                    <path d="M16 2v4"></path>
+                                    <rect width="18" height="18" x="3" y="4" rx="2"></rect>
+                                    <path d="M3 10h18"></path>
+                                </svg>
+                                Deploy
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Header Status Section -->
+                    <div class="agent-status-section">
+                        <div class="status-card">
+                            <div class="status-header">
+                                <div class="status-pill" id="agent-detail-status">
+                                    <div class="status-dot"></div>
+                                    <span id="agent-status-text">Active</span>
+                                </div>
+                                <div class="status-actions">
+                                    <button class="btn-status" onclick="toggleAgentStatus()" id="status-toggle-btn">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M3 6h18"></path>
+                                            <path d="M3 12h18"></path>
+                                            <path d="M3 18h18"></path>
+                                        </svg>
+                                        Manage
+                                    </button>
+                                </div>
                             </div>
                             <div class="status-description" id="agent-status-description">Agent is running and ready to handle requests</div>
                         </div>
-                    </div>
-                    <div class="agent-header-actions">
-                        <button class="btn-secondary" onclick="editAgentFromDetail()">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                                <path d="m18.5 2.5 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                            </svg>
-                            Edit Agent
-                        </button>
-                        <button class="btn-primary" onclick="deployAgentFromDetail()">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M8 2v4"></path>
-                                <path d="M16 2v4"></path>
-                                <rect width="18" height="18" x="3" y="4" rx="2"></rect>
-                                <path d="M3 10h18"></path>
-                            </svg>
-                            Deploy
-                        </button>
+                        
+                        <!-- Quick Stats -->
+                        <div class="quick-stats">
+                            <div class="stat-item">
+                                <div class="stat-value" id="quick-total-queries">0</div>
+                                <div class="stat-label">Total Queries</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value" id="quick-success-rate">N/A</div>
+                                <div class="stat-label">Success Rate</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value" id="quick-uptime">24h</div>
+                                <div class="stat-label">Uptime</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value" id="quick-cost">$0.00</div>
+                                <div class="stat-label">This Month</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 

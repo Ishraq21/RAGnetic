@@ -243,9 +243,23 @@ class Dashboard {
         // Update breadcrumb
         document.getElementById('agent-breadcrumb-name').textContent = agent.name || 'Unknown';
         
-        // Update header
+        // Update enhanced header
         document.getElementById('agent-detail-title').textContent = agent.name || 'Unknown';
         document.getElementById('agent-detail-subtitle').textContent = agent.display_name || 'AI Agent';
+        
+        // Update meta information
+        const createdDate = agent.created_at ? new Date(agent.created_at) : null;
+        const updatedDate = agent.updated_at ? new Date(agent.updated_at) : null;
+        
+        if (createdDate) {
+            document.getElementById('agent-created-date').textContent = this.formatRelativeTime(createdDate);
+        }
+        if (updatedDate) {
+            document.getElementById('agent-updated-date').textContent = this.formatRelativeTime(updatedDate);
+        }
+        
+        // Update status indicator
+        this.updateAgentStatus(agent.status || 'stopped');
         
         // Basic information
         document.getElementById('agent-name').textContent = agent.name || 'N/A';
@@ -528,6 +542,66 @@ gpu:
             'unknown': 'Status is unknown or not available'
         };
         return descriptions[status] || 'Status information not available';
+    }
+
+    // Helper method to format relative time
+    formatRelativeTime(date) {
+        const now = new Date();
+        const diffInSeconds = Math.floor((now - date) / 1000);
+        
+        if (diffInSeconds < 60) {
+            return 'just now';
+        } else if (diffInSeconds < 3600) {
+            const minutes = Math.floor(diffInSeconds / 60);
+            return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+        } else if (diffInSeconds < 86400) {
+            const hours = Math.floor(diffInSeconds / 3600);
+            return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+        } else {
+            const days = Math.floor(diffInSeconds / 86400);
+            return `${days} day${days > 1 ? 's' : ''} ago`;
+        }
+    }
+
+    // Update agent status with enhanced visual feedback
+    updateAgentStatus(status) {
+        const statusPill = document.getElementById('agent-detail-status');
+        const statusText = document.getElementById('agent-status-text');
+        const statusIndicator = document.getElementById('agent-status-indicator');
+        
+        if (statusPill && statusText) {
+            // Remove existing status classes
+            statusPill.className = 'status-pill';
+            
+            // Add new status class
+            statusPill.classList.add(`status-${status}`);
+            
+            // Update status text
+            const statusLabels = {
+                'active': 'Active',
+                'running': 'Running',
+                'stopped': 'Stopped',
+                'deploying': 'Deploying',
+                'idle': 'Idle',
+                'error': 'Error'
+            };
+            
+            statusText.textContent = statusLabels[status] || 'Unknown';
+        }
+        
+        // Update status indicator color
+        if (statusIndicator) {
+            const statusColors = {
+                'active': 'var(--success-color)',
+                'running': 'var(--success-color)',
+                'stopped': 'var(--error-color)',
+                'deploying': 'var(--warning-color)',
+                'idle': 'var(--text-secondary)',
+                'error': 'var(--error-color)'
+            };
+            
+            statusIndicator.style.background = statusColors[status] || 'var(--text-secondary)';
+        }
     }
 }
 
