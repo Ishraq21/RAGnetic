@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks, Query, File, UploadFile
+from fastapi.responses import Response
 
 from app.core.config import get_path_settings, get_api_key
 from app.core.security import get_http_api_key, PermissionChecker, \
@@ -1189,4 +1190,199 @@ async def get_filter_options(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get filter options: {e}"
+        )
+
+
+@router.get("/{agent_name}/cost")
+async def get_agent_cost(
+    agent_name: str,
+    current_user: User = Depends(PermissionChecker(["read:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get cost information for a specific agent.
+    Requires: 'read:agents' permission.
+    """
+    try:
+        # Check if agent exists
+        try:
+            agent_config = load_agent_config(agent_name)
+            if not agent_config:
+                raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+        
+        # For now, return mock cost data
+        # TODO: Implement actual cost tracking
+        cost_data = {
+            "total_cost": 0.0,
+            "tokens_used": 0,
+            "api_calls": 0,
+            "last_updated": datetime.now().isoformat(),
+            "currency": "USD"
+        }
+        
+        return cost_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get cost for agent '{agent_name}': {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve cost for agent '{agent_name}': {str(e)}"
+        )
+
+
+@router.get("/{agent_name}/usage")
+async def get_agent_usage(
+    agent_name: str,
+    current_user: User = Depends(PermissionChecker(["read:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get usage statistics for a specific agent.
+    Requires: 'read:agents' permission.
+    """
+    try:
+        # Check if agent exists
+        try:
+            agent_config = load_agent_config(agent_name)
+            if not agent_config:
+                raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+        
+        # For now, return mock usage data
+        # TODO: Implement actual usage tracking
+        usage_data = {
+            "total_queries": 0,
+            "successful_queries": 0,
+            "failed_queries": 0,
+            "avg_response_time": 0.0,
+            "last_used": None,
+            "queries_today": 0,
+            "queries_this_week": 0,
+            "queries_this_month": 0
+        }
+        
+        return usage_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get usage for agent '{agent_name}': {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve usage for agent '{agent_name}': {str(e)}"
+        )
+
+
+@router.get("/{agent_name}/yaml")
+async def get_agent_yaml(
+    agent_name: str,
+    current_user: User = Depends(PermissionChecker(["read:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get YAML configuration for a specific agent.
+    Requires: 'read:agents' permission.
+    """
+    try:
+        # Check if agent exists and load config
+        try:
+            agent_config = load_agent_config(agent_name)
+            if not agent_config:
+                raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+        
+        # Convert config to YAML string
+        yaml_content = yaml.dump(agent_config, default_flow_style=False, sort_keys=False)
+        
+        return Response(
+            content=yaml_content,
+            media_type="text/yaml",
+            status_code=200
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get YAML for agent '{agent_name}': {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve YAML for agent '{agent_name}': {str(e)}"
+        )
+
+
+@router.get("/{agent_name}/logs")
+async def get_agent_logs(
+    agent_name: str,
+    lines: int = Query(100, ge=1, le=1000, description="Number of log lines to retrieve"),
+    current_user: User = Depends(PermissionChecker(["read:agents"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get logs for a specific agent.
+    Requires: 'read:agents' permission.
+    """
+    try:
+        # Check if agent exists
+        try:
+            agent_config = load_agent_config(agent_name)
+            if not agent_config:
+                raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+        
+        # Try to get logs from various sources
+        logs_content = ""
+        
+        # 1. Try to get logs from agent's log file if it exists
+        log_file_path = f"logs/{agent_name}.log"
+        if os.path.exists(log_file_path):
+            try:
+                with open(log_file_path, 'r', encoding='utf-8') as f:
+                    all_lines = f.readlines()
+                    recent_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+                    logs_content = ''.join(recent_lines)
+            except Exception as e:
+                logger.warning(f"Failed to read agent log file: {e}")
+        
+        # 2. If no agent-specific logs, try to get from main application logs
+        if not logs_content:
+            main_log_path = "logs/ragnetic_app.log"
+            if os.path.exists(main_log_path):
+                try:
+                    with open(main_log_path, 'r', encoding='utf-8') as f:
+                        all_lines = f.readlines()
+                        # Filter for agent-related logs
+                        agent_lines = [line for line in all_lines if agent_name.lower() in line.lower()]
+                        recent_lines = agent_lines[-lines:] if len(agent_lines) > lines else agent_lines
+                        logs_content = ''.join(recent_lines)
+                except Exception as e:
+                    logger.warning(f"Failed to read main log file: {e}")
+        
+        # 3. If still no logs, return empty state
+        if not logs_content.strip():
+            return Response(
+                content="No logs available for this agent yet.",
+                media_type="text/plain",
+                status_code=200
+            )
+        
+        return Response(
+            content=logs_content,
+            media_type="text/plain",
+            status_code=200
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get logs for agent '{agent_name}': {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve logs for agent '{agent_name}': {str(e)}"
         )

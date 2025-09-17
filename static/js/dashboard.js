@@ -298,7 +298,8 @@ class Dashboard {
     }
 
     updateAgentStatus(status) {
-        const statusText = status.actual_status || 'unknown';
+        // Handle both string and object status
+        const statusText = typeof status === 'string' ? status : (status.actual_status || 'unknown');
         const formattedStatus = statusText.charAt(0).toUpperCase() + statusText.slice(1);
         
         document.getElementById('agent-status-text').textContent = formattedStatus;
@@ -306,12 +307,15 @@ class Dashboard {
         
         // Update status pill
         const statusPill = document.getElementById('agent-detail-status');
-        statusPill.className = `status-pill ${statusText}`;
+        statusPill.className = 'status-pill';
+        statusPill.classList.add(`status-${statusText}`);
         
-        // Update system status
-        document.getElementById('agent-db-status').textContent = status.database_status || 'Unknown';
-        document.getElementById('agent-vector-status').textContent = status.vectorstore_exists ? 'Ready' : 'Not Initialized';
-        document.getElementById('agent-offline-status').textContent = status.offline_marker_exists ? 'Enabled' : 'Disabled';
+        // Update system status if status is an object
+        if (typeof status === 'object') {
+            document.getElementById('agent-db-status').textContent = status.database_status || 'Unknown';
+            document.getElementById('agent-vector-status').textContent = status.vectorstore_exists ? 'Ready' : 'Not Initialized';
+            document.getElementById('agent-offline-status').textContent = status.offline_marker_exists ? 'Enabled' : 'Disabled';
+        }
     }
 
     async loadAgentCostData(agentName) {
@@ -432,28 +436,39 @@ gpu:
 
     async loadAgentLogs(agentName) {
         try {
-            const response = await fetch(`/api/v1/agents/${agentName}/logs`, {
+            const response = await fetch(`/api/v1/agents/${agentName}/logs?lines=200`, {
                 headers: { 'X-API-Key': this.getApiKey() }
             });
             
             if (response.ok) {
                 const logs = await response.text();
                 this.displayAgentLogs(logs);
-            } else {
+            } else if (response.status === 404) {
                 document.getElementById('agent-logs-content').innerHTML = `
                     <div class="empty-logs">
+                        <div class="empty-icon">LOG</div>
                         <span class="hint">No logs available for this agent yet.</span>
+                        <p class="empty-description">Logs will appear here once the agent starts processing requests.</p>
                         <div class="actions">
                             <button class="btn-text" onclick="refreshLogs()">Refresh</button>
-                            <button class="btn-text" onclick="downloadLogs()">Download</button>
+                        </div>
+                    </div>`;
+            } else {
+                document.getElementById('agent-logs-content').innerHTML = `
+                    <div class="error-logs">
+                        <div class="error-icon">ERROR</div>
+                        <span>Failed to load logs. Please try again.</span>
+                        <div class="actions">
+                            <button class="btn-text" onclick="refreshLogs()">Retry</button>
                         </div>
                     </div>`;
             }
         } catch (error) {
-            console.log('Could not fetch logs:', error);
+            console.error('Could not fetch logs:', error);
             document.getElementById('agent-logs-content').innerHTML = `
                 <div class="error-logs">
-                    <span>Failed to load logs. Please try again.</span>
+                    <div class="error-icon">ERROR</div>
+                    <span>Failed to load logs. Please check your connection and try again.</span>
                     <div class="actions">
                         <button class="btn-text" onclick="refreshLogs()">Retry</button>
                     </div>
@@ -463,15 +478,31 @@ gpu:
 
     displayAgentLogs(logs) {
         const logsContent = document.getElementById('agent-logs-content');
+        
+        // Check if the response is the "no logs" message
+        if (logs.trim() === "No logs available for this agent yet.") {
+            logsContent.innerHTML = `
+                <div class="empty-logs">
+                    <div class="empty-icon">LOG</div>
+                    <span class="hint">No logs available for this agent yet.</span>
+                    <p class="empty-description">Logs will appear here once the agent starts processing requests.</p>
+                    <div class="actions">
+                        <button class="btn-text" onclick="refreshLogs()">Refresh</button>
+                    </div>
+                </div>`;
+            return;
+        }
+        
         const logLines = logs.split('\n').filter(line => line.trim());
         
         if (logLines.length === 0) {
             logsContent.innerHTML = `
                 <div class="empty-logs">
+                    <div class="empty-icon">LOG</div>
                     <span class="hint">No logs available for this agent yet.</span>
+                    <p class="empty-description">Logs will appear here once the agent starts processing requests.</p>
                     <div class="actions">
                         <button class="btn-text" onclick="refreshLogs()">Refresh</button>
-                        <button class="btn-text" onclick="downloadLogs()">Download</button>
                     </div>
                 </div>`;
             return;
@@ -499,9 +530,9 @@ gpu:
             }
             
             // Add log level indicator
-            const levelIndicator = logClass === 'error' ? '❌' : 
-                                 logClass === 'warning' ? '⚠️' : 
-                                 logClass === 'info' ? 'ℹ️' : '📝';
+            const levelIndicator = logClass === 'error' ? 'ERROR' : 
+                                 logClass === 'warning' ? 'WARN' : 
+                                 logClass === 'info' ? 'INFO' : 'LOG';
             
             return `<div class="log-entry ${logClass}" data-timestamp="${timestamp}">
                 <span class="log-level">${levelIndicator}</span>
@@ -564,7 +595,7 @@ gpu:
     }
 
     // Update agent status with enhanced visual feedback
-    updateAgentStatus(status) {
+    updateAgentStatusEnhanced(status) {
         const statusPill = document.getElementById('agent-detail-status');
         const statusText = document.getElementById('agent-status-text');
         const statusIndicator = document.getElementById('agent-status-indicator');

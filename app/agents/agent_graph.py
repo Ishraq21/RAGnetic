@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from transformers import AutoTokenizer, pipeline
 
 from app.schemas.agent import AgentConfig
+from app.core.structured_logging import get_agent_logger
 
 # LangChain's generic chat model initializer
 from langchain.chat_models import init_chat_model
@@ -100,17 +101,26 @@ async def call_model(state: AgentState, config: RunnableConfig):
         thread_id = config['configurable'].get("thread_id")
         request_id = config['configurable'].get("request_id") or state["request_id"]
         agent_name_from_config = config['configurable'].get("agent_name", agent_config.name)
+        
+        # Set up agent-specific logger
+        agent_logger = get_agent_logger(agent_name_from_config)
 
         temp_document_ids = state.get("temp_document_ids", [])
         if temp_document_ids:
             logger.info(f"[{request_id}] Found {len(temp_document_ids)} temporary documents for retrieval.")
+            agent_logger.info(f"[{request_id}] Found {len(temp_document_ids)} temporary documents for retrieval.")
 
         logger.debug(f"[call_model] Session ID from config: {session_id}")
         logger.debug(f"[call_model] Request ID from config/state: {request_id}")
         logger.debug(f"[call_model] Agent Name from config/state: {agent_name_from_config}")
+        
+        # Log to agent-specific logger with production-grade information
+        agent_logger.info(f"REQUEST_START - ID: {request_id} | User: {user_id} | Session: {session_id} | Thread: {thread_id} | Agent: {agent_name_from_config}")
+        agent_logger.info(f"CONFIG - Model: {agent_config.llm_model} | Tools: {agent_config.tools} | Temperature: {getattr(agent_config, 'temperature', 'N/A')}")
 
         if session_id is None:
             logger.warning(f"[call_model] Session ID is None for request {request_id}. Metrics will be unlinked.")
+            agent_logger.warning(f"Session ID is None for request {request_id}. Metrics will be unlinked.")
 
         if not messages:
             logger.error("State has no messages. Cannot proceed.")
@@ -122,9 +132,12 @@ async def call_model(state: AgentState, config: RunnableConfig):
 
         model_name = agent_config.llm_model
         logger.info(f"Processing query for agent '{agent_name_from_config}' using model '{model_name}'.")
+        agent_logger.info(f"QUERY_INPUT - Length: {len(query)} chars | Preview: '{query[:100]}...' | Model: {model_name}")
+        agent_logger.info(f"CONTEXT - History messages: {len(history)} | Total messages: {len(messages)}")
 
         if "search_engine" in agent_config.tools:
             logger.info(f"Agent '{agent_name_from_config}' has the 'search_engine' tool. Invoking it directly.")
+            agent_logger.info("TOOL_SELECTION - Using search_engine tool for query processing")
             try:
                 # 1. Instantiate the SearchTool with the agent's configuration.
                 search_tool = SearchTool(agent_config=agent_config)
@@ -140,10 +153,12 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 #    prompting and LLM call, as the tool has already generated the answer.
                 state.update({"messages": [final_ai_message]})
                 logger.info("Search tool execution complete. Returning response directly.")
+                agent_logger.info(f"TOOL_SUCCESS - Search tool completed | Response length: {len(search_response_content)} chars | Processing time: {time.perf_counter() - start_time:.2f}s")
                 return state
 
             except Exception as e:
                 logger.error(f"Error during explicit 'search_engine' tool call: {e}", exc_info=True)
+                agent_logger.error(f"TOOL_ERROR - Search tool failed | Error: {e} | Processing time: {time.perf_counter() - start_time:.2f}s")
                 error_message = AIMessage(content=f"I tried to use the search tool but encountered an error: {e}")
                 state.update({"messages": [error_message]})
                 return state
@@ -151,6 +166,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
         retrieved_docs_str = ""
         retrieved_chunk_ids = []
         retrieved_docs = []
+        
+        # Log retrieval phase start
+        agent_logger.info(f"RETRIEVAL_START - Query: '{query[:50]}...' | Agent: {agent_name_from_config}")
 
         embedding_model_name = agent_config.embedding_model
 
@@ -172,6 +190,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
             except Exception as e:
                 logger.error(f"Error during document retrieval: {e}", exc_info=True)
         retrieval_time = time.perf_counter() - t0
+        
+        # Log retrieval results
+        agent_logger.info(f"RETRIEVAL_COMPLETE - Documents found: {len(retrieved_docs)} | Time: {retrieval_time:.2f}s | Chunks: {len(retrieved_chunk_ids)}")
 
         # --- 2. Source Formatting for Prompt ---
         source_map: Dict[int, Dict[str, Any]] = {}
@@ -387,6 +408,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
 
         model_with_tools = final_llm_model.bind_tools(tools)
         logger.info("Invoking the LLM (sync pipeline wrapped in thread)…")
+        
+        # Log generation phase start
+        agent_logger.info(f"GENERATION_START - Model: {model_name} | Tools: {len(tools)} | Prompt length: {len(str(prompt_with_history))} chars")
 
         t1 = time.perf_counter()
         try:
@@ -402,6 +426,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 raise e
         generation_time = time.perf_counter() - t1
         logger.info("Model invocation successful.")
+        
+        # Log generation completion
+        agent_logger.info(f"GENERATION_COMPLETE - Time: {generation_time:.2f}s | Response length: {len(response.content) if hasattr(response, 'content') else 'N/A'} chars")
 
         logger.debug(f"[call_model] Raw LLM response: {response}")
         logger.debug(f"[call_model] Raw LLM response metadata: {response.response_metadata}")
@@ -549,10 +576,21 @@ async def call_model(state: AgentState, config: RunnableConfig):
             "Agent request metrics",
             extra={'extra_data': log_metrics_data}
         )
+        
+        # Log final response to agent-specific logger with production-grade metrics
+        final_message = state.get('messages', [])[-1] if state.get('messages') else None
+        if final_message and hasattr(final_message, 'content'):
+            total_time = time.perf_counter() - start_time
+            agent_logger.info(f"RESPONSE_SUCCESS - Length: {len(final_message.content)} chars | Total time: {total_time:.2f}s | Tokens: {prompt_tokens + completion_tokens} | Cost: ${total_estimated_cost_usd:.4f}")
+            agent_logger.info(f"RESPONSE_PREVIEW - {final_message.content[:200]}...")
+            agent_logger.info(f"REQUEST_COMPLETE - ID: {request_id} | Status: SUCCESS | Duration: {total_time:.2f}s")
 
         return state
     except Exception as e:
         logger.critical(f"A critical error occurred in the 'call_model' node: {e}", exc_info=True)
+        total_time = time.perf_counter() - start_time
+        agent_logger.error(f"REQUEST_FAILED - ID: {request_id} | Error: {e} | Duration: {total_time:.2f}s")
+        agent_logger.error(f"ERROR_DETAILS - Critical error in call_model: {e}")
         error_message = AIMessage(content=f"I'm sorry, but I encountered an unexpected error. Error: {e}")
         state.update({"messages": [error_message]})
         return state
