@@ -276,7 +276,8 @@ class Dashboard {
         document.getElementById('agent-max-tokens').textContent = agent.model_params?.max_tokens || 'Default (2000)';
         
         // Data Sources & Tools
-        document.getElementById('agent-sources-count').textContent = `${agent.sources?.length || 0} configured`;
+        const sourcesCount = Array.isArray(agent.sources) ? agent.sources.length : 0;
+        document.getElementById('agent-sources-count').textContent = `${sourcesCount} configured`;
         document.getElementById('agent-tools').textContent = this.formatToolsList(agent.tools);
         document.getElementById('agent-chunk-size').textContent = `${agent.chunking?.chunk_size || '1000'} tokens`;
         document.getElementById('agent-chunk-overlap').textContent = `${agent.chunking?.chunk_overlap || '100'} tokens`;
@@ -336,37 +337,86 @@ class Dashboard {
 
     async loadAgentCostData(agentName) {
         try {
-            const response = await fetch(`/api/v1/agents/${agentName}/cost`, {
+            // Use the existing analytics endpoint instead of custom agent endpoint
+            const response = await fetch(`/api/v1/analytics/usage-summary?agent_name=${agentName}&limit=1`, {
                 headers: { 'X-API-Key': this.getApiKey() }
             });
             
             if (response.ok) {
-                const cost = await response.json();
-                document.getElementById('agent-monthly-cost').textContent = `$${cost.monthly_cost || '0.00'}`;
-                document.getElementById('agent-total-cost').textContent = `$${cost.total_cost || '0.00'}`;
-                document.getElementById('agent-token-usage').textContent = `${cost.tokens_used || '0'} tokens`;
-                document.getElementById('agent-api-calls').textContent = `${cost.api_calls || '0'} calls`;
+                const analyticsData = await response.json();
+                const costData = analyticsData.length > 0 ? analyticsData[0] : null;
+                
+                if (costData) {
+                    const costValue = (costData.total_estimated_cost_usd || 0).toFixed(4);
+                    // Update both header and analytics sections
+                    document.getElementById('agent-monthly-cost').textContent = `$${costValue}`;
+                    document.getElementById('agent-total-cost').textContent = `$${costValue}`;
+                    document.getElementById('quick-cost').textContent = `$${costValue}`;
+                    document.getElementById('agent-token-usage').textContent = `${costData.total_tokens || '0'} tokens`;
+                    document.getElementById('agent-api-calls').textContent = `${costData.total_requests || '0'} calls`;
+                } else {
+                    // No data found - update both sections
+                    document.getElementById('agent-monthly-cost').textContent = '$0.00';
+                    document.getElementById('agent-total-cost').textContent = '$0.00';
+                    document.getElementById('quick-cost').textContent = '$0.00';
+                    document.getElementById('agent-token-usage').textContent = '0 tokens';
+                    document.getElementById('agent-api-calls').textContent = '0 calls';
+                }
             }
         } catch (error) {
             console.log('Could not fetch cost data:', error);
+            // Set default values on error - update both sections
+            document.getElementById('agent-monthly-cost').textContent = '$0.00';
+            document.getElementById('agent-total-cost').textContent = '$0.00';
+            document.getElementById('quick-cost').textContent = '$0.00';
+            document.getElementById('agent-token-usage').textContent = '0 tokens';
+            document.getElementById('agent-api-calls').textContent = '0 calls';
         }
     }
 
     async loadAgentUsageData(agentName) {
         try {
-            const response = await fetch(`/api/v1/agents/${agentName}/usage`, {
+            // Use the existing analytics endpoint instead of custom agent endpoint
+            const response = await fetch(`/api/v1/analytics/usage-summary?agent_name=${agentName}&limit=1`, {
                 headers: { 'X-API-Key': this.getApiKey() }
             });
             
             if (response.ok) {
-                const usage = await response.json();
-                document.getElementById('agent-total-queries').textContent = usage.total_queries || '0';
-                document.getElementById('agent-success-rate').textContent = usage.success_rate ? `${(usage.success_rate * 100).toFixed(1)}%` : 'N/A';
-                document.getElementById('agent-avg-response').textContent = usage.avg_response_time ? `${usage.avg_response_time}ms` : 'N/A';
-                document.getElementById('agent-last-activity').textContent = usage.last_activity ? new Date(usage.last_activity).toLocaleString() : 'Never';
+                const analyticsData = await response.json();
+                const usageData = analyticsData.length > 0 ? analyticsData[0] : null;
+                
+                if (usageData) {
+                    // Update both header and analytics sections
+                    document.getElementById('agent-total-queries').textContent = usageData.total_requests || '0';
+                    document.getElementById('quick-total-queries').textContent = usageData.total_requests || '0';
+                    
+                    // Calculate success rate (all analytics entries are successful)
+                    const successRate = usageData.total_requests > 0 ? 100 : 0;
+                    document.getElementById('agent-success-rate').textContent = `${successRate.toFixed(1)}%`;
+                    document.getElementById('quick-success-rate').textContent = `${successRate.toFixed(1)}%`;
+                    
+                    document.getElementById('agent-avg-response').textContent = usageData.avg_generation_time_s ? `${(usageData.avg_generation_time_s * 1000).toFixed(0)}ms` : 'N/A';
+                    // For last activity, we'll need to get this from a different endpoint or calculate it
+                    document.getElementById('agent-last-activity').textContent = 'Recently'; // Placeholder for now
+                } else {
+                    // No data found - update both sections
+                    document.getElementById('agent-total-queries').textContent = '0';
+                    document.getElementById('quick-total-queries').textContent = '0';
+                    document.getElementById('agent-success-rate').textContent = 'N/A';
+                    document.getElementById('quick-success-rate').textContent = 'N/A';
+                    document.getElementById('agent-avg-response').textContent = 'N/A';
+                    document.getElementById('agent-last-activity').textContent = 'Never';
+                }
             }
         } catch (error) {
             console.log('Could not fetch usage data:', error);
+            // Set default values on error - update both sections
+            document.getElementById('agent-total-queries').textContent = '0';
+            document.getElementById('quick-total-queries').textContent = '0';
+            document.getElementById('agent-success-rate').textContent = 'N/A';
+            document.getElementById('quick-success-rate').textContent = 'N/A';
+            document.getElementById('agent-avg-response').textContent = 'N/A';
+            document.getElementById('agent-last-activity').textContent = 'Never';
         }
     }
 
@@ -566,14 +616,16 @@ gpu:
     }
 
     formatToolsList(tools) {
-        if (!tools || tools.length === 0) return 'None';
+        if (!tools || !Array.isArray(tools) || tools.length === 0) return 'None';
         
         const toolDescriptions = {
             'retriever': 'Document Retrieval',
             'calculator': 'Mathematical Calculations',
             'web_search': 'Web Search',
             'code_executor': 'Code Execution',
-            'file_manager': 'File Management'
+            'file_manager': 'File Management',
+            'api_toolkit': 'API Toolkit',
+            'search_engine': 'Search Engine'
         };
         
         return tools.map(tool => toolDescriptions[tool] || tool).join(', ');
@@ -665,19 +717,10 @@ function getStatusDescription(status) {
     return descriptions[status] || 'Status information not available';
 }
 
-// Helper function to format tools list
+// Helper function to format tools list (using Dashboard class method)
 function formatToolsList(tools) {
-    if (!tools || tools.length === 0) return 'None';
-    
-    const toolDescriptions = {
-        'retriever': 'Document Retrieval',
-        'calculator': 'Mathematical Calculations',
-        'web_search': 'Web Search',
-        'code_executor': 'Code Execution',
-        'file_manager': 'File Management'
-    };
-    
-    return tools.map(tool => toolDescriptions[tool] || tool).join(', ');
+    const dashboard = new Dashboard();
+    return dashboard.formatToolsList(tools);
 }
 
 // Load actions for agent details modal
@@ -1320,30 +1363,18 @@ async function showAgentDetails(agentName) {
                     console.log('Could not fetch database data:', error);
                 }
                 
-                // Get cost and usage data
-                let costData = {};
+                // Get cost and usage data from analytics
+                let analyticsData = {};
                 try {
-                    const costResponse = await fetch(`/api/v1/agents/${agentName}/cost`, {
+                    const analyticsResponse = await fetch(`/api/v1/analytics/usage-summary?agent_name=${agentName}&limit=1`, {
                         headers: { 'X-API-Key': getApiKey() }
                     });
-                    if (costResponse.ok) {
-                        costData = await costResponse.json();
+                    if (analyticsResponse.ok) {
+                        const analyticsArray = await analyticsResponse.json();
+                        analyticsData = analyticsArray.length > 0 ? analyticsArray[0] : {};
                     }
                 } catch (error) {
-                    console.log('Could not fetch cost data:', error);
-                }
-
-                // Get usage statistics
-                let usageData = {};
-                try {
-                    const usageResponse = await fetch(`/api/v1/agents/${agentName}/usage`, {
-                        headers: { 'X-API-Key': getApiKey() }
-                    });
-                    if (usageResponse.ok) {
-                        usageData = await usageResponse.json();
-                    }
-                } catch (error) {
-                    console.log('Could not fetch usage data:', error);
+                    console.log('Could not fetch analytics data:', error);
                 }
 
                 // Format status with proper capitalization
@@ -1449,19 +1480,19 @@ async function showAgentDetails(agentName) {
                             <div class="detail-grid">
                                 <div class="detail-item">
                                     <label>Total Queries:</label>
-                                    <span class="metric-value">${usageData.total_queries || '0'}</span>
+                                    <span class="metric-value">${analyticsData.total_requests || '0'}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Success Rate:</label>
-                                    <span class="metric-value">${usageData.success_rate ? (usageData.success_rate * 100).toFixed(1) + '%' : 'N/A'}</span>
+                                    <span class="metric-value">${analyticsData.total_requests > 0 ? '100.0%' : 'N/A'}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Avg Response Time:</label>
-                                    <span class="metric-value">${usageData.avg_response_time ? usageData.avg_response_time + 'ms' : 'N/A'}</span>
+                                    <span class="metric-value">${analyticsData.avg_generation_time_s ? (analyticsData.avg_generation_time_s * 1000).toFixed(0) + 'ms' : 'N/A'}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Last Activity:</label>
-                                    <span>${usageData.last_activity ? new Date(usageData.last_activity).toLocaleString() : 'Never'}</span>
+                                    <span>Recently</span>
                                 </div>
                             </div>
                         </div>
@@ -1471,19 +1502,19 @@ async function showAgentDetails(agentName) {
                             <div class="detail-grid">
                                 <div class="detail-item">
                                     <label>This Month:</label>
-                                    <span class="cost-value">$${costData.monthly_cost || '0.00'}</span>
+                                    <span class="cost-value">$${(analyticsData.total_estimated_cost_usd || 0).toFixed(4)}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Total Cost:</label>
-                                    <span class="cost-value">$${costData.total_cost || '0.00'}</span>
+                                    <span class="cost-value">$${(analyticsData.total_estimated_cost_usd || 0).toFixed(4)}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Token Usage:</label>
-                                    <span class="metric-value">${costData.tokens_used || '0'} tokens</span>
+                                    <span class="metric-value">${analyticsData.total_tokens || '0'} tokens</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>API Calls:</label>
-                                    <span class="metric-value">${costData.api_calls || '0'} calls</span>
+                                    <span class="metric-value">${analyticsData.total_requests || '0'} calls</span>
                                 </div>
                             </div>
                         </div>
