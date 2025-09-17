@@ -33,6 +33,70 @@ _APP_PATHS = get_path_settings()
 _BENCHMARK_DIR = _APP_PATHS["BENCHMARK_DIR"]
 
 
+async def get_usage_summary_for_agents(db: AsyncSession, agent_names: List[str]) -> List[Dict[str, Any]]:
+    """Get usage summary for specific agents."""
+    try:
+        # Initial join of conversation_metrics_table with chat_sessions_table and users_table
+        stmt = select(
+            func.sum(conversation_metrics_table.c.prompt_tokens).label("total_prompt_tokens"),
+            func.sum(conversation_metrics_table.c.completion_tokens).label("total_completion_tokens"),
+            func.sum(conversation_metrics_table.c.total_tokens).label("total_tokens"),
+            func.sum(conversation_metrics_table.c.estimated_cost_usd).label("total_llm_cost_usd"),
+            func.sum(conversation_metrics_table.c.embedding_cost_usd).label("total_embedding_cost_usd"),
+            func.avg(conversation_metrics_table.c.retrieval_time_s).label("avg_retrieval_time_s"),
+            func.avg(conversation_metrics_table.c.generation_time_s).label("avg_generation_time_s"),
+            func.count(conversation_metrics_table.c.request_id).label("total_requests"),
+            chat_sessions_table.c.agent_name,
+            conversation_metrics_table.c.llm_model,
+            users_table.c.user_id.label("user_id_alias")
+        ).outerjoin(
+            chat_sessions_table, conversation_metrics_table.c.session_id == chat_sessions_table.c.id
+        ).outerjoin(
+            users_table, chat_sessions_table.c.user_id == users_table.c.id
+        )
+
+        # Filter by agent names
+        stmt = stmt.where(chat_sessions_table.c.agent_name.in_(agent_names))
+
+        # Group by Agent Name, LLM Model, and User ID (username)
+        stmt = stmt.group_by(
+            chat_sessions_table.c.agent_name,
+            conversation_metrics_table.c.llm_model,
+            users_table.c.user_id
+        )
+
+        result = await db.execute(stmt)
+        rows = result.fetchall()
+
+        # Process results
+        analytics_data = []
+        for row in rows:
+            total_llm_cost = float(row.total_llm_cost_usd or 0)
+            total_embedding_cost = float(row.total_embedding_cost_usd or 0)
+            total_estimated_cost = total_llm_cost + total_embedding_cost
+
+            analytics_data.append({
+                "agent_name": row.agent_name,
+                "llm_model": row.llm_model,
+                "user_id": row.user_id_alias,
+                "total_prompt_tokens": int(row.total_prompt_tokens or 0),
+                "total_completion_tokens": int(row.total_completion_tokens or 0),
+                "total_tokens": int(row.total_tokens or 0),
+                "total_llm_cost_usd": total_llm_cost,
+                "total_embedding_cost_usd": total_embedding_cost,
+                "total_estimated_cost_usd": total_estimated_cost,
+                "avg_retrieval_time_s": float(row.avg_retrieval_time_s or 0),
+                "avg_generation_time_s": float(row.avg_generation_time_s or 0),
+                "total_requests": int(row.total_requests or 0)
+            })
+
+        return analytics_data
+
+    except Exception as e:
+        logger.error(f"Failed to get usage summary for agents: {e}")
+        return []
+
+
 
 
 class UsageSummaryEntry(BaseModel):

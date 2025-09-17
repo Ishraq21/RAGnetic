@@ -243,7 +243,7 @@ class AgentManager:
             return None
     
     async def get_all_agents_status(self, db: AsyncSession) -> List[Dict]:
-        """Get status for all agents."""
+        """Get status for all agents with real analytics data."""
         try:
             result = await db.execute(
                 select(agents_table)
@@ -251,12 +251,25 @@ class AgentManager:
             )
             agents = result.fetchall()
             
+            # Get analytics data for all agents
+            from app.api.analytics import get_usage_summary_for_agents
+            agent_names = [agent.name for agent in agents]
+            analytics_data = await get_usage_summary_for_agents(db, agent_names)
+            
+            # Create lookup by agent name - sum costs for agents with multiple entries
+            analytics_lookup = {}
+            for data in analytics_data:
+                agent_name = data['agent_name']
+                if agent_name not in analytics_lookup:
+                    analytics_lookup[agent_name] = 0.0
+                analytics_lookup[agent_name] += data['total_estimated_cost_usd']
+            
             return [
                 {
                     "name": agent.name,
                     "status": agent.status,
                     "created_at": agent.created_at,
-                    "total_cost": agent.total_cost,
+                    "total_cost": analytics_lookup.get(agent.name, 0.0),
                     "gpu_instance_id": agent.gpu_instance_id,
                     "display_name": agent.display_name,
                     "description": agent.description,
