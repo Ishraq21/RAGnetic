@@ -413,14 +413,35 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 async function handleCreateAgent() {
+    console.log('handleCreateAgent called');
     const form = document.getElementById('create-agent-form');
+    if (!form) {
+        console.error('Create form not found!');
+        showToast('Create form not found!', 'error');
+        return;
+    }
+    
     const formData = new FormData(form);
-    const sources = collectSources('#data-sources-container');
+    let sources = collectSources('#data-sources-container');
+    
+    // Validate required fields
+    const name = formData.get('name');
+    if (!name || name.trim() === '') {
+        showToast('Agent name is required', 'error');
+        return;
+    }
+    
+    // Handle file uploads first
+    const uploadedSources = await handleFileUploads(sources);
+    if (uploadedSources === null) {
+        return; // Error already shown
+    }
+    sources = uploadedSources;
     
     const agentData = {
-        name: formData.get('name'),
-        display_name: formData.get('display_name'),
-        description: formData.get('description'),
+        name: name.trim(),
+        display_name: formData.get('display_name') || name.trim(),
+        description: formData.get('description') || '',
         persona_prompt: formData.get('persona_prompt') || 'You are a helpful assistant.',
         llm_model: formData.get('llm_model') || 'gpt-4o-mini',
         embedding_model: formData.get('embedding_model') || 'text-embedding-3-small',
@@ -435,6 +456,8 @@ async function handleCreateAgent() {
         }
     };
     
+    console.log('Agent data to submit:', agentData);
+    
     try {
         const response = await fetch('/api/v1/agents', {
             method: 'POST',
@@ -444,6 +467,8 @@ async function handleCreateAgent() {
             },
             body: JSON.stringify(agentData)
         });
+        
+        console.log('Response status:', response.status);
         
         if (response.ok) {
             const result = await response.json();
@@ -455,14 +480,102 @@ async function handleCreateAgent() {
                 window.loadAgentsInline();
             }
         } else {
-            const error = await response.json().catch(() => ({}));
-            console.error('Create failed:', error);
-            showToast('Failed to create agent: ' + (error.detail || 'Unknown error'), 'error');
+            const errorText = await response.text();
+            console.error('Create failed:', response.status, errorText);
+            let errorMessage = 'Unknown error';
+            try {
+                const error = JSON.parse(errorText);
+                errorMessage = error.detail || error.message || errorText;
+            } catch (e) {
+                errorMessage = errorText;
+            }
+            showToast('Failed to create agent: ' + errorMessage, 'error');
         }
     } catch (error) {
         console.error('Create error:', error);
         showToast('Failed to create agent: ' + error.message, 'error');
     }
+}
+
+// Handle file uploads and return processed sources
+async function handleFileUploads(sources) {
+    const processedSources = [];
+    
+    for (const source of sources) {
+        if (source && source._isFileUpload) {
+            // Find the file input for this source
+            const container = document.querySelector(`[data-source-id]`);
+            if (!container) continue;
+            
+            const fileInput = container.querySelector('input[type="file"]');
+            if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+                showToast('Please select files to upload', 'error');
+                return null;
+            }
+            
+            // Upload files
+            const uploadedPaths = await uploadFiles(fileInput.files);
+            if (uploadedPaths === null) {
+                return null; // Error already shown
+            }
+            
+            // Create local sources for uploaded files
+            for (const path of uploadedPaths) {
+                processedSources.push({
+                    type: 'local',
+                    path: path,
+                    max_depth: source.max_depth,
+                    file_types: source.file_types,
+                    headers: null,
+                    params: null,
+                    method: 'GET',
+                    payload: null,
+                    json_pointer: null
+                });
+            }
+        } else if (source) {
+            processedSources.push(source);
+        }
+    }
+    
+    return processedSources;
+}
+
+// Upload files to server and return paths
+async function uploadFiles(files) {
+    const uploadedPaths = [];
+    
+    for (const file of files) {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        try {
+            const response = await fetch('/api/v1/agents/upload-file', {
+                method: 'POST',
+                headers: {
+                    'X-API-Key': getApiKey()
+                },
+                body: formData
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                uploadedPaths.push(result.file_path);
+                console.log('File uploaded:', result.file_path);
+            } else {
+                const error = await response.text();
+                console.error('Upload failed:', error);
+                showToast(`Failed to upload ${file.name}: ${error}`, 'error');
+                return null;
+            }
+        } catch (error) {
+            console.error('Upload error:', error);
+            showToast(`Failed to upload ${file.name}: ${error.message}`, 'error');
+            return null;
+        }
+    }
+    
+    return uploadedPaths;
 }
 
 async function handleEditAgent() {
@@ -558,9 +671,17 @@ function collectSources(containerSelector) {
                 source.path = block.querySelector(`#ds-path-${sourceId}`)?.value || null;
                 break;
                 
-            case 'local_upload':
-                // Handle file uploads - this would need to be processed separately
-                source.path = 'uploaded_files'; // Placeholder for uploaded files
+            case 'file_upload':
+                // For file uploads, we'll handle them separately and create local sources
+                const fileInput = block.querySelector(`#ds-upload-${sourceId}`);
+                if (fileInput && fileInput.files && fileInput.files.length > 0) {
+                    // This will be handled by the upload process
+                    source.type = 'local'; // Convert to local after upload
+                    source.path = 'uploaded_files'; // Placeholder
+                    source._isFileUpload = true; // Flag for special handling
+                } else {
+                    return null; // Skip if no files selected
+                }
                 break;
                 
             case 'url':
@@ -620,14 +741,6 @@ function collectSources(containerSelector) {
                 }
                 break;
                 
-            case 'notebook':
-            case 'parquet':
-            case 'csv':
-            case 'pdf':
-            case 'txt':
-            case 'docx':
-                source.path = block.querySelector(`#ds-file-path-${sourceId}`)?.value || null;
-                break;
         }
         
         return source;
@@ -653,9 +766,6 @@ function editAgent(agentName) {
     showEditAgentModal(agentName);
 }
 
-function confirmDeleteAgent() {
-    console.log('Confirm delete agent');
-}
 
 async function showAgentDetails(agentName) {
     console.log('Show agent details modal for:', agentName);
@@ -883,19 +993,13 @@ function createDataSourceHTML(id, mode = 'create') {
                     <select id="ds-type-${id}" name="source_type" class="ds-type" onchange="updateSourceFields('${id}')">
                         <option value="">Select source type...</option>
                         <option value="local">Local File Path (server)</option>
-                        <option value="local_upload">File Upload (browser)</option>
+                        <option value="file_upload">File Upload (browser)</option>
                         <option value="url">Web URL</option>
                         <option value="web_crawler">Web Crawler</option>
                         <option value="code_repository">Code Repository (Git)</option>
                         <option value="db">Database (SQL)</option>
                         <option value="gdoc">Google Docs</option>
                         <option value="api">API Endpoint</option>
-                        <option value="notebook">Jupyter Notebook</option>
-                        <option value="parquet">Parquet File</option>
-                        <option value="csv">CSV File</option>
-                        <option value="pdf">PDF Document</option>
-                        <option value="txt">Text File</option>
-                        <option value="docx">Word Document</option>
                     </select>
                 </div>
                 
@@ -937,12 +1041,12 @@ function updateSourceFields(sourceId) {
             `;
             break;
             
-        case 'local_upload':
+        case 'file_upload':
             fieldsHTML = `
                 <div class="form-group">
                     <label for="ds-upload-${sourceId}">Upload Files *</label>
-                    <input type="file" id="ds-upload-${sourceId}" class="ds-upload" multiple accept=".pdf,.docx,.txt,.csv,.json,.yaml,.yml,.md,.html,.ipynb,.log,.tf,.hcl" />
-                    <small>Select one or more files to upload (PDF, DOCX, TXT, CSV, JSON, YAML, MD, HTML, Jupyter, Log, Terraform, HCL)</small>
+                    <input type="file" id="ds-upload-${sourceId}" class="ds-upload" multiple accept="*/*" />
+                    <small>Select one or more files to upload (supports all file types: PDF, DOCX, TXT, CSV, JSON, YAML, MD, HTML, Jupyter, Log, Terraform, HCL, and more)</small>
                 </div>
             `;
             break;
@@ -1048,20 +1152,6 @@ function updateSourceFields(sourceId) {
             `;
             break;
             
-        case 'notebook':
-        case 'parquet':
-        case 'csv':
-        case 'pdf':
-        case 'txt':
-        case 'docx':
-            fieldsHTML = `
-                <div class="form-group">
-                    <label for="ds-file-path-${sourceId}">File Path *</label>
-                    <input type="text" id="ds-file-path-${sourceId}" class="ds-file-path" placeholder="/path/to/file" required />
-                    <small>Server path to the specific file</small>
-                </div>
-            `;
-            break;
             
         default:
             fieldsHTML = `
@@ -1171,15 +1261,6 @@ function populateDataSourceFields(sourceId, sourceData) {
                     }
                     break;
                     
-                case 'notebook':
-                case 'parquet':
-                case 'csv':
-                case 'pdf':
-                case 'txt':
-                case 'docx':
-                    const filePathInput = document.getElementById(`ds-file-path-${sourceId}`);
-                    if (filePathInput && sourceData.path) filePathInput.value = sourceData.path;
-                    break;
             }
         }, 200);
     }
