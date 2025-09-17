@@ -363,6 +363,10 @@ class AgentConfig(BaseModel):
     display_name: Optional[str] = None
     description: Optional[str] = None
     persona_prompt: str = "You are a helpful assistant."
+    
+    # Database timestamps
+    created_at: Optional[datetime] = Field(None, description="When the agent was created.")
+    updated_at: Optional[datetime] = Field(None, description="When the agent was last updated.")
 
     execution_prompt: Optional[str] = Field(
         None,

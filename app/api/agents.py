@@ -364,7 +364,8 @@ async def get_all_agents_status_alias(
 async def get_agent_by_name(
         agent_name: str,
         # Anyone can read agents, so basic authentication (API key exists) is enough
-        current_user: User = Depends(PermissionChecker(["read:agents"]))
+        current_user: User = Depends(PermissionChecker(["read:agents"])),
+        db: AsyncSession = Depends(get_db)
 ):
     """
     Retrieves the full configuration for a single agent.
@@ -372,6 +373,19 @@ async def get_agent_by_name(
     """
     try:
         agent_config = load_agent_config(agent_name)
+        
+        # Get database timestamps
+        agent_result = await db.execute(
+            select(agents_table.c.created_at, agents_table.c.updated_at)
+            .where(agents_table.c.name == agent_name)
+        )
+        agent_row = agent_result.fetchone()
+        
+        if agent_row:
+            # Add database timestamps to the config
+            agent_config.created_at = agent_row.created_at
+            agent_config.updated_at = agent_row.updated_at
+        
         return agent_config
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
@@ -1193,89 +1207,10 @@ async def get_filter_options(
         )
 
 
-@router.get("/{agent_name}/cost")
-async def get_agent_cost(
-    agent_name: str,
-    current_user: User = Depends(PermissionChecker(["read:agents"])),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get cost information for a specific agent.
-    Requires: 'read:agents' permission.
-    """
-    try:
-        # Check if agent exists
-        try:
-            agent_config = load_agent_config(agent_name)
-            if not agent_config:
-                raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
-        
-        # For now, return mock cost data
-        # TODO: Implement actual cost tracking
-        cost_data = {
-            "total_cost": 0.0,
-            "tokens_used": 0,
-            "api_calls": 0,
-            "last_updated": datetime.now().isoformat(),
-            "currency": "USD"
-        }
-        
-        return cost_data
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get cost for agent '{agent_name}': {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve cost for agent '{agent_name}': {str(e)}"
-        )
+# Cost data is now provided by the analytics endpoint: /api/v1/analytics/usage-summary
 
 
-@router.get("/{agent_name}/usage")
-async def get_agent_usage(
-    agent_name: str,
-    current_user: User = Depends(PermissionChecker(["read:agents"])),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get usage statistics for a specific agent.
-    Requires: 'read:agents' permission.
-    """
-    try:
-        # Check if agent exists
-        try:
-            agent_config = load_agent_config(agent_name)
-            if not agent_config:
-                raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
-        
-        # For now, return mock usage data
-        # TODO: Implement actual usage tracking
-        usage_data = {
-            "total_queries": 0,
-            "successful_queries": 0,
-            "failed_queries": 0,
-            "avg_response_time": 0.0,
-            "last_used": None,
-            "queries_today": 0,
-            "queries_this_week": 0,
-            "queries_this_month": 0
-        }
-        
-        return usage_data
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get usage for agent '{agent_name}': {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve usage for agent '{agent_name}': {str(e)}"
-        )
+# Usage data is now provided by the analytics endpoint: /api/v1/analytics/usage-summary
 
 
 @router.get("/{agent_name}/yaml")
