@@ -173,7 +173,7 @@
 .status-badge.status-blue {
     background-color: rgba(59, 130, 246, 0.1);
     color: var(--info-color);
-    border-color: rgba(59, 130, 246, 0.2);
+    border-color: var(--border-color);
 }
 
 .status-badge.status-orange {
@@ -2288,7 +2288,7 @@ body {
 .status-badge.llm {
     background: rgba(59, 130, 246, 0.1);
     color: var(--info-color);
-    border: 1px solid rgba(59, 130, 246, 0.2);
+    border: 1px solid var(--border-color);
 }
 
 .status-badge.completed,
@@ -5599,7 +5599,7 @@ input[type="range"]::-moz-range-thumb:hover {
 .model-status.running {
     background: rgba(59, 130, 246, 0.1);
     color: var(--info-color);
-    border: 1px solid rgba(59, 130, 246, 0.2);
+    border: 1px solid var(--border-color);
 }
 
 .model-status.failed {
@@ -7280,7 +7280,7 @@ body {
 .status-badge.ingesting {
     background: rgba(59, 130, 246, 0.1);
     color: #3b82f6;
-    border: 1px solid rgba(59, 130, 246, 0.2);
+    border: 1px solid var(--border-color);
 }
 
 .status-badge.idle {
@@ -8777,7 +8777,7 @@ body {
     gap: 0.25rem;
     padding: 0.5rem 0.75rem;
     background: rgba(59, 130, 246, 0.1);
-    border: 1px solid rgba(59, 130, 246, 0.2);
+    border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
@@ -8832,7 +8832,7 @@ body {
 .status-badge.info {
     background: rgba(59, 130, 246, 0.1);
     color: var(--info-color);
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    border: 1px solid var(--border-color);
 }
 
 .status-badge.unknown {
@@ -9909,13 +9909,17 @@ body {
 }
 
 .agent-detail-page .empty-logs .hint::before {
-    content: '💡 ';
+    content: 'INFO: ';
     margin-right: 0.25rem;
+    font-weight: 600;
+    color: var(--text-secondary);
 }
 
 .agent-detail-page .error-logs::before {
-    content: '⚠️ ';
+    content: 'ERROR: ';
     margin-right: 0.5rem;
+    font-weight: 600;
+    color: var(--error-color);
 }
 
 /* Consistent Metrics Styling */
@@ -10131,20 +10135,40 @@ body {
 /* Enhanced empty states */
 .agent-detail-page .empty-logs,
 .agent-detail-page .error-logs {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
     text-align: center;
-    padding: 2rem;
+    padding: 3rem 2rem;
     border-radius: var(--radius-md);
     margin: 1rem 0;
+    min-height: 200px;
 }
 
 .agent-detail-page .empty-logs {
-    background: rgba(16, 185, 129, 0.05);
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(16, 185, 129, 0.02) 100%);
     border: 1px solid rgba(16, 185, 129, 0.2);
     color: var(--success-color);
 }
 
 .agent-detail-page .error-logs {
-    background: rgba(239, 68, 68, 0.05);
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.05) 0%, rgba(239, 68, 68, 0.02) 100%);
     border: 1px solid rgba(239, 68, 68, 0.2);
     color: var(--error-color);
+}
+
+.agent-detail-page .empty-icon,
+.agent-detail-page .error-icon {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+    opacity: 0.8;
+}
+
+.agent-detail-page .empty-description {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    margin: 0.5rem 0 1.5rem 0;
+    max-width: 300px;
+    line-height: 1.5;
 }

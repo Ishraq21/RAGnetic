@@ -137,18 +137,27 @@ def get_logging_config(json_logs: bool = False, log_level: Optional[str] = None)
             "standard": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"},
             "json": {"()": "app.core.structured_logging.JSONFormatter"},
             "structured": {"format": "%(asctime)s %(levelname)s %(name)s [%(correlation_id)s] %(message)s"},
+            "agent": {"format": "%(asctime)s - %(levelname)s - %(message)s"},
         },
         "handlers": {
             "console": {
                 "class": "logging.StreamHandler",
                 "formatter": "standard",
                 "level": log_level,
+            },
+            "file": {
+                "class": "logging.handlers.RotatingFileHandler",
+                "filename": "logs/ragnetic_app.log",
+                "maxBytes": 10485760,  # 10MB
+                "backupCount": 5,
+                "formatter": "standard",
+                "level": log_level,
             }
         },
         "loggers": {
             # your app
-            "ragnetic": {"handlers": ["console"], "level": log_level, "propagate": False},
-            "app":      {"handlers": ["console"], "level": log_level, "propagate": False},
+            "ragnetic": {"handlers": ["console", "file"], "level": log_level, "propagate": False},
+            "app":      {"handlers": ["console", "file"], "level": log_level, "propagate": False},
 
             # uvicorn (enable access logs only if you DON'T pass --no-access-log)
             "uvicorn":        {"handlers": ["console"], "level": log_level, "propagate": False},
@@ -173,5 +182,63 @@ def get_logging_config(json_logs: bool = False, log_level: Optional[str] = None)
         log_config["handlers"]["console"]["formatter"] = "json"
 
     return log_config
+
+
+def setup_agent_logger(agent_name: str, log_level: str = "INFO") -> logging.Logger:
+    """
+    Set up a dedicated logger for a specific agent.
+    Creates agent-specific log files in logs/{agent_name}.log
+    """
+    import os
+    from logging.handlers import RotatingFileHandler
+    
+    # Ensure logs directory exists
+    os.makedirs("logs", exist_ok=True)
+    
+    # Create agent-specific logger
+    logger_name = f"agent.{agent_name}"
+    agent_logger = logging.getLogger(logger_name)
+    
+    # Clear any existing handlers to avoid duplicates
+    agent_logger.handlers.clear()
+    
+    # Create file handler for agent-specific logs
+    log_file = f"logs/{agent_name}.log"
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10485760,  # 10MB
+        backupCount=3,
+        encoding='utf-8'
+    )
+    
+    # Enhanced formatter with more production-grade information
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - [%(name)s] - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(getattr(logging, log_level.upper()))
+    
+    # Add handler to logger
+    agent_logger.addHandler(file_handler)
+    agent_logger.setLevel(getattr(logging, log_level.upper()))
+    agent_logger.propagate = False
+    
+    return agent_logger
+
+
+def get_agent_logger(agent_name: str) -> logging.Logger:
+    """
+    Get the logger for a specific agent.
+    Creates one if it doesn't exist.
+    """
+    logger_name = f"agent.{agent_name}"
+    agent_logger = logging.getLogger(logger_name)
+    
+    # If logger has no handlers, set it up
+    if not agent_logger.handlers:
+        return setup_agent_logger(agent_name)
+    
+    return agent_logger
 
 
