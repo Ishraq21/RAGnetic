@@ -8735,16 +8735,13 @@ body {
 }
 
 .model-badge {
-    background: linear-gradient(135deg, var(--accent-color), var(--accent-hover));
-    color: white;
-    border-color: var(--accent-color);
-    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+    background: var(--surface-color);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-.model-badge:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
-}
+/* Removed hover effects to prevent shaky behavior */
 
 .tech-badge {
     background: var(--surface-color);
@@ -8752,10 +8749,7 @@ body {
     color: var(--text-primary);
 }
 
-.tech-badge:hover {
-    border-color: var(--accent-color);
-    transform: translateY(-1px);
-}
+/* Removed hover effects to prevent shaky behavior */
 
 .sources-info {
     display: flex;
@@ -9178,17 +9172,13 @@ body {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    transition: all 0.2s ease;
     display: flex;
     flex-direction: column;
     min-height: 320px;
     height: 100%;
 }
 
-.detail-card:hover {
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-    transform: translateY(-1px);
-}
+/* Removed hover effects to prevent shaky behavior */
 
 .detail-card.full-width {
     grid-column: 1 / -1;
@@ -9551,11 +9541,7 @@ body {
     transition: opacity 0.3s ease;
 }
 
-.agent-detail-page .detail-card:hover {
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
-    transform: translateY(-2px);
-    border-color: var(--accent-color);
-}
+/* Removed hover effects to prevent shaky behavior */
 
 /* Enhanced card visual hierarchy */
 .agent-detail-page .detail-card:nth-child(1) {
@@ -9574,13 +9560,9 @@ body {
 .agent-detail-page .detail-card {
     margin-bottom: 0;
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-    transition: all 0.3s ease;
 }
 
-.agent-detail-page .detail-card:hover {
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
-    transform: translateY(-2px);
-}
+/* Removed hover effects to prevent shaky behavior */
 
 /* Perfect row alignment for cards */
 .agent-detail-left .detail-card,
@@ -9611,9 +9593,7 @@ body {
     gap: 2rem;
 }
 
-.agent-detail-page .detail-card:hover::before {
-    opacity: 1;
-}
+/* Removed hover effects to prevent shaky behavior */
 
 .agent-detail-page .card-header {
     padding: 1.5rem 2rem 1rem 2rem;
@@ -9646,9 +9626,7 @@ body {
     transition: opacity 0.3s ease;
 }
 
-.agent-detail-page .detail-card:hover .card-icon {
-    opacity: 1;
-}
+/* Removed hover effects to prevent shaky behavior */
 
 .agent-detail-page .card-actions { 
     gap: 0.5rem; 
@@ -9836,49 +9814,52 @@ body {
 .agent-detail-page .logs-container {
     max-height: 500px;
     overflow-y: auto;
-    background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
-    border: 1px solid #30363d;
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .agent-detail-page .logs-content {
     background: transparent;
-    color: #c9d1d9;
+    color: var(--text-primary);
     padding: 1rem;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
 }
 
 .agent-detail-page .log-entry {
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.5rem;
     padding: 0.75rem 1rem;
     border-radius: var(--radius-sm);
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--card-background);
     border-left: 3px solid var(--accent-color);
     font-size: var(--font-size-sm);
     line-height: 1.5;
-    transition: all 0.2s ease;
     position: relative;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
-.agent-detail-page .log-entry:hover {
-    background: rgba(255, 255, 255, 0.05);
-    transform: translateX(4px);
-}
+/* Removed hover effects to prevent shaky behavior */
 
 .agent-detail-page .log-entry.error {
-    border-left-color: #f85149;
-    background: rgba(248, 81, 73, 0.1);
-    color: #f85149;
+    border-left-color: var(--error-color);
+    background: rgba(239, 68, 68, 0.05);
+    color: var(--error-color);
 }
 
 .agent-detail-page .log-entry.warning {
-    border-left-color: #d29922;
-    background: rgba(210, 153, 34, 0.1);
-    color: #d29922;
+    border-left-color: var(--warning-color);
+    background: rgba(245, 158, 11, 0.05);
+    color: var(--warning-color);
 }
 
 .agent-detail-page .log-entry.info {
-    border-left-color: #58a6ff;
-    background: rgba(88, 166, 255, 0.1);
-    color: #58a6ff;
+    border-left-color: var(--info-color);
+    background: rgba(59, 130, 246, 0.05);
+    color: var(--info-color);
 }
 
 .agent-detail-page .log-entry::before {
@@ -10129,14 +10110,7 @@ body {
 }
 
 /* Improved visual feedback */
-.agent-detail-page .info-item:hover,
-.agent-detail-page .metric-item:hover,
-.agent-detail-page .status-item:hover {
-    background: var(--surface-color);
-    border-radius: var(--radius-sm);
-    padding: 0.5rem;
-    margin: -0.5rem;
-}
+/* Removed hover effects to prevent shaky behavior */
 
 /* Card content animations */
 .agent-detail-page .card-content {
