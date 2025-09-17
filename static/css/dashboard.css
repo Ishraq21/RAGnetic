@@ -8956,6 +8956,23 @@ body {
     border: 3px solid var(--card-background);
     border-radius: 50%;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    transition: all 0.3s ease;
+}
+
+/* Status indicator variations - based on backend actual_status */
+.status-indicator.status-online {
+    background: var(--success-color);
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.3);
+}
+
+.status-indicator.status-offline {
+    background: var(--text-muted);
+    box-shadow: 0 0 0 2px rgba(102, 102, 102, 0.3);
+}
+
+.status-indicator.status-unknown {
+    background: var(--text-muted);
+    box-shadow: 0 0 0 2px rgba(102, 102, 102, 0.3);
 }
 
 .agent-basic-info {

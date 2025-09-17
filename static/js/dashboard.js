@@ -310,6 +310,22 @@ class Dashboard {
         statusPill.className = 'status-pill';
         statusPill.classList.add(`status-${statusText}`);
         
+        // Update avatar status indicator based on backend actual_status
+        const statusIndicator = document.getElementById('agent-status-indicator');
+        if (statusIndicator) {
+            // Remove all existing status classes
+            statusIndicator.className = 'status-indicator';
+            
+            // Use the actual_status from backend (deployed/stopped)
+            if (statusText === 'deployed') {
+                statusIndicator.classList.add('status-online');
+            } else if (statusText === 'stopped') {
+                statusIndicator.classList.add('status-offline');
+            } else {
+                statusIndicator.classList.add('status-unknown');
+            }
+        }
+        
         // Update system status if status is an object
         if (typeof status === 'object') {
             document.getElementById('agent-db-status').textContent = status.database_status || 'Unknown';
