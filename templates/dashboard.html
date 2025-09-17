@@ -401,6 +401,9 @@ function navigateToDeployment() {
 let currentAgentView = 'table';
 let currentSort = { column: 'name', direction: 'asc' };
 let agents = [];
+let currentPage = 1;
+let itemsPerPage = 10;
+let totalPages = 1;
 
 // Initialize agent tab
 function initializeAgentTab() {
@@ -453,6 +456,13 @@ function setupEventListeners() {
     sortableHeaders.forEach(header => {
         header.addEventListener('click', () => handleSort(header.dataset.sort));
     });
+    
+    // Pagination functionality
+    const prevBtn = document.getElementById('prev-page');
+    const nextBtn = document.getElementById('next-page');
+    
+    if (prevBtn) prevBtn.addEventListener('click', goToPreviousPage);
+    if (nextBtn) nextBtn.addEventListener('click', goToNextPage);
 }
 
 // Load filter options from API
@@ -575,6 +585,9 @@ async function loadAgentsInline() {
         }));
         
         console.log(' Finished preparing agents data, rendering agents...');
+        // Reset pagination when loading new data
+        currentPage = 1;
+        
         if (agents.length === 0) {
             console.log(' No agents found, showing empty state');
             showEmptyState();
@@ -611,9 +624,16 @@ function renderTableView() {
         console.error(' agent-table-body not found!');
         return;
     }
+    
+    // Calculate pagination
+    totalPages = Math.ceil(agents.length / itemsPerPage);
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    const paginatedAgents = agents.slice(startIndex, endIndex);
+    
     tableBody.innerHTML = '';
     
-    agents.forEach(agent => {
+    paginatedAgents.forEach(agent => {
         console.log(' Creating table row for agent:', agent.name);
         const row = createAgentTableRow(agent);
         tableBody.appendChild(row);
@@ -621,6 +641,10 @@ function renderTableView() {
         // Load actions asynchronously for table view
         loadTableAgentActions(agent.name);
     });
+    
+    // Update pagination controls
+    updatePaginationControls();
+    
     console.log(' Table view rendered');
 }
 
@@ -669,12 +693,6 @@ function createAgentTableRow(agent) {
         </td>
         <td>
             <div class="embedding-name">${agent.embedding || 'text-embedding-3-small'}</div>
-        </td>
-        <td>
-            <div class="deployment-badge ${agent.deployment}">${agent.deployment}</div>
-        </td>
-        <td>
-            <div class="last-run">${formatLastRun(agent.lastRun)}</div>
         </td>
         <td>
             <div class="created-at">${createdAt}</div>
@@ -995,6 +1013,9 @@ async function loadAgentActions(agentName) {
             const status = statusData.actual_status;
             const actions = getAgentActionsSync(status, agentName);
             actionsElement.innerHTML = actions;
+            
+            // Update the status in grid view as well
+            updateAgentStatusInGrid(agentName, status);
         } else {
             actionsElement.innerHTML = '<span class="error">Error loading status</span>';
         }
@@ -1019,6 +1040,9 @@ async function loadTableAgentActions(agentName) {
             const status = statusData.actual_status;
             const actions = getAgentActionsSync(status, agentName);
             actionsElement.innerHTML = actions;
+            
+            // Update the status column to match the actual status
+            updateAgentStatusInTable(agentName, status);
         } else {
             actionsElement.innerHTML = '<span class="error">Error loading status</span>';
         }
@@ -1171,6 +1195,50 @@ function getAgentActionsSync(status, agentName) {
     return actions.join('');
 }
 
+// Update agent status in table to match actual status
+function updateAgentStatusInTable(agentName, actualStatus) {
+    // Find the agent row in the table
+    const tableBody = document.getElementById('agent-table-body');
+    if (!tableBody) return;
+    
+    const rows = tableBody.querySelectorAll('tr');
+    for (const row of rows) {
+        const agentNameElement = row.querySelector('.agent-name');
+        if (agentNameElement && agentNameElement.textContent === agentName) {
+            // Find the status pill in this row
+            const statusPill = row.querySelector('.status-pill');
+            if (statusPill) {
+                // Update the status class and text
+                statusPill.className = `status-pill ${actualStatus}`;
+                statusPill.textContent = actualStatus;
+            }
+            break;
+        }
+    }
+}
+
+// Update agent status in grid to match actual status
+function updateAgentStatusInGrid(agentName, actualStatus) {
+    // Find the agent card in the grid
+    const cardsGrid = document.getElementById('agent-cards-grid');
+    if (!cardsGrid) return;
+    
+    const cards = cardsGrid.querySelectorAll('.agent-card');
+    for (const card of cards) {
+        const agentNameElement = card.querySelector('.agent-name');
+        if (agentNameElement && agentNameElement.textContent === agentName) {
+            // Find the status pill in this card
+            const statusPill = card.querySelector('.status-pill');
+            if (statusPill) {
+                // Update the status class and text
+                statusPill.className = `status-pill ${actualStatus}`;
+                statusPill.textContent = actualStatus;
+            }
+            break;
+        }
+    }
+}
+
 // Toggle between table and grid view
 function toggleAgentView(view) {
     currentAgentView = view;
@@ -1204,7 +1272,70 @@ function handleSearch(event) {
 // Handle filter changes
 function handleFilterChange() {
     console.log('Filter changed, reloading agents...');
+    currentPage = 1; // Reset to first page when filtering
     loadAgentsInline();
+}
+
+// Update pagination controls
+function updatePaginationControls() {
+    const paginationInfo = document.getElementById('agent-pagination-info');
+    const prevBtn = document.getElementById('prev-page');
+    const nextBtn = document.getElementById('next-page');
+    const pagesContainer = document.getElementById('pagination-pages');
+    
+    if (!paginationInfo || !prevBtn || !nextBtn || !pagesContainer) return;
+    
+    const startIndex = (currentPage - 1) * itemsPerPage + 1;
+    const endIndex = Math.min(currentPage * itemsPerPage, agents.length);
+    
+    // Update pagination info
+    paginationInfo.textContent = `Showing ${startIndex}-${endIndex} of ${agents.length} agents`;
+    
+    // Update button states
+    prevBtn.disabled = currentPage === 1;
+    nextBtn.disabled = currentPage === totalPages;
+    
+    // Generate page numbers
+    pagesContainer.innerHTML = '';
+    const maxVisiblePages = 5;
+    let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+    let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+    
+    if (endPage - startPage + 1 < maxVisiblePages) {
+        startPage = Math.max(1, endPage - maxVisiblePages + 1);
+    }
+    
+    for (let i = startPage; i <= endPage; i++) {
+        const pageBtn = document.createElement('button');
+        pageBtn.className = `pagination-page ${i === currentPage ? 'active' : ''}`;
+        pageBtn.textContent = i;
+        pageBtn.onclick = () => goToPage(i);
+        pagesContainer.appendChild(pageBtn);
+    }
+}
+
+// Go to specific page
+function goToPage(page) {
+    if (page >= 1 && page <= totalPages && page !== currentPage) {
+        currentPage = page;
+        renderTableView();
+    }
+}
+
+// Go to previous page
+function goToPreviousPage() {
+    if (currentPage > 1) {
+        currentPage--;
+        renderTableView();
+    }
+}
+
+// Go to next page
+function goToNextPage() {
+    if (currentPage < totalPages) {
+        currentPage++;
+        renderTableView();
+    }
 }
 
 // Handle filter changes
@@ -1791,8 +1922,6 @@ document.addEventListener('DOMContentLoaded', function() {
                                 <th class="sortable" data-sort="status">Status</th>
                                 <th class="sortable" data-sort="model">Model</th>
                                 <th class="sortable" data-sort="embedding">Embedding</th>
-                                <th class="sortable" data-sort="deployment">Deployment</th>
-                                <th class="sortable" data-sort="last-run">Last Run</th>
                                 <th class="sortable" data-sort="created-at">Created At</th>
                                 <th class="sortable" data-sort="cost">Cost</th>
                                 <th>Actions</th>
@@ -1802,6 +1931,30 @@ document.addEventListener('DOMContentLoaded', function() {
                             <!-- Agent rows will be populated here -->
                         </tbody>
                     </table>
+                </div>
+                
+                <!-- Pagination Controls -->
+                <div class="pagination-container" id="agent-pagination">
+                    <div class="pagination-info">
+                        <span id="agent-pagination-info">Showing 0 of 0 agents</span>
+                    </div>
+                    <div class="pagination-controls">
+                        <button class="pagination-btn" id="prev-page" disabled>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="15,18 9,12 15,6"></polyline>
+                            </svg>
+                            Previous
+                        </button>
+                        <div class="pagination-pages" id="pagination-pages">
+                            <!-- Page numbers will be generated here -->
+                        </div>
+                        <button class="pagination-btn" id="next-page" disabled>
+                            Next
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="9,18 15,12 9,6"></polyline>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
             </div>
 
