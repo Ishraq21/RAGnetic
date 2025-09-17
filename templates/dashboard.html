@@ -579,7 +579,7 @@ async function loadAgentsInline() {
             deployment: a.deployment_type || (a.status === 'deployed' ? 'deployed' : 'not deployed'),
             created_at: a.created_at,
             lastRun: a.last_run || null,
-            costThisMonth: typeof a.total_cost === 'number' ? a.total_cost : 0,
+            costThisMonth: a.total_cost || 0,
             project_id: a.project_id,
             tags: a.tags || []
         }));
