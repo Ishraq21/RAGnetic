@@ -182,6 +182,43 @@ class Dashboard {
     }
 }
 
+// Helper function to get status description
+function getStatusDescription(status) {
+    const descriptions = {
+        'created': 'Agent is created but not yet deployed',
+        'deployed': 'Agent is running and ready to handle requests',
+        'stopped': 'Agent is stopped and not processing requests',
+        'idle': 'Agent is deployed but not actively processing',
+        'error': 'Agent encountered an error and needs attention',
+        'unknown': 'Status is unknown or not available'
+    };
+    return descriptions[status] || 'Status information not available';
+}
+
+// Helper function to format tools list
+function formatToolsList(tools) {
+    if (!tools || tools.length === 0) return 'None';
+    
+    const toolDescriptions = {
+        'retriever': 'Document Retrieval',
+        'calculator': 'Mathematical Calculations',
+        'web_search': 'Web Search',
+        'code_executor': 'Code Execution',
+        'file_manager': 'File Management'
+    };
+    
+    return tools.map(tool => toolDescriptions[tool] || tool).join(', ');
+}
+
+// Load actions for agent details modal
+async function loadAgentDetailsActions(agentName, status) {
+    const actionsElement = document.getElementById('agent-details-actions');
+    if (!actionsElement) return;
+    
+    const actions = getAgentActionsSync(status, agentName);
+    actionsElement.innerHTML = actions;
+}
+
 // Global functions for onclick handlers
 function switchView(view) {
     if (window.dashboard) {
@@ -811,27 +848,75 @@ async function showAgentDetails(agentName) {
                     console.log('Could not fetch database data:', error);
                 }
                 
+                // Get cost and usage data
+                let costData = {};
+                try {
+                    const costResponse = await fetch(`/api/v1/agents/${agentName}/cost`, {
+                        headers: { 'X-API-Key': getApiKey() }
+                    });
+                    if (costResponse.ok) {
+                        costData = await costResponse.json();
+                    }
+                } catch (error) {
+                    console.log('Could not fetch cost data:', error);
+                }
+
+                // Get usage statistics
+                let usageData = {};
+                try {
+                    const usageResponse = await fetch(`/api/v1/agents/${agentName}/usage`, {
+                        headers: { 'X-API-Key': getApiKey() }
+                    });
+                    if (usageResponse.ok) {
+                        usageData = await usageResponse.json();
+                    }
+                } catch (error) {
+                    console.log('Could not fetch usage data:', error);
+                }
+
+                // Format status with proper capitalization
+                const status = dbData.actual_status || 'unknown';
+                const formattedStatus = status.charAt(0).toUpperCase() + status.slice(1);
+
                 // Populate the modal content
                 content.innerHTML = `
                     <div class="agent-details">
+                        <!-- Header with Status and Actions -->
+                        <div class="agent-details-header">
+                            <div class="agent-status-section">
+                                <div class="status-display">
+                                    <div class="status-pill ${status}">
+                                        <div class="status-dot"></div>
+                                        ${formattedStatus}
+                                    </div>
+                                    <div class="status-description">
+                                        ${getStatusDescription(status)}
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="agent-actions-section" id="agent-details-actions">
+                                <!-- Actions will be loaded here -->
+                            </div>
+                        </div>
+
                         <div class="detail-section">
                             <h3>Basic Information</h3>
                             <div class="detail-grid">
                                 <div class="detail-item">
                                     <label>Name:</label>
-                                    <span>${agent.name || 'N/A'}</span>
+                                    <span class="agent-name-display">${agent.name || 'N/A'}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Display Name:</label>
-                                    <span>${agent.display_name || 'N/A'}</span>
+                                    <span>${agent.display_name || agent.name || 'N/A'}</span>
                                 </div>
-                                <div class="detail-item">
+                                <div class="detail-item full-width">
                                     <label>Description:</label>
-                                    <span>${agent.description || 'No description'}</span>
+                                    <span class="description-text">${agent.description || 'No description provided'}</span>
                                 </div>
                                 <div class="detail-item">
-                                    <label>Status:</label>
-                                    <span class="status-badge ${dbData.actual_status || 'unknown'}">${dbData.actual_status || 'Unknown'}</span>
+                                    <label>Created:</label>
+                                    <span>${agent.created_at ? new Date(agent.created_at).toLocaleDateString() : 'N/A'}</span>
                                 </div>
                             </div>
                         </div>
@@ -841,59 +926,110 @@ async function showAgentDetails(agentName) {
                             <div class="detail-grid">
                                 <div class="detail-item">
                                     <label>LLM Model:</label>
-                                    <span>${agent.llm_model || 'N/A'}</span>
+                                    <span class="model-badge">${agent.llm_model || 'N/A'}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Embedding Model:</label>
-                                    <span>${agent.embedding_model || 'N/A'}</span>
+                                    <span class="model-badge">${agent.embedding_model || 'N/A'}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Vector Store:</label>
-                                    <span>${agent.vector_store?.type || 'N/A'}</span>
+                                    <span class="tech-badge">${agent.vector_store?.type || 'N/A'}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Temperature:</label>
-                                    <span>${agent.model_params?.temperature || 'N/A'}</span>
+                                    <span>${agent.model_params?.temperature || 'Default (0.7)'}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Max Tokens:</label>
-                                    <span>${agent.model_params?.max_tokens || 'N/A'}</span>
+                                    <span>${agent.model_params?.max_tokens || 'Default (2000)'}</span>
                                 </div>
                             </div>
                         </div>
                         
                         <div class="detail-section">
-                            <h3>Sources & Tools</h3>
+                            <h3>Data Sources & Tools</h3>
                             <div class="detail-grid">
                                 <div class="detail-item">
-                                    <label>Sources:</label>
-                                    <span>${agent.sources?.length || 0} configured</span>
+                                    <label>Data Sources:</label>
+                                    <span class="sources-info">
+                                        ${agent.sources?.length || 0} configured
+                                        ${agent.sources?.length === 0 ? '<span class="warning-text"> - No data sources configured</span>' : ''}
+                                    </span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Tools:</label>
-                                    <span>${agent.tools?.join(', ') || 'None'}</span>
+                                    <span class="tools-list">${formatToolsList(agent.tools)}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Chunk Size:</label>
-                                    <span>${agent.chunking?.chunk_size || 'N/A'}</span>
+                                    <span>${agent.chunking?.chunk_size || '1000'} tokens</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Chunk Overlap:</label>
+                                    <span>${agent.chunking?.chunk_overlap || '100'} tokens</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="detail-section">
+                            <h3>Usage & Performance</h3>
+                            <div class="detail-grid">
+                                <div class="detail-item">
+                                    <label>Total Queries:</label>
+                                    <span class="metric-value">${usageData.total_queries || '0'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Success Rate:</label>
+                                    <span class="metric-value">${usageData.success_rate ? (usageData.success_rate * 100).toFixed(1) + '%' : 'N/A'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Avg Response Time:</label>
+                                    <span class="metric-value">${usageData.avg_response_time ? usageData.avg_response_time + 'ms' : 'N/A'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Last Activity:</label>
+                                    <span>${usageData.last_activity ? new Date(usageData.last_activity).toLocaleString() : 'Never'}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="detail-section">
+                            <h3>Cost & Billing</h3>
+                            <div class="detail-grid">
+                                <div class="detail-item">
+                                    <label>This Month:</label>
+                                    <span class="cost-value">$${costData.monthly_cost || '0.00'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Total Cost:</label>
+                                    <span class="cost-value">$${costData.total_cost || '0.00'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>Token Usage:</label>
+                                    <span class="metric-value">${costData.tokens_used || '0'} tokens</span>
+                                </div>
+                                <div class="detail-item">
+                                    <label>API Calls:</label>
+                                    <span class="metric-value">${costData.api_calls || '0'} calls</span>
                                 </div>
                             </div>
                         </div>
                         
                         <div class="detail-section">
-                            <h3>Deployment Information</h3>
+                            <h3>System Status</h3>
                             <div class="detail-grid">
                                 <div class="detail-item">
                                     <label>Database Status:</label>
                                     <span class="status-badge ${dbData.database_status || 'unknown'}">${dbData.database_status || 'Unknown'}</span>
                                 </div>
                                 <div class="detail-item">
-                                    <label>Vectorstore Exists:</label>
-                                    <span>${dbData.vectorstore_exists ? 'Yes' : 'No'}</span>
+                                    <label>Vector Store:</label>
+                                    <span class="status-badge ${dbData.vectorstore_exists ? 'success' : 'warning'}">${dbData.vectorstore_exists ? 'Ready' : 'Not Initialized'}</span>
                                 </div>
                                 <div class="detail-item">
-                                    <label>Offline Marker:</label>
-                                    <span>${dbData.offline_marker_exists ? 'Yes' : 'No'}</span>
+                                    <label>Offline Mode:</label>
+                                    <span class="status-badge ${dbData.offline_marker_exists ? 'info' : 'success'}">${dbData.offline_marker_exists ? 'Enabled' : 'Disabled'}</span>
                                 </div>
                                 <div class="detail-item">
                                     <label>Last Updated:</label>
@@ -903,6 +1039,9 @@ async function showAgentDetails(agentName) {
                         </div>
                     </div>
                 `;
+
+                // Load actions for the details modal
+                loadAgentDetailsActions(agentName, status);
             } else {
                 content.innerHTML = `
                     <div class="error-state">
