@@ -20,7 +20,33 @@ class Dashboard {
     // Agent detail and action methods
     openAgentDetail(agentName) {
         console.log('Opening agent detail for:', agentName);
-        this.showToast('Agent detail page coming soon!', 'info');
+        this.currentAgentName = agentName;
+        this.switchView('agent-detail');
+        this.loadAgentDetailData(agentName);
+        
+        // Start auto-refresh for logs
+        this.startLogAutoRefresh();
+    }
+    
+    startLogAutoRefresh() {
+        // Clear any existing interval
+        if (this.logRefreshInterval) {
+            clearInterval(this.logRefreshInterval);
+        }
+        
+        // Start new interval
+        this.logRefreshInterval = setInterval(() => {
+            if (this.currentAgentName) {
+                this.loadAgentLogs(this.currentAgentName);
+            }
+        }, 30000); // 30 seconds
+    }
+    
+    stopLogAutoRefresh() {
+        if (this.logRefreshInterval) {
+            clearInterval(this.logRefreshInterval);
+            this.logRefreshInterval = null;
+        }
     }
 
     cloneAgent(agentName) {
@@ -156,6 +182,9 @@ class Dashboard {
             this.loadAgents();
         } else if (view === 'overview') {
             this.loadOverviewData();
+        } else if (view === 'agent-detail') {
+            // Agent detail view is handled by openAgentDetail
+            console.log('Switched to agent detail view');
         }
     }
     
@@ -179,6 +208,326 @@ class Dashboard {
         if (typeof loadAgentsInline === 'function') {
             loadAgentsInline();
         }
+    }
+
+    // Load agent detail data
+    async loadAgentDetailData(agentName) {
+        console.log('Loading agent detail data for:', agentName);
+        
+        try {
+            // Load basic agent data
+            const response = await fetch(`/api/v1/agents/${agentName}`, {
+                headers: { 'X-API-Key': this.getApiKey() }
+            });
+            
+            if (response.ok) {
+                const agent = await response.json();
+                this.populateAgentDetailData(agent);
+                
+                // Load additional data in parallel
+                this.loadAgentStatusData(agentName);
+                this.loadAgentCostData(agentName);
+                this.loadAgentUsageData(agentName);
+                this.loadAgentYAML(agentName);
+                this.loadAgentLogs(agentName);
+            } else {
+                this.showToast('Failed to load agent data', 'error');
+            }
+        } catch (error) {
+            console.error('Error loading agent detail:', error);
+            this.showToast('Error loading agent data', 'error');
+        }
+    }
+
+    populateAgentDetailData(agent) {
+        // Update breadcrumb
+        document.getElementById('agent-breadcrumb-name').textContent = agent.name || 'Unknown';
+        
+        // Update header
+        document.getElementById('agent-detail-title').textContent = agent.name || 'Unknown';
+        document.getElementById('agent-detail-subtitle').textContent = agent.display_name || 'AI Agent';
+        
+        // Basic information
+        document.getElementById('agent-name').textContent = agent.name || 'N/A';
+        document.getElementById('agent-display-name').textContent = agent.display_name || agent.name || 'N/A';
+        document.getElementById('agent-description').textContent = agent.description || 'No description provided';
+        document.getElementById('agent-created').textContent = agent.created_at ? new Date(agent.created_at).toLocaleDateString() : 'N/A';
+        document.getElementById('agent-updated').textContent = agent.updated_at ? new Date(agent.updated_at).toLocaleDateString() : 'N/A';
+        
+        // AI Configuration
+        document.getElementById('agent-llm-model').textContent = agent.llm_model || 'N/A';
+        document.getElementById('agent-embedding-model').textContent = agent.embedding_model || 'N/A';
+        document.getElementById('agent-vector-store').textContent = agent.vector_store?.type || 'N/A';
+        document.getElementById('agent-temperature').textContent = agent.model_params?.temperature || 'Default (0.7)';
+        document.getElementById('agent-max-tokens').textContent = agent.model_params?.max_tokens || 'Default (2000)';
+        
+        // Data Sources & Tools
+        document.getElementById('agent-sources-count').textContent = `${agent.sources?.length || 0} configured`;
+        document.getElementById('agent-tools').textContent = this.formatToolsList(agent.tools);
+        document.getElementById('agent-chunk-size').textContent = `${agent.chunking?.chunk_size || '1000'} tokens`;
+        document.getElementById('agent-chunk-overlap').textContent = `${agent.chunking?.chunk_overlap || '100'} tokens`;
+    }
+
+    async loadAgentStatusData(agentName) {
+        try {
+            const response = await fetch(`/api/v1/agents/${agentName}/status`, {
+                headers: { 'X-API-Key': this.getApiKey() }
+            });
+            
+            if (response.ok) {
+                const status = await response.json();
+                this.updateAgentStatus(status);
+            }
+        } catch (error) {
+            console.log('Could not fetch status data:', error);
+        }
+    }
+
+    updateAgentStatus(status) {
+        const statusText = status.actual_status || 'unknown';
+        const formattedStatus = statusText.charAt(0).toUpperCase() + statusText.slice(1);
+        
+        document.getElementById('agent-status-text').textContent = formattedStatus;
+        document.getElementById('agent-status-description').textContent = this.getStatusDescription(statusText);
+        
+        // Update status pill
+        const statusPill = document.getElementById('agent-detail-status');
+        statusPill.className = `status-pill ${statusText}`;
+        
+        // Update system status
+        document.getElementById('agent-db-status').textContent = status.database_status || 'Unknown';
+        document.getElementById('agent-vector-status').textContent = status.vectorstore_exists ? 'Ready' : 'Not Initialized';
+        document.getElementById('agent-offline-status').textContent = status.offline_marker_exists ? 'Enabled' : 'Disabled';
+    }
+
+    async loadAgentCostData(agentName) {
+        try {
+            const response = await fetch(`/api/v1/agents/${agentName}/cost`, {
+                headers: { 'X-API-Key': this.getApiKey() }
+            });
+            
+            if (response.ok) {
+                const cost = await response.json();
+                document.getElementById('agent-monthly-cost').textContent = `$${cost.monthly_cost || '0.00'}`;
+                document.getElementById('agent-total-cost').textContent = `$${cost.total_cost || '0.00'}`;
+                document.getElementById('agent-token-usage').textContent = `${cost.tokens_used || '0'} tokens`;
+                document.getElementById('agent-api-calls').textContent = `${cost.api_calls || '0'} calls`;
+            }
+        } catch (error) {
+            console.log('Could not fetch cost data:', error);
+        }
+    }
+
+    async loadAgentUsageData(agentName) {
+        try {
+            const response = await fetch(`/api/v1/agents/${agentName}/usage`, {
+                headers: { 'X-API-Key': this.getApiKey() }
+            });
+            
+            if (response.ok) {
+                const usage = await response.json();
+                document.getElementById('agent-total-queries').textContent = usage.total_queries || '0';
+                document.getElementById('agent-success-rate').textContent = usage.success_rate ? `${(usage.success_rate * 100).toFixed(1)}%` : 'N/A';
+                document.getElementById('agent-avg-response').textContent = usage.avg_response_time ? `${usage.avg_response_time}ms` : 'N/A';
+                document.getElementById('agent-last-activity').textContent = usage.last_activity ? new Date(usage.last_activity).toLocaleString() : 'Never';
+            }
+        } catch (error) {
+            console.log('Could not fetch usage data:', error);
+        }
+    }
+
+    async loadAgentYAML(agentName) {
+        try {
+            const response = await fetch(`/api/v1/agents/${agentName}/yaml`, {
+                headers: { 'X-API-Key': this.getApiKey() }
+            });
+            
+            if (response.ok) {
+                const yaml = await response.text();
+                document.getElementById('agent-yaml-content').textContent = yaml;
+            } else {
+                // Fallback: generate YAML from agent data
+                const agentResponse = await fetch(`/api/v1/agents/${agentName}`, {
+                    headers: { 'X-API-Key': this.getApiKey() }
+                });
+                if (agentResponse.ok) {
+                    const agent = await agentResponse.json();
+                    const yaml = this.generateYAMLFromAgent(agent);
+                    document.getElementById('agent-yaml-content').textContent = yaml;
+                } else {
+                    document.getElementById('agent-yaml-content').textContent = 'YAML configuration not available';
+                }
+            }
+        } catch (error) {
+            console.log('Could not fetch YAML:', error);
+            // Try fallback as last resort
+            try {
+                const agentResponse = await fetch(`/api/v1/agents/${agentName}`, {
+                    headers: { 'X-API-Key': this.getApiKey() }
+                });
+                if (agentResponse.ok) {
+                    const agent = await agentResponse.json();
+                    const yaml = this.generateYAMLFromAgent(agent);
+                    document.getElementById('agent-yaml-content').textContent = yaml;
+                    return;
+                }
+            } catch (_) {}
+            document.getElementById('agent-yaml-content').textContent = 'Error loading YAML configuration';
+        }
+    }
+
+    generateYAMLFromAgent(agent) {
+        const tools = (agent.tools || ['retriever']).map(t => `  - ${t}`).join('\n');
+        const sources = (agent.sources || []).map(s => `  - type: ${s.type}\n    path: ${s.path || s.url || ''}\n    max_depth: ${s.max_depth ?? 2}`).join('\n');
+        return `name: ${agent.name}
+display_name: ${agent.display_name || agent.name}
+description: |\n  ${(agent.description || 'No description provided').replace(/\n/g, '\n  ')}
+
+# AI Configuration
+llm_model: ${agent.llm_model || 'gpt-4o-mini'}
+embedding_model: ${agent.embedding_model || 'text-embedding-3-small'}
+
+# Model Parameters
+model_params:
+  temperature: ${agent.model_params?.temperature ?? 0.7}
+  max_tokens: ${agent.model_params?.max_tokens ?? 2000}
+
+# Vector Store Configuration
+vector_store:
+  type: ${agent.vector_store?.type || 'faiss'}
+  retrieval_strategy: ${agent.vector_store?.retrieval_strategy || 'hybrid'}
+
+# Chunking Configuration
+chunking:
+  chunk_size: ${agent.chunking?.chunk_size ?? 1000}
+  chunk_overlap: ${agent.chunking?.chunk_overlap ?? 100}
+
+# Tools
+tools:
+${tools || '  - retriever'}
+
+# Data Sources
+sources:
+${sources || '  # none'}
+
+# GPU Configuration
+gpu:
+  enabled: ${agent.gpu?.enabled ?? false}
+`;
+    }
+
+    async loadAgentLogs(agentName) {
+        try {
+            const response = await fetch(`/api/v1/agents/${agentName}/logs`, {
+                headers: { 'X-API-Key': this.getApiKey() }
+            });
+            
+            if (response.ok) {
+                const logs = await response.text();
+                this.displayAgentLogs(logs);
+            } else {
+                document.getElementById('agent-logs-content').innerHTML = `
+                    <div class="empty-logs">
+                        <span class="hint">No logs available for this agent yet.</span>
+                        <div class="actions">
+                            <button class="btn-text" onclick="refreshLogs()">Refresh</button>
+                            <button class="btn-text" onclick="downloadLogs()">Download</button>
+                        </div>
+                    </div>`;
+            }
+        } catch (error) {
+            console.log('Could not fetch logs:', error);
+            document.getElementById('agent-logs-content').innerHTML = `
+                <div class="error-logs">
+                    <span>Failed to load logs. Please try again.</span>
+                    <div class="actions">
+                        <button class="btn-text" onclick="refreshLogs()">Retry</button>
+                    </div>
+                </div>`;
+        }
+    }
+
+    displayAgentLogs(logs) {
+        const logsContent = document.getElementById('agent-logs-content');
+        const logLines = logs.split('\n').filter(line => line.trim());
+        
+        if (logLines.length === 0) {
+            logsContent.innerHTML = `
+                <div class="empty-logs">
+                    <span class="hint">No logs available for this agent yet.</span>
+                    <div class="actions">
+                        <button class="btn-text" onclick="refreshLogs()">Refresh</button>
+                        <button class="btn-text" onclick="downloadLogs()">Download</button>
+                    </div>
+                </div>`;
+            return;
+        }
+        
+        const logEntries = logLines.map((line, index) => {
+            let logClass = 'info';
+            let timestamp = '';
+            let message = line;
+            
+            // Extract timestamp if present
+            const timestampMatch = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)/);
+            if (timestampMatch) {
+                timestamp = new Date(timestampMatch[1]).toLocaleTimeString();
+                message = line.replace(timestampMatch[0], '').trim();
+            }
+            
+            // Determine log level
+            if (message.toLowerCase().includes('error') || message.toLowerCase().includes('failed')) {
+                logClass = 'error';
+            } else if (message.toLowerCase().includes('warning') || message.toLowerCase().includes('warn')) {
+                logClass = 'warning';
+            } else if (message.toLowerCase().includes('debug')) {
+                logClass = 'info';
+            }
+            
+            // Add log level indicator
+            const levelIndicator = logClass === 'error' ? '❌' : 
+                                 logClass === 'warning' ? '⚠️' : 
+                                 logClass === 'info' ? 'ℹ️' : '📝';
+            
+            return `<div class="log-entry ${logClass}" data-timestamp="${timestamp}">
+                <span class="log-level">${levelIndicator}</span>
+                <span class="log-message">${message}</span>
+            </div>`;
+        }).join('');
+        
+        logsContent.innerHTML = logEntries;
+        
+        // Auto-scroll to bottom for new logs
+        const logsContainer = document.querySelector('.logs-container');
+        if (logsContainer) {
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        }
+    }
+
+    formatToolsList(tools) {
+        if (!tools || tools.length === 0) return 'None';
+        
+        const toolDescriptions = {
+            'retriever': 'Document Retrieval',
+            'calculator': 'Mathematical Calculations',
+            'web_search': 'Web Search',
+            'code_executor': 'Code Execution',
+            'file_manager': 'File Management'
+        };
+        
+        return tools.map(tool => toolDescriptions[tool] || tool).join(', ');
+    }
+
+    getStatusDescription(status) {
+        const descriptions = {
+            'created': 'Agent is created but not yet deployed',
+            'deployed': 'Agent is running and ready to handle requests',
+            'stopped': 'Agent is stopped and not processing requests',
+            'idle': 'Agent is deployed but not actively processing',
+            'error': 'Agent encountered an error and needs attention',
+            'unknown': 'Status is unknown or not available'
+        };
+        return descriptions[status] || 'Status information not available';
     }
 }
 
@@ -793,8 +1142,10 @@ function hideDeleteConfirmationModal() {
 
 function viewAgent(agentName) {
     console.log('Viewing agent:', agentName);
-    // Show the agent details modal
-    showAgentDetails(agentName);
+    // Navigate to agent detail page
+    if (window.dashboard) {
+        window.dashboard.openAgentDetail(agentName);
+    }
 }
 
 function editAgent(agentName) {
@@ -1509,6 +1860,100 @@ function showToast(message, type = 'info') {
     setTimeout(() => {
         toast.remove();
     }, 3000);
+}
+
+// Agent Detail Page Functions
+function editAgentFromDetail() {
+    const agentName = window.dashboard?.currentAgentName;
+    if (agentName) {
+        editAgent(agentName);
+    }
+}
+
+function deployAgentFromDetail() {
+    const agentName = window.dashboard?.currentAgentName;
+    if (agentName) {
+        deployAgentState(agentName);
+    }
+}
+
+function copyYAML() {
+    const yamlContent = document.getElementById('agent-yaml-content').textContent;
+    navigator.clipboard.writeText(yamlContent).then(() => {
+        showToast('YAML copied to clipboard', 'success');
+    }).catch(() => {
+        showToast('Failed to copy YAML', 'error');
+    });
+}
+
+function downloadYAML() {
+    const agentName = window.dashboard?.currentAgentName || 'agent';
+    const yamlContent = document.getElementById('agent-yaml-content').textContent;
+    
+    const blob = new Blob([yamlContent], { type: 'text/yaml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${agentName}.yaml`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    showToast('YAML downloaded', 'success');
+}
+
+function refreshLogs() {
+    const agentName = window.dashboard?.currentAgentName;
+    if (agentName && window.dashboard) {
+        // Show loading state
+        const logsContent = document.getElementById('agent-logs-content');
+        logsContent.innerHTML = `
+            <div class="loading-state">
+                <div class="loading-spinner"></div>
+                <p>Refreshing logs...</p>
+            </div>`;
+        
+        window.dashboard.loadAgentLogs(agentName);
+        showToast('Logs refreshed', 'success');
+    }
+}
+
+// Auto-refresh logs every 30 seconds
+function startLogAutoRefresh() {
+    const agentName = window.dashboard?.currentAgentName;
+    if (agentName) {
+        setInterval(() => {
+            if (window.dashboard && window.dashboard.currentAgentName === agentName) {
+                window.dashboard.loadAgentLogs(agentName);
+            }
+        }, 30000); // 30 seconds
+    }
+}
+
+// Stop auto-refresh when leaving the page
+function stopLogAutoRefresh() {
+    if (window.logRefreshInterval) {
+        clearInterval(window.logRefreshInterval);
+        window.logRefreshInterval = null;
+    }
+}
+
+function downloadLogs() {
+    const agentName = window.dashboard?.currentAgentName || 'agent';
+    const logsContent = document.getElementById('agent-logs-content').textContent;
+    
+    const blob = new Blob([logsContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${agentName}-logs.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    showToast('Logs downloaded', 'success');
 }
 
 // Initialize dashboard when DOM is loaded
