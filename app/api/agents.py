@@ -1297,8 +1297,9 @@ async def get_agent_yaml(
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
         
-        # Convert config to YAML string
-        yaml_content = yaml.dump(agent_config, default_flow_style=False, sort_keys=False)
+        # Convert Pydantic model to clean dictionary, then to YAML
+        config_dict = agent_config.model_dump(exclude_unset=True)
+        yaml_content = yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
         
         return Response(
             content=yaml_content,
