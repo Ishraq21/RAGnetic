@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from urllib.parse import urlparse
 
 class ChunkingConfig(BaseModel):
@@ -359,6 +359,8 @@ class GPUConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     name: str
     display_name: Optional[str] = None
     description: Optional[str] = None
@@ -461,6 +463,8 @@ class ValidationReport(BaseModel):
 
 class AgentDeploymentStatus(BaseModel):
     """Agent deployment status information."""
+    model_config = ConfigDict(protected_namespaces=())
+    
     name: str
     status: str
     created_at: datetime
