@@ -17,7 +17,7 @@ pytest-html>=4.1.1
 ruff>=0.5.7
 mypy>=1.11.2
 bandit>=1.7.9
-safety>=3.2.7
+pip-audit>=2.7.0  # Modern security scanner compatible with pydantic 2.11+
 
 # Web testing (Python-only E2E)
 selenium>=4.25.0
