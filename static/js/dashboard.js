@@ -510,9 +510,6 @@ ${tools || '  - retriever'}
 sources:
 ${sources || '  # none'}
 
-# GPU Configuration
-gpu:
-  enabled: ${agent.gpu?.enabled ?? false}
 `;
     }
 
@@ -1017,9 +1014,6 @@ async function handleCreateAgent() {
             type: 'faiss',
             retrieval_strategy: 'hybrid'
         },
-        gpu: {
-            enabled: false
-        }
     };
     
     console.log('Agent data to submit:', agentData);
@@ -1173,9 +1167,6 @@ async function handleEditAgent() {
             type: 'faiss',
             retrieval_strategy: 'hybrid'
         },
-        gpu: {
-            enabled: false
-        }
     };
     
     console.log('Agent data to submit:', agentData);

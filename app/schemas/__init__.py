@@ -5,7 +5,4 @@ from .data_prep import *
 from .fine_tuning import *
 from .lambda_tool import *
 from .security import *
-from .projects import *
-from .billing import *
-from .gpu import *
 from .deployments import *

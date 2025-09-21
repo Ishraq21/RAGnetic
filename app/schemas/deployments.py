@@ -7,13 +7,11 @@ class DeploymentCreate(BaseModel):
     """Schema for creating a new deployment."""
     agent_id: int = Field(..., description="Agent ID to deploy")
     deployment_type: Literal["chat", "api"] = Field(..., description="Type of deployment")
-    project_id: int = Field(..., description="Project ID to deploy under")
 
 
 class Deployment(BaseModel):
     """Schema for deployment information."""
     id: int = Field(..., description="Deployment ID")
-    project_id: int = Field(..., description="Project ID")
     agent_id: int = Field(..., description="Agent ID")
     deployment_type: Literal["api", "webhook", "streaming"] = Field(..., description="Type of deployment")
     status: Literal["pending", "active", "inactive", "failed"] = Field(..., description="Deployment status")

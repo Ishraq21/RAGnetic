@@ -5,7 +5,6 @@ class DeploymentsManager {
     constructor() {
         this.deployments = [];
         this.agents = [];
-        this.projects = [];
         this.init();
     }
 
@@ -74,25 +73,6 @@ class DeploymentsManager {
         }
     }
 
-    async loadProjects() {
-        try {
-            const response = await fetch(`${API_BASE_URL}/projects`, {
-                headers: {
-                    'X-API-Key': loggedInUserToken,
-                    'Content-Type': 'application/json'
-                }
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const data = await response.json();
-            this.projects = data;
-        } catch (error) {
-            console.error('Error loading projects:', error);
-        }
-    }
 
     renderDeployments() {
         const container = document.querySelector('.deployments-content');
@@ -174,8 +154,6 @@ class DeploymentsManager {
                 <div class="deployment-content">
                     <div class="deployment-details">
                         <div class="detail">
-                            <span class="detail-label">Project</span>
-                            <span class="detail-value">${this.escapeHtml(deployment.project_name || 'Unknown')}</span>
                         </div>
                         <div class="detail">
                             <span class="detail-label">Type</span>
@@ -208,7 +186,7 @@ class DeploymentsManager {
     }
 
     showCreateDeploymentModal() {
-        Promise.all([this.loadAgents(), this.loadProjects()]).then(() => {
+        Promise.all([this.loadAgents()]).then(() => {
             const modal = document.createElement('div');
             modal.className = 'modal show';
             modal.innerHTML = `
@@ -218,15 +196,6 @@ class DeploymentsManager {
                         <button class="modal-close" onclick="this.closest('.modal').remove()">&times;</button>
                     </div>
                     <form id="create-deployment-form">
-                        <div class="form-group">
-                            <label for="project-select">Project</label>
-                            <select id="project-select" name="project_id" required>
-                                <option value="">Select a project...</option>
-                                ${this.projects.map(project => `
-                                    <option value="${project.id}">${this.escapeHtml(project.name)}</option>
-                                `).join('')}
-                            </select>
-                        </div>
                         <div class="form-group">
                             <label for="agent-select">Agent</label>
                             <select id="agent-select" name="agent_id" required>
@@ -259,7 +228,6 @@ class DeploymentsManager {
 
         const formData = new FormData(form);
         const deploymentData = {
-            project_id: parseInt(formData.get('project_id')),
             agent_id: parseInt(formData.get('agent_id'))
         };
 

@@ -322,7 +322,6 @@ MODEL_PROVIDERS = {
     "Google (Gemini)": "GOOGLE_API_KEY",
     "Pinecone": "PINECONE_API_KEY",
     "MongoDB Atlas": "MONGODB_CONN_STRING",
-    "RunPod (GPU Services)": "RUNPOD_API_KEY",
     "Brave Search": "BRAVE_SEARCH_API_KEY",
     "Hugging Face": None,
     "Ollama (Local LLMs)": None,
@@ -922,110 +921,6 @@ def set_api():
     typer.echo("\nAPI key configuration complete.")
 
 
-@app.command(name="set-runpod-key", help="Set RunPod API key for GPU services.")
-def set_runpod_key(
-    api_key: str = typer.Option(None, "--key", help="RunPod API key"),
-    environment: str = typer.Option("production", "--env", help="Environment (development/production)")
-):
-    """Set RunPod API key for GPU services."""
-    typer.secho("--- RunPod GPU Services Configuration ---", bold=True)
-    
-    if not api_key:
-        api_key = typer.prompt("Enter your RunPod API key", hide_input=True)
-    
-    if not api_key:
-        typer.secho("Error: API key cannot be empty.", fg=typer.colors.RED)
-        raise typer.Exit(1)
-    
-    # Update environment file
-    env_updates = {
-        "RUNPOD_API_KEY": api_key,
-        "ENVIRONMENT": environment
-    }
-    
-    _update_env_file(env_updates)
-    
-    typer.secho("[OK] Successfully configured RunPod GPU services!", fg=typer.colors.GREEN)
-    typer.echo(f"   - API Key: {'*' * (len(api_key) - 4) + api_key[-4:]}")
-    typer.echo(f"   - Environment: {environment}")
-    
-    if environment == "production":
-        typer.echo("\n RunPod GPU services are now enabled!")
-        typer.echo("   - Real GPU instances will be provisioned")
-        typer.echo("   - Live pricing and availability")
-        typer.echo("   - Full RunPod API integration")
-    else:
-        typer.echo("\n🧪 Development mode enabled")
-        typer.echo("   - Mock GPU service will be used")
-        typer.echo("   - No real GPU provisioning")
-        typer.echo("   - Safe for testing")
-
-
-@app.command(name="test-runpod", help="Test RunPod API connection and GPU availability.")
-def test_runpod():
-    """Test RunPod API connection and display available GPUs."""
-    typer.secho("--- RunPod API Connection Test ---", bold=True)
-    
-    # Check if API key is set
-    api_key = os.getenv("RUNPOD_API_KEY")
-    if not api_key:
-        typer.secho(" RunPod API key not found!", fg=typer.colors.RED)
-        typer.echo("   Run: ragnetic set-runpod-key --key YOUR_API_KEY")
-        raise typer.Exit(1)
-    
-    typer.echo("🔑 API Key found")
-    typer.echo("🌐 Testing RunPod API connection...")
-    
-    try:
-        # Test API connection
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        response = requests.get(
-            "https://api.runpod.io/v2/gpu-types",
-            headers=headers,
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            gpus = data.get("data", [])
-            
-            typer.secho("[OK] RunPod API connection successful!", fg=typer.colors.GREEN)
-            typer.echo(f" Available GPUs: {len(gpus)}")
-            
-            if gpus:
-                typer.echo("\n  Available GPU Types:")
-                for gpu in gpus[:5]:  # Show first 5 GPUs
-                    name = gpu.get("displayName", "Unknown")
-                    memory = gpu.get("memoryInGb", 0)
-                    secure_price = gpu.get("securePrice", 0)
-                    community_price = gpu.get("communityPrice", 0)
-                    
-                    typer.echo(f"   - {name}: {memory}GB")
-                    if secure_price > 0:
-                        typer.echo(f"     Secure: ${secure_price:.2f}/hour")
-                    if community_price > 0:
-                        typer.echo(f"     Community: ${community_price:.2f}/hour")
-                
-                if len(gpus) > 5:
-                    typer.echo(f"   ... and {len(gpus) - 5} more GPUs")
-            
-            typer.echo("\n RunPod integration is ready!")
-            
-        else:
-            typer.secho(f" RunPod API error: {response.status_code}", fg=typer.colors.RED)
-            typer.echo(f"   Response: {response.text}")
-            raise typer.Exit(1)
-            
-    except requests.exceptions.RequestException as e:
-        typer.secho(f" Connection failed: {str(e)}", fg=typer.colors.RED)
-        raise typer.Exit(1)
-    except Exception as e:
-        typer.secho(f" Unexpected error: {str(e)}", fg=typer.colors.RED)
-        raise typer.Exit(1)
 
 
 @app.command("gdrive", help="Authenticate with Google Drive securely.")
@@ -3117,7 +3012,7 @@ def training_status_command(
                 typer.echo(f"  {key.replace('_', ' ').title()}:")
                 for hp_key, hp_val in value.items():
                     typer.echo(f"    - {hp_key}: {hp_val}")
-            elif key in ["final_loss", "validation_loss", "gpu_hours_consumed", "estimated_training_cost_usd"] and value is not None:
+            elif key in ["final_loss", "validation_loss", "estimated_training_cost_usd"] and value is not None:
                 if "cost_usd" in key:
                     typer.echo(f"  {key.replace('_', ' ').title()}: ${value:.6f}")
                 elif "hours" in key:
@@ -3184,7 +3079,7 @@ def training_list_models_command(
         # Select and reorder columns for display
         display_cols = [
             "adapter_id", "job_name", "base_model_name", "training_status",
-            "final_loss", "validation_loss", "gpu_hours_consumed",
+            "final_loss", "validation_loss",
             "estimated_training_cost_usd", "created_at", "adapter_path"
         ]
         # Filter to only columns that exist in the DataFrame
@@ -3198,8 +3093,6 @@ def training_list_models_command(
             df_display["final_loss"] = df_display["final_loss"].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
         if "validation_loss" in df_display.columns:
             df_display["validation_loss"] = df_display["validation_loss"].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
-        if "gpu_hours_consumed" in df_display.columns:
-            df_display["gpu_hours_consumed"] = df_display["gpu_hours_consumed"].apply(lambda x: f"{x:.2f} hrs" if pd.notna(x) else "N/A")
 
         # Format datetime columns
         for col in ["created_at", "updated_at"]:

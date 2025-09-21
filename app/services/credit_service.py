@@ -61,7 +61,7 @@ class CreditService:
         try:
             credits = await self.get_user_credits(user_id)
             if not credits:
-                raise ValueError("No credit account found. Please set up billing first.")
+                raise ValueError("No credit account found. Please contact support.")
             
             if credits["balance"] < amount:
                 raise ValueError(
