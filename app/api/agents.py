@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_
 from app.services.agent_manager import agent_manager
 from app.services.agent_sync_service import agent_sync_service
+from app.core.user_paths import get_agent_vectorstore_path, get_agent_config_path
 
 import logging
 
@@ -50,6 +51,13 @@ _APP_PATHS = get_path_settings()
 _AGENTS_DIR = _APP_PATHS["AGENTS_DIR"]
 _VECTORSTORE_DIR = _APP_PATHS["VECTORSTORE_DIR"]
 _DATA_DIR = _APP_PATHS["DATA_DIR"]
+
+# Import user-specific path utilities
+from app.core.user_paths import (
+    get_agent_vectorstore_path, 
+    get_agent_config_path,
+    ensure_user_directories
+)
 
 # DB models for syncing deployments
 from app.db.models import deployments_table, api_keys_table, agents_table
@@ -114,14 +122,38 @@ async def get_agent_by_name(
     Requires: 'agent:read' permission.
     """
     try:
-        agent_config = load_agent_config(agent_name)
-        
-        # Get database timestamps
+        # Get database info including user_id to determine which agent to load
         agent_result = await db.execute(
-            select(agents_table.c.created_at, agents_table.c.updated_at)
+            select(agents_table.c.created_at, agents_table.c.updated_at, agents_table.c.user_id)
             .where(agents_table.c.name == agent_name)
         )
-        agent_row = agent_result.fetchone()
+        agent_rows = agent_result.fetchall()
+        
+        if not agent_rows:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+        
+        # Determine which agent to access
+        agent_row = None
+        
+        if current_user.is_superuser:
+            # Superuser can access any agent - use the first one found
+            agent_row = agent_rows[0]
+        else:
+            # Regular user can only access their own agents
+            for row in agent_rows:
+                if row.user_id == current_user.id:
+                    agent_row = row
+                    break
+            
+            # If no user-specific agent found, raise error
+            if not agent_row:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Agent '{agent_name}' not found for your user account."
+                )
+        
+        # Load agent config with user_id
+        agent_config = load_agent_config(agent_name, agent_row.user_id)
         
         if agent_row:
             # Add database timestamps to the config
@@ -141,7 +173,7 @@ async def get_agent_by_name(
 async def create_new_agent(
         config: AgentConfig = Body(...),
         bg: BackgroundTasks = BackgroundTasks(),
-        current_user: User = Depends(PermissionChecker(["agent:create"])),
+        current_user: User = Depends(PermissionChecker(["create:agents"])),
         db: AsyncSession = Depends(get_db)
 ):
     """
@@ -158,15 +190,17 @@ async def create_new_agent(
         pass
 
     try:
-
-        save_agent_config(config)
+        # Ensure user directories exist
+        ensure_user_directories(current_user.id)
+        
+        save_agent_config(config, current_user.id)
 
         # Sync agent to database
         sync_result = await agent_sync_service.sync_agent_to_db(db, config, current_user.id)
         logger.info(f"Synced agent {config.name} to database: {sync_result}")
 
         # Pass the already acquired db session to the background task directly
-        bg.add_task(embed_agent_data, config=config, db=db)
+        bg.add_task(embed_agent_data, config=config, db=db, user_id=current_user.id)
 
 
         response = {
@@ -189,7 +223,7 @@ async def update_agent_by_name(
         agent_name: str,
         config: AgentConfig = Body(...),
         bg: BackgroundTasks = BackgroundTasks(),
-        current_user: User = Depends(PermissionChecker(["agent:update"])),
+        current_user: User = Depends(PermissionChecker(["update:agents"])),
         db: AsyncSession = Depends(get_db)
 ):
     """
@@ -199,17 +233,17 @@ async def update_agent_by_name(
     if agent_name != config.name:
         raise HTTPException(status_code=400, detail="Agent name in path does not match agent name in body.")
     try:
-        load_agent_config(agent_name)
+        load_agent_config(agent_name, current_user.id)
 
 
-        save_agent_config(config)
+        save_agent_config(config, current_user.id)
 
         # Sync agent to database
         sync_result = await agent_sync_service.sync_agent_to_db(db, config, current_user.id)
         logger.info(f"Synced agent {config.name} to database: {sync_result}")
 
         # Pass the already acquired db session to the background task directly
-        bg.add_task(embed_agent_data, config=config, db=db)
+        bg.add_task(embed_agent_data, config=config, db=db, user_id=current_user.id)
 
 
         response = {
@@ -232,7 +266,7 @@ async def update_agent_by_name(
 async def delete_agent_by_name(
         agent_name: str,
         # Only users with 'agent:delete' permission can delete agents
-        current_user: User = Depends(PermissionChecker(["agent:delete"])),
+        current_user: User = Depends(PermissionChecker(["delete:agents"])),
         db: AsyncSession = Depends(get_db)
 ):
     """
@@ -240,16 +274,49 @@ async def delete_agent_by_name(
     Requires: 'agent:delete' permission.
     """
     try:
-        load_agent_config(agent_name)  # Ensure the agent exists
+        # Get database info to find the correct agent
+        agent_result = await db.execute(
+            select(agents_table.c.user_id)
+            .where(agents_table.c.name == agent_name)
+        )
+        agent_rows = agent_result.fetchall()
+        
+        if not agent_rows:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
+        
+        # Determine which agent to delete
+        agent_user_id = None
+        
+        if current_user.is_superuser:
+            # Superuser can delete any agent - use the first one found
+            agent_user_id = agent_rows[0].user_id
+        else:
+            # Regular user can only delete their own agents
+            for row in agent_rows:
+                if row.user_id == current_user.id:
+                    agent_user_id = row.user_id
+                    break
+            
+            # If no user-specific agent found, raise error
+            if agent_user_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Agent '{agent_name}' not found for your user account."
+                )
+        
+        # Ensure the agent exists by loading it with the correct user_id
+        load_agent_config(agent_name, agent_user_id)
 
-        # Delete from database first
-        await agent_sync_service.delete_agent_from_db(db, agent_name)
+        # Delete from database first (user-specific)
+        await agent_sync_service.delete_agent_from_db(db, agent_name, agent_user_id)
 
-        config_path = _AGENTS_DIR / f"{agent_name}.yaml"
+        # Delete agent config file from user-specific directory
+        config_path = get_agent_config_path(agent_name, agent_user_id)
         if os.path.exists(config_path):
             os.remove(config_path)
 
-        vectorstore_path = _VECTORSTORE_DIR / f"{agent_name}"
+        # Delete vectorstore from user-specific directory
+        vectorstore_path = get_agent_vectorstore_path(agent_name, agent_user_id)
         if os.path.exists(vectorstore_path):
             shutil.rmtree(vectorstore_path)
 
@@ -271,7 +338,7 @@ async def inspect_agent_api(
         check_connections: bool = Query(False, description="Verify connectivity for each configured external source."),
         num_docs: int = Query(5, ge=1, description="Number of sample documents to retrieve."),
         # Users need 'agent:read' permission to inspect agents
-        current_user: User = Depends(PermissionChecker(["agent:read"]))
+        current_user: User = Depends(PermissionChecker(["read:agents"]))
 ) -> AgentInspectionResponse:
     """
     Inspects an agent's configuration, deployment status, and optionally its data sources.
@@ -287,7 +354,15 @@ async def inspect_agent_api(
         raise HTTPException(500, "Error loading agent configuration.")
 
     # --- base status flags ---
-    vs_dir = _VECTORSTORE_DIR / agent_name
+    # Get user_id from the agent record in database
+    user_id = None
+    try:
+        result = await db.execute(select(agents_table.c.user_id).where(agents_table.c.name == agent_name))
+        user_id = result.scalar_one_or_none()
+    except Exception:
+        pass
+    
+    vs_dir = get_agent_vectorstore_path(agent_name, user_id)
     offline_marker = vs_dir / ".offline"
     is_deployed = vs_dir.exists()
     # Detect basic ingesting/online states. Ingesting detection can be improved later.
@@ -304,7 +379,7 @@ async def inspect_agent_api(
     if show_documents_metadata:
         vector_store_status.status = "PENDING"
         try:
-            vectorstore_path = _VECTORSTORE_DIR / agent_name
+            vectorstore_path = get_agent_vectorstore_path(agent_name, user_id)
             if not os.path.exists(vectorstore_path):
                 vector_store_status = ConnectionCheck(status="FAIL",
                                                       message="Vector store not found. Agent not deployed.")
@@ -426,7 +501,7 @@ async def inspect_agent_api(
 async def deploy_agent(
         agent_name: str,
         bg: BackgroundTasks = BackgroundTasks(),
-        current_user: User = Depends(PermissionChecker(["agent:update"])),
+        current_user: User = Depends(PermissionChecker(["update:agents"])),
         db: AsyncSession = Depends(get_db)
 ):
     """
@@ -438,7 +513,7 @@ async def deploy_agent(
         cfg = load_agent_config(agent_name)
 
         # Ensure vectorstore directory exists
-        vs_dir = _VECTORSTORE_DIR / agent_name
+        vs_dir = get_agent_vectorstore_path(agent_name, current_user.id)
         os.makedirs(vs_dir, exist_ok=True)
 
         # Remove offline marker if present
@@ -489,7 +564,7 @@ async def deploy_agent(
 @router.post("/{agent_name}/shutdown", response_model=dict, dependencies=[Depends(rate_limit_dep("agent_shutdown", 5, 60))])
 async def shutdown_agent(
         agent_name: str,
-        current_user: User = Depends(PermissionChecker(["agent:update"])),
+        current_user: User = Depends(PermissionChecker(["update:agents"])),
         db: AsyncSession = Depends(get_db)
 ):
     """
@@ -500,7 +575,7 @@ async def shutdown_agent(
         # Ensure config exists
         _ = load_agent_config(agent_name)
 
-        vs_dir = _VECTORSTORE_DIR / agent_name
+        vs_dir = get_agent_vectorstore_path(agent_name, current_user.id)
         if not vs_dir.exists():
             # Not deployed yet; nothing to shutdown
             raise HTTPException(status_code=409, detail=f"Agent '{agent_name}' is not deployed.")
@@ -556,7 +631,7 @@ async def shutdown_agent(
 @router.post("/upload-file", summary="Upload a local file for ingestion", response_model=Dict[str, str], dependencies=[Depends(rate_limit_dep("agent_upload", 20, 60))])
 async def upload_file_for_ingestion(
     file: UploadFile = File(..., description="The file to upload."),
-    current_user: User = Depends(PermissionChecker(["agent:create", "agent:update"]))
+    current_user: User = Depends(PermissionChecker(["create:agents", "update:agents"]))
 ) -> Dict[str, str]:
     """
     Receives a file upload, saves it to a user-specific location, and returns its server path.
@@ -564,9 +639,13 @@ async def upload_file_for_ingestion(
     Requires 'agent:create' or 'agent:update' permission.
     Files are stored per-user for isolation and security.
     """
-    # Create user-specific upload directory
-    user_upload_dir = _DATA_DIR / "uploads" / f"user_{current_user.id}"
-    user_upload_dir.mkdir(parents=True, exist_ok=True)
+    import shutil
+    from datetime import datetime
+    
+    # Create user-specific upload directory using utility function
+    from app.core.user_paths import get_user_data_dir, ensure_user_directories
+    ensure_user_directories(current_user.id)
+    user_upload_dir = get_user_data_dir(current_user.id)
 
     # Sanitize filename to prevent directory traversal
     filename = Path(file.filename).name
@@ -595,6 +674,18 @@ async def upload_file_for_ingestion(
 
 # --- Agent State Machine Endpoints ---
 
+@router.get("/debug-user-info")
+async def debug_user_info(
+    current_user: User = Depends(PermissionChecker(["read:agents"])),
+):
+    """Debug endpoint to check user information."""
+    return {
+        "user_id": current_user.id,
+        "username": getattr(current_user, 'username', 'unknown'),
+        "is_superuser": current_user.is_superuser,
+        "scope": getattr(current_user, 'scope', 'unknown')
+    }
+
 @router.get("/status", response_model=List[AgentDeploymentStatus])
 async def get_all_agents_status(
     search: Optional[str] = Query(None, description="Search agents by name, description, or tags"),
@@ -606,16 +697,18 @@ async def get_all_agents_status(
 ):
     """Get deployment status for all agents with optional filtering."""
     try:
+        logger.info(f"API: Getting agents for user {current_user.id} (superuser: {current_user.is_superuser})")
         agents_status = await agent_manager.get_all_agents_status(db, current_user)
+        logger.info(f"API: Retrieved {len(agents_status)} agents for user {current_user.id}")
         
         # Apply filters
         if search:
             search_lower = search.lower()
             agents_status = [
                 agent for agent in agents_status
-                if (search_lower in agent.get("name", "").lower() or
-                    search_lower in agent.get("description", "").lower() or
-                    any(search_lower in tag.lower() for tag in (agent.get("tags") or [])))
+                if (search_lower in (agent.get("name") or "").lower() or
+                    search_lower in (agent.get("description") or "").lower() or
+                    any(search_lower in str(tag).lower() for tag in (agent.get("tags") or []) if tag is not None))
             ]
         
         if status:
@@ -647,7 +740,7 @@ async def get_agent_status(
     try:
         # Get database status
         result = await db.execute(
-            select(agents_table.c.status, agents_table.c.last_updated)
+            select(agents_table.c.status, agents_table.c.last_updated, agents_table.c.user_id)
             .where(agents_table.c.name == agent_name)
         )
         agent_row = result.fetchone()
@@ -662,7 +755,7 @@ async def get_agent_status(
         last_updated = agent_row.last_updated
         
         # Check actual deployment status
-        vs_dir = _VECTORSTORE_DIR / agent_name
+        vs_dir = get_agent_vectorstore_path(agent_name, agent_row.user_id)
         offline_marker = vs_dir / ".offline"
         
         actual_status = db_status

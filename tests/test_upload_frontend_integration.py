@@ -36,7 +36,7 @@ class FrontendUploadIntegrationTests:
         
     def setup_selenium_driver(self):
         """Setup Selenium WebDriver for frontend testing"""
-        print("🌐 Setting up Selenium WebDriver...")
+        print(" Setting up Selenium WebDriver...")
         
         chrome_options = Options()
         chrome_options.add_argument("--headless")  # Run in headless mode

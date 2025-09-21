@@ -186,7 +186,7 @@ class MasterUploadTestRunner:
                 return 1
                 
         except Exception as e:
-            print(f"\n💥 CRITICAL ERROR: Test runner failed: {e}")
+            print(f"\n CRITICAL ERROR: Test runner failed: {e}")
             return 2
 
 

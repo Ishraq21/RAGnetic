@@ -1150,7 +1150,7 @@ function renderBenchmarkResults(benchmark) {
                     ${insights.map(insight => `
                         <div class="insight-item ${insight.type}">
                             <div class="insight-icon">
-                                ${insight.type === 'positive' ? '✓' : insight.type === 'warning' ? '⚠' : 'ℹ'}
+                                ${insight.type === 'positive' ? '✓' : insight.type === 'warning' ? '' : 'ℹ'}
                             </div>
                             <div class="insight-text">
                                 <strong>${insight.title}</strong>
@@ -1452,7 +1452,7 @@ async function generateAIInsights(runId) {
                 insightDiv.className = `insight-item ${insight.type}`;
                 insightDiv.innerHTML = `
                     <div class="insight-icon">
-                        ${insight.type === 'positive' ? '✓' : insight.type === 'warning' ? '⚠' : 'ℹ'}
+                        ${insight.type === 'positive' ? '✓' : insight.type === 'warning' ? '' : 'ℹ'}
                     </div>
                     <div class="insight-text">
                         <strong>${insight.title}</strong>

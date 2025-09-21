@@ -63,7 +63,7 @@ class UploadTestSuite:
     
     def create_test_files(self):
         """Create various test files for upload testing"""
-        print("📁 Creating test files...")
+        print("[FILE] Creating test files...")
         
         # Text file
         text_file = self.test_data_dir / "test_document.txt"
@@ -141,7 +141,7 @@ This document tests markdown parsing and upload functionality.
     
     def create_test_agents(self):
         """Create test agents for upload testing"""
-        print("🤖 Creating test agents...")
+        print("[AGENT] Creating test agents...")
         
         agents_dir = Path("agents")
         agents_dir.mkdir(exist_ok=True)
@@ -167,7 +167,7 @@ This document tests markdown parsing and upload functionality.
     
     def setup_database(self):
         """Setup test database"""
-        print("🗄 Setting up test database...")
+        print(" Setting up test database...")
         
         # This will be handled by the test fixtures
         print(" Database setup complete")
@@ -416,7 +416,7 @@ This document tests markdown parsing and upload functionality.
     
     def cleanup_test_environment(self):
         """Clean up test environment"""
-        print("🧹 Cleaning up test environment...")
+        print(" Cleaning up test environment...")
         
         # Remove test files
         if self.test_data_dir.exists():

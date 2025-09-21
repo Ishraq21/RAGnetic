@@ -234,7 +234,8 @@ class AgentManager:
                 "embedding_model": agent.embedding_model,
                 "last_run": agent.last_run,
                 "deployment_type": agent.deployment_type,
-                "tags": agent.tags
+                "tags": agent.tags,
+                "user_id": agent.user_id
             }
             
         except Exception as e:
@@ -244,6 +245,7 @@ class AgentManager:
     async def get_all_agents_status(self, db: AsyncSession, current_user=None) -> List[Dict]:
         """Get status for all agents with real analytics data."""
         try:
+            logger.info(f"AgentManager: get_all_agents_status called with user: {current_user.id if current_user else 'None'}, superuser: {current_user.is_superuser if current_user else 'Unknown'}")
             result = await db.execute(
                 select(agents_table)
                 .order_by(agents_table.c.created_at.desc())
@@ -253,9 +255,17 @@ class AgentManager:
             # Apply user-based filtering
             if current_user and not current_user.is_superuser:
                 # For non-admin users, only show agents they created
-                # For now, we'll show all agents since we don't have user_id in agents table
-                # TODO: Add user_id column to agents table for proper user-based filtering
-                pass
+                logger.info(f"Filtering agents for user {current_user.id} (superuser: {current_user.is_superuser})")
+                original_count = len(agents)
+                agents = [agent for agent in agents if agent.user_id == current_user.id]
+                logger.info(f"Filtered from {original_count} to {len(agents)} agents for user {current_user.id}")
+            else:
+                logger.info(f"Showing all agents for user {current_user.id if current_user else 'None'} (superuser: {current_user.is_superuser if current_user else 'Unknown'})")
+            
+            # If no agents in database, return empty list (don't fall back to file-based loading)
+            if not agents:
+                logger.info("No agents found in database, returning empty list")
+                return []
             
             # Get analytics data for all agents
             from app.api.analytics import get_usage_summary_for_agents
@@ -283,7 +293,8 @@ class AgentManager:
                     "embedding_model": agent.embedding_model,
                     "last_run": agent.last_run,
                     "deployment_type": agent.deployment_type,
-                    "tags": agent.tags
+                    "tags": agent.tags,
+                    "user_id": agent.user_id
                 }
                 for agent in agents
             ]

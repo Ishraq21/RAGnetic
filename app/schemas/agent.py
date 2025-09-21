@@ -325,6 +325,7 @@ class AgentDeploymentStatus(BaseModel):
     last_run: Optional[datetime] = None
     deployment_type: Optional[str] = None
     tags: Optional[List[str]] = None
+    user_id: Optional[int] = None
 
 class AgentInspectionResponse(BaseModel):
     name: str

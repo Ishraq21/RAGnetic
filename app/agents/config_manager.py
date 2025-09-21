@@ -15,12 +15,19 @@ yaml.add_representer(str, represent_str)
 AGENTS_DIR = "agents"
 
 
-def save_agent_config(config: AgentConfig):
+def save_agent_config(config: AgentConfig, user_id: int = None):
     """Saves an agent's configuration to a YAML file."""
-    if not os.path.exists(AGENTS_DIR):
-        os.makedirs(AGENTS_DIR)
-
-    file_path = os.path.join(AGENTS_DIR, f"{config.name}.yaml")
+    if user_id and user_id > 0:  # Ensure user_id is valid
+        # Use user-specific directory
+        user_agents_dir = os.path.join(AGENTS_DIR, "users", str(user_id))
+        if not os.path.exists(user_agents_dir):
+            os.makedirs(user_agents_dir)
+        file_path = os.path.join(user_agents_dir, f"{config.name}.yaml")
+    else:
+        # Use global agents directory (backward compatibility)
+        if not os.path.exists(AGENTS_DIR):
+            os.makedirs(AGENTS_DIR)
+        file_path = os.path.join(AGENTS_DIR, f"{config.name}.yaml")
     
     # Convert the config to dict
     config_dict = config.model_dump()
@@ -29,9 +36,19 @@ def save_agent_config(config: AgentConfig):
         yaml.dump(config_dict, f, sort_keys=False, default_flow_style=False, allow_unicode=True, width=float('inf'))
 
 
-def load_agent_config(agent_name: str) -> AgentConfig:
+def load_agent_config(agent_name: str, user_id: int = None) -> AgentConfig:
     """Loads a specific agent's configuration from its YAML file."""
-    file_path = os.path.join(AGENTS_DIR, f"{agent_name}.yaml")
+    if user_id:
+        # Try user-specific directory first
+        user_agents_dir = os.path.join(AGENTS_DIR, "users", str(user_id))
+        file_path = os.path.join(user_agents_dir, f"{agent_name}.yaml")
+        if not os.path.exists(file_path):
+            # Fall back to global directory
+            file_path = os.path.join(AGENTS_DIR, f"{agent_name}.yaml")
+    else:
+        # Use global agents directory
+        file_path = os.path.join(AGENTS_DIR, f"{agent_name}.yaml")
+    
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Agent config not found: {file_path}")
 

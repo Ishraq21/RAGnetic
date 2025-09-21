@@ -491,7 +491,7 @@ class UploadStressTests:
             ("empty_file", ""),
             ("invalid_file", "invalid content with special chars: \x00\x01\x02"),
             ("very_long_filename", "a" * 255 + ".txt"),
-            ("unicode_filename", "测试文件.txt"),
+            ("unicode_filename", ".txt"),
         ]
         
         results = []

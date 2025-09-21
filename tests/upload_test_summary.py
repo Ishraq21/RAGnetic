@@ -25,7 +25,7 @@ class UploadTestSummary:
         
     def analyze_file_structure(self):
         """Analyze the file structure and organization"""
-        print("📁 Analyzing File Structure...")
+        print("[FILE] Analyzing File Structure...")
         
         try:
             # Check test files

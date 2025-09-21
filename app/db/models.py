@@ -135,6 +135,7 @@ agents_table = Table(
     Column("gpu_instance_id", String(255), nullable=True),
     Column("deployment_type", String(50), nullable=True),
     Column("tags", JSON, nullable=True),
+    Column("user_id", Integer, ForeignKey("users.id"), nullable=True),
     Column("created_at", DateTime, default=utc_timestamp, nullable=False),
     Column("updated_at", DateTime, onupdate=utc_timestamp, default=utc_timestamp, nullable=False),
 )

@@ -81,7 +81,7 @@ def start_server():
 def stop_server(process):
     """Stop the server process"""
     if process:
-        print("🛑 Stopping server...")
+        print(" Stopping server...")
         process.terminate()
         process.wait()
         print("   Server stopped")
@@ -106,7 +106,7 @@ def main():
                 time.sleep(1)
                 
         except KeyboardInterrupt:
-            print("\n🛑 Shutting down...")
+            print("\n Shutting down...")
             stop_server(server_process)
     else:
         print("Failed to start server")
