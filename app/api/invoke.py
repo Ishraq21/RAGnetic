@@ -240,7 +240,7 @@ async def invoke_deployment(
             
         except Exception as e:
             # Log the error but don't fail the request
-            logger.error(f"Failed to update billing: {str(e)}")
+            logger.error(f"Failed to update credits: {str(e)}")
             await db.rollback()
         
         return {

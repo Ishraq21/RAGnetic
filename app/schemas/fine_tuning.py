@@ -57,18 +57,11 @@ class FineTuningJobConfig(BaseModel):
         default_factory=HyperparametersConfig,
         description="Detailed configuration for fine-tuning hyperparameters."
     )
-    gpu_type_preference: Optional[str] = Field(None, description="Preferred GPU type (optional).")
     notification_emails: Optional[List[str]] = Field(None, description="Emails to notify about status changes.")
     device: Optional[Literal['cpu', 'cuda', 'mps']] = Field(
         None, description="Force device if set; otherwise auto-detect."
     )
     
-    # GPU Infrastructure fields
-    use_gpu: bool = Field(False, description="Whether to use GPU infrastructure for training.")
-    gpu_type: Optional[str] = Field(None, description="Specific GPU type to use (e.g., 'RTX 4090', 'A100').")
-    gpu_provider: Optional[str] = Field(None, description="GPU provider to use (e.g., 'runpod').")
-    max_hours: Optional[float] = Field(None, description="Maximum hours to run the GPU instance.")
-    gpu_instance_id: Optional[str] = Field(None, description="GPU instance ID assigned during provisioning.")
 
     # Optional: ignore unknown keys to avoid Celery failures on forward-compat JSON
     model_config = ConfigDict(extra="ignore")
@@ -85,7 +78,6 @@ class FineTunedModel(BaseModel):
     hyperparameters: Optional[Dict[str, Any]] = Field(None, description="A dictionary of the actual hyperparameters used for this training run.")
     final_loss: Optional[float] = Field(None, description="The final training loss recorded at the end of the job.")
     validation_loss: Optional[float] = Field(None, description="The final validation loss recorded (if validation set was used).")
-    gpu_hours_consumed: Optional[float] = Field(None, description="Estimated total GPU hours consumed by this training job.")
     estimated_training_cost_usd: Optional[float] = Field(None, description="Estimated monetary cost of this training job in USD.")
     created_by_user_id: int = Field(..., description="The ID of the user who initiated this fine-tuning job.")
     created_at: datetime = Field(..., description="Timestamp when this fine-tuning job record was created.")

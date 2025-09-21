@@ -27,11 +27,7 @@
     <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20250115" defer></script>
     <script src="{{ url_for('static', path='js/training.js') }}?v=20241228" defer></script>
     <script src="{{ url_for('static', path='js/evaluation.js') }}?v=20250113c" defer></script>
-    <script src="{{ url_for('static', path='js/projects.js') }}" defer></script>
-    <script src="{{ url_for('static', path='js/gpu.js') }}" defer></script>
-    <script src="{{ url_for('static', path='js/gpu-config.js') }}" defer></script>
     <script src="{{ url_for('static', path='js/deployments.js') }}" defer></script>
-    <script src="{{ url_for('static', path='js/billing.js') }}" defer></script>
     <script src="{{ url_for('static', path='js/analytics.js') }}" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
 
@@ -57,7 +53,6 @@ function showMetricDetails(metricType) {
         'error-rate': 'Error Rate Analysis',
         'response-time': 'Response Time Breakdown',
         'active-users': 'Active Users Details',
-        'gpu-utilization': 'GPU Utilization Details',
         'training-jobs': 'Training Jobs Status',
         'daily-cost': 'Cost Breakdown'
     };
@@ -125,7 +120,6 @@ async function fetchMetricDetails(metricType) {
         'error-rate': '/api/v1/analytics/error-details',
         'response-time': '/api/v1/analytics/response-time-details',
         'active-users': '/api/v1/analytics/active-users-details',
-        'gpu-utilization': '/api/v1/analytics/gpu-details',
         'training-jobs': '/api/v1/analytics/training-details',
         'daily-cost': '/api/v1/analytics/cost-details'
     };
@@ -221,13 +215,6 @@ function getTableColumns(metricType) {
             { key: 'last_activity', header: 'Last Activity', type: 'datetime' },
             { key: 'session_duration', header: 'Session Duration', type: 'duration' },
             { key: 'requests_count', header: 'Requests', type: 'number' }
-        ],
-        'gpu-utilization': [
-            { key: 'instance_id', header: 'Instance', type: 'text' },
-            { key: 'gpu_type', header: 'GPU Type', type: 'text' },
-            { key: 'utilization', header: 'Utilization', type: 'percentage' },
-            { key: 'memory_used', header: 'Memory Used', type: 'bytes' },
-            { key: 'temperature', header: 'Temperature', type: 'temperature' }
         ],
         'training-jobs': [
             { key: 'job_id', header: 'Job ID', type: 'text' },
@@ -342,10 +329,6 @@ document.addEventListener('keydown', function(event) {
     <script>
 
 // Professional navigation functions
-function navigateToGPU() {
-    // Navigate to GPU tab or open GPU provisioning modal
-    switchView('gpu');
-}
 
 function navigateToTraining() {
     // Navigate to training tab
@@ -1571,21 +1554,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 </svg>
                 Evaluation
             </button>
-            <button class="tab-nav-item" data-view="projects">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
-                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
-                </svg>
-                Projects
-            </button>
-            <button class="tab-nav-item" data-view="gpu-control">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                    <line x1="8" y1="21" x2="16" y2="21"></line>
-                    <line x1="12" y1="17" x2="12" y2="21"></line>
-                </svg>
-                GPU Control
-            </button>
             <button class="tab-nav-item" data-view="deployments">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
@@ -1593,13 +1561,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     <line x1="12" y1="22.08" x2="12" y2="12"></line>
                 </svg>
                 Deployments
-            </button>
-            <button class="tab-nav-item" data-view="billing">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="12" y1="1" x2="12" y2="23"></line>
-                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
-                </svg>
-                Billing
             </button>
         </div>
 
@@ -1615,7 +1576,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             <circle cx="11" cy="11" r="8"></circle>
                             <path d="M21 21l-4.35-4.35"></path>
                         </svg>
-                        <input type="text" class="search-input" placeholder="Search agents, models, jobs, projects..." />
+                        <input type="text" class="search-input" placeholder="Search agents, models, jobs..." />
                     </div>
                 </div>
             </div>
@@ -1624,32 +1585,6 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="home-section">
                 <h2 class="section-header">Get Started</h2>
                 <div class="primary-actions-grid">
-                    <div class="primary-action-card" onclick="navigateToGPU()">
-                        <div class="card-header">
-                            <div class="card-icon gpu-icon">
-                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                                    <line x1="8" y1="21" x2="16" y2="21"></line>
-                                    <line x1="12" y1="17" x2="12" y2="21"></line>
-                                    <circle cx="12" cy="10" r="2"></circle>
-                                </svg>
-                            </div>
-                            <div class="card-status">
-                                <span class="status-dot available"></span>
-                                <span class="status-text">Available</span>
-                            </div>
-                        </div>
-                        <div class="card-content">
-                            <h3 class="card-title">Provision GPU</h3>
-                            <p class="card-description">Pick GPU type, provider, and start an instance</p>
-                            <div class="card-secondary-info">
-                                <span class="secondary-text">Last provisioned: 1h ago</span>
-                            </div>
-                        </div>
-                        <div class="card-footer">
-                            <button class="primary-cta-btn">Provision Now</button>
-                        </div>
-                    </div>
 
                     <div class="primary-action-card" onclick="navigateToTraining()">
                         <div class="card-header">
@@ -2239,42 +2174,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             </div>
                         </div>
 
-                        <!-- Cost & Billing Card -->
-                        <div class="detail-card">
-                            <div class="card-header">
-                                <div class="card-header-left">
-                                    <h3>Cost & Billing</h3>
-                                </div>
-                                <div class="timeframe-selector">
-                                    <select id="cost-timeframe" onchange="updateCostTimeframe()" class="timeframe-dropdown">
-                                        <option value="7">Last 7 days</option>
-                                        <option value="30" selected>Last 30 days</option>
-                                        <option value="90">Last 90 days</option>
-                                        <option value="365">Last year</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="card-content">
-                                <div class="metrics-grid">
-                                    <div class="metric-item">
-                                        <div class="metric-label" id="cost-period-label">This Month</div>
-                                        <div class="cost-value" id="agent-monthly-cost">$0.00</div>
-                                    </div>
-                                    <div class="metric-item">
-                                        <div class="metric-label">Total Cost</div>
-                                        <div class="cost-value" id="agent-total-cost">$0.00</div>
-                                    </div>
-                                    <div class="metric-item">
-                                        <div class="metric-label">Token Usage</div>
-                                        <div class="metric-value" id="agent-token-usage">0 tokens</div>
-                                    </div>
-                                    <div class="metric-item">
-                                        <div class="metric-label">API Calls</div>
-                                        <div class="metric-value" id="agent-api-calls">0 calls</div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
 
                         <!-- System Status Card -->
                         <div class="detail-card">
@@ -2447,14 +2346,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         </svg>
                         Training
                     </button>
-                    <button class="subtab-btn" data-tab="gpu">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                            <line x1="8" y1="21" x2="16" y2="21"></line>
-                            <line x1="12" y1="17" x2="12" y2="21"></line>
-                        </svg>
-                        GPU Analytics
-                    </button>
                     <button class="subtab-btn" data-tab="evaluation">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M9 11H5a2 2 0 0 0-2 2v3c0 1.1.9 2 2 2h4m0-7v7m0-7h10a2 2 0 0 1 2 2v3c0 1.1-.9 2-2 2h-4m-6 0h6"></path>
@@ -2531,13 +2422,6 @@ document.addEventListener('DOMContentLoaded', function() {
                                         </svg>
                                     </div>
                                     <div class="metric-content">
-                                        <h3>GPU Compute</h3>
-                                        <div class="metric-value" id="gpu-hours">0h</div>
-                                        <div class="metric-description">Total GPU compute hours</div>
-                                        <div class="metric-trend" id="gpu-trend">
-                                            <span class="trend-indicator neutral">→</span>
-                                            <span class="trend-text">Stable usage</span>
-                                        </div>
                                     </div>
                                 </div>
                             
@@ -2734,30 +2618,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     </div>
                 </div>
 
-                        <!-- GPU Cost Breakdown -->
-                        <div class="cost-section">
-                            <h3> GPU Compute Costs</h3>
-                            <div class="cost-charts">
-                                <div class="chart-container large">
-                    <div class="chart-header">
-                                        <h4>GPU Spending Trends</h4>
-                                        <p>Daily GPU compute costs by provider</p>
-                    </div>
-                                    <div class="chart-wrapper large">
-                                        <canvas id="gpu-cost-chart"></canvas>
-                                    </div>
-                                </div>
-                                <div class="chart-container medium">
-                                    <div class="chart-header">
-                                        <h4>GPU Cost Efficiency</h4>
-                                        <p>Cost per hour by GPU type</p>
-                                    </div>
-                                    <div class="chart-wrapper medium">
-                                        <canvas id="gpu-efficiency-chart"></canvas>
-                                    </div>
-                    </div>
-                </div>
-            </div>
 
                         <!-- Training Cost Breakdown -->
                         <div class="cost-section">
@@ -2808,13 +2668,6 @@ document.addEventListener('DOMContentLoaded', function() {
                                                 <td><span class="trend-indicator positive">+17.4%</span></td>
                                             </tr>
                                             <tr>
-                                                <td>GPU Compute</td>
-                                                <td>$23.80</td>
-                                                <td>$25.20</td>
-                                                <td>-$1.40</td>
-                                                <td><span class="trend-indicator negative">-5.6%</span></td>
-                                            </tr>
-                                            <tr>
                                                 <td>Training</td>
                                                 <td>$12.50</td>
                                                 <td>$8.90</td>
@@ -2841,7 +2694,6 @@ document.addEventListener('DOMContentLoaded', function() {
                                 <tr>
                                     <th>Date</th>
                                                 <th>LLM Cost</th>
-                                                <th>GPU Cost</th>
                                                 <th>Training Cost</th>
                                                 <th>Total</th>
                                 </tr>
@@ -3119,86 +2971,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     </div>
                 </div>
 
-                <!-- GPU Analytics Tab -->
-                <div class="subtab-content" id="gpu-tab">
-                    
-                    <div class="gpu-sections">
-                        <!-- Usage Analytics -->
-                        <div class="gpu-section">
-                            <h3>Usage Analytics</h3>
-                            <div class="gpu-charts">
-                                <div class="chart-container large">
-                                    <div class="chart-header">
-                                        <h4>GPU Compute Hours</h4>
-                                        <p>Usage patterns by GPU type and provider</p>
-                                    </div>
-                                    <div class="chart-wrapper large">
-                                        <canvas id="gpu-usage-chart"></canvas>
-                                    </div>
-                                </div>
-                                <div class="chart-container medium">
-                                    <div class="chart-header">
-                                        <h4>GPU Utilization Rate</h4>
-                                        <p>Average utilization by GPU type</p>
-                                    </div>
-                                    <div class="chart-wrapper medium">
-                                        <canvas id="gpu-utilization-chart"></canvas>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Performance Metrics -->
-                        <div class="gpu-section">
-                            <h3>⚡ Performance Metrics</h3>
-                            <div class="gpu-charts">
-                                <div class="chart-container large">
-                                    <div class="chart-header">
-                                        <h4>GPU Performance Comparison</h4>
-                                        <p>Throughput and efficiency by GPU type</p>
-                                    </div>
-                                    <div class="chart-wrapper large">
-                                        <canvas id="gpu-performance-chart"></canvas>
-                                    </div>
-                                </div>
-                                <div class="chart-container medium">
-                                    <div class="chart-header">
-                                        <h4>Instance Lifecycle</h4>
-                                        <p>Average instance duration and patterns</p>
-                                    </div>
-                                    <div class="chart-wrapper medium">
-                                        <canvas id="instance-lifecycle-chart"></canvas>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Cost Analysis -->
-                        <div class="gpu-section">
-                            <h3>Cost Analysis</h3>
-                            <div class="gpu-charts">
-                                <div class="chart-container large">
-                                    <div class="chart-header">
-                                        <h4>GPU Cost Trends</h4>
-                                        <p>Daily GPU spending by provider</p>
-                                    </div>
-                                    <div class="chart-wrapper large">
-                                        <canvas id="gpu-cost-trends-chart"></canvas>
-                                    </div>
-                                </div>
-                                <div class="chart-container medium">
-                                    <div class="chart-header">
-                                        <h4>Cost per Compute Hour</h4>
-                                        <p>Efficiency comparison by GPU type</p>
-                                    </div>
-                                    <div class="chart-wrapper medium">
-                                        <canvas id="cost-per-hour-chart"></canvas>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
 
                 <!-- Evaluation Tab -->
                 <div class="subtab-content" id="evaluation-tab">
@@ -3366,37 +3138,7 @@ document.addEventListener('DOMContentLoaded', function() {
         </div>
         </div>
 
-        <!-- Projects View -->
-        <div class="view-content" id="projects-view">
-            <div class="projects-grid">
-                <div class="list-header">Project Management</div>
-                <div class="projects-content">
-                    <div class="loading-state">
-                        <div class="loading-spinner"></div>
-                        <p>Loading projects...</p>
-                    </div>
-                </div>
-            </div>
-        </div>
 
-        <!-- GPU Control View -->
-        <div class="view-content" id="gpu-control-view">
-            <div class="gpu-control-grid">
-                <div class="list-header">
-                    GPU Infrastructure Control
-                    <div class="gpu-service-status-header">
-                        <span class="status-badge status-unknown" id="gpu-service-badge">Loading...</span>
-                        <span class="status-message" id="gpu-service-message">Checking service status...</span>
-                    </div>
-                </div>
-                <div class="gpu-control-content">
-                    <div class="loading-state">
-                        <div class="loading-spinner"></div>
-                        <p>Loading GPU infrastructure...</p>
-                    </div>
-                </div>
-            </div>
-        </div>
 
         <!-- Deployments View -->
         <div class="view-content" id="deployments-view">
@@ -3411,18 +3153,6 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
         </div>
 
-        <!-- Billing View -->
-        <div class="view-content" id="billing-view">
-            <div class="billing-grid">
-                <div class="list-header">Billing & Credits</div>
-                <div class="billing-content">
-                    <div class="loading-state">
-                        <div class="loading-spinner"></div>
-                        <p>Loading billing information...</p>
-                    </div>
-                </div>
-            </div>
-        </div>
     </main>
 
     <!-- Create Training Job Modal -->
@@ -3682,11 +3412,6 @@ document.addEventListener('DOMContentLoaded', function() {
                                 </div>
                             </div>
                             
-                            <div class="form-group">
-                                <label for="cost-per-gpu-hour">Cost per GPU Hour (USD)</label>
-                                <input type="number" id="cost-per-gpu-hour" name="cost_per_gpu_hour" min="0" max="10" step="0.1" value="0.5">
-                                <small>Estimated cost per GPU hour for cost tracking</small>
-                            </div>
                             
                             <div class="form-group">
                                 <label for="device">Device</label>
@@ -4296,17 +4021,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     </div>
                 </div>
 
-                <!-- GPU Configuration Section -->
-                <div class="form-section">
-                    <div class="section-header">
-                        <h3>GPU Configuration</h3>
-                        <p>Configure GPU acceleration for your agent (optional)</p>
-                    </div>
-                    
-                    <div id="gpu-config-container">
-                        <!-- GPU configuration will be rendered here -->
-                    </div>
-                </div>
 
                 <div class="form-actions">
                     <button type="button" class="btn-secondary" onclick="hideCreateAgentModal()">Cancel</button>

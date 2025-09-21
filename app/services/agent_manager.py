@@ -234,7 +234,6 @@ class AgentManager:
                 "embedding_model": agent.embedding_model,
                 "last_run": agent.last_run,
                 "deployment_type": agent.deployment_type,
-                "project_id": agent.project_id,
                 "tags": agent.tags
             }
             
@@ -277,7 +276,6 @@ class AgentManager:
                     "embedding_model": agent.embedding_model,
                     "last_run": agent.last_run,
                     "deployment_type": agent.deployment_type,
-                    "project_id": agent.project_id,
                     "tags": agent.tags
                 }
                 for agent in agents

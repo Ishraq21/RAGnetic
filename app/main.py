@@ -89,7 +89,6 @@ from alembic.script import ScriptDirectory
 
 # API Routers
 from app.api.agents import router as agents_api_router
-from app.api.gpu import router as gpu_api_router
 from app.api.audit import router as audit_api_router
 from app.api.query import router as query_api_router
 from app.api.analytics import router as analytics_api_router
@@ -403,7 +402,6 @@ async def shutdown_event():
 
 # --- INCLUDE THE API ROUTERS ---
 app.include_router(agents_api_router)
-app.include_router(gpu_api_router)
 app.include_router(audit_api_router)
 app.include_router(query_api_router)
 app.include_router(metrics_api_router)

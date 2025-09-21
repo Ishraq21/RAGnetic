@@ -16,7 +16,7 @@ from app.schemas.deployments import (
 from app.schemas.security import User
 from app.db import get_db
 from app.db.models import (
-    deployments_table, api_keys_table, projects_table, agents_table
+    deployments_table, api_keys_table, agents_table
 )
 
 router = APIRouter(prefix="/api/v1/deployments", tags=["Deployments API"])
@@ -48,22 +48,6 @@ async def create_api_deployment(
 ):
     """Create an API deployment with an API key."""
     try:
-        # Verify project exists and belongs to user
-        project_result = await db.execute(
-            select(projects_table).where(
-                and_(
-                    projects_table.c.id == deployment_data.project_id,
-                    projects_table.c.user_id == current_user.id
-                )
-            )
-        )
-        project = project_result.fetchone()
-        
-        if not project:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found"
-            )
         
         # Verify agent exists
         agent_result = await db.execute(
@@ -97,7 +81,6 @@ async def create_api_deployment(
         # Create deployment
         deployment_result = await db.execute(
             insert(deployments_table).values(
-                project_id=deployment_data.project_id,
                 user_id=current_user.id,
                 agent_id=deployment_data.agent_id,
                 deployment_type="api",
@@ -148,7 +131,6 @@ async def list_deployments(
         return [
             Deployment(
                 id=deployment.id,
-                project_id=deployment.project_id,
                 agent_id=deployment.agent_id,
                 deployment_type=deployment.deployment_type,
                 status=deployment.status,

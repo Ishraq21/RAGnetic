@@ -9,7 +9,6 @@ class AnalyticsDashboard {
             overview: null,
             costs: null,
             usage: null,
-            gpu: null,
             training: null,
             deployments: null
         };
@@ -100,11 +99,10 @@ class AnalyticsDashboard {
             this.showLoadingState();
             
             // Load all analytics data in parallel, with error handling for each
-            const [overview, costs, usage, gpu, training, deployments] = await Promise.allSettled([
+            const [overview, costs, usage, training, deployments] = await Promise.allSettled([
                 this.fetchOverviewData(),
                 this.fetchCostData(),
                 this.fetchUsageData(),
-                this.fetchGPUData(),
                 this.fetchTrainingData(),
                 this.fetchDeploymentData()
             ]);
@@ -113,7 +111,6 @@ class AnalyticsDashboard {
                 overview: overview.status === 'fulfilled' ? overview.value : null,
                 costs: costs.status === 'fulfilled' ? costs.value : null,
                 usage: usage.status === 'fulfilled' ? usage.value : null,
-                gpu: gpu.status === 'fulfilled' ? gpu.value : { usageSummary: [], providerAnalytics: [], costTrends: [], performance: [] },
                 training: training.status === 'fulfilled' ? training.value : null,
                 deployments: deployments.status === 'fulfilled' ? deployments.value : null
             };
@@ -228,27 +225,6 @@ class AnalyticsDashboard {
         }
     }
 
-    async fetchGPUData() {
-        try {
-            // GPU analytics endpoints are not available in the current version
-            // Return empty data structure to prevent errors
-            console.log('GPU analytics endpoints not available - returning empty data');
-            return {
-                usageSummary: [],
-                providerAnalytics: [],
-                costTrends: [],
-                performance: []
-            };
-        } catch (error) {
-            console.warn('GPU analytics not available:', error);
-            return {
-                usageSummary: [],
-                providerAnalytics: [],
-                costTrends: [],
-                performance: []
-            };
-        }
-    }
 
     async fetchTrainingData() {
         try {
@@ -329,16 +305,6 @@ class AnalyticsDashboard {
             });
         }
 
-        // Calculate GPU costs
-        let totalGPUCost = 0;
-        let totalGPUHours = 0;
-        const gpuData = this.analyticsData.gpu;
-        if (gpuData && gpuData.usageSummary && Array.isArray(gpuData.usageSummary)) {
-            gpuData.usageSummary.forEach(usage => {
-                totalGPUHours += usage.total_hours || 0;
-                totalGPUCost += usage.total_cost || 0;
-            });
-        }
 
         // Calculate performance metrics
         if (data.latency && Array.isArray(data.latency)) {
@@ -351,7 +317,7 @@ class AnalyticsDashboard {
             successRate = data.agentRuns.length > 0 ? (successfulRuns / data.agentRuns.length) * 100 : 0;
         }
 
-        const totalSpend = totalLLMCost + totalGPUCost;
+        const totalSpend = totalLLMCost;
 
         // Update Total Spend (primary card)
         const totalSpendEl = document.getElementById('total-spend');
@@ -365,11 +331,6 @@ class AnalyticsDashboard {
             totalRequestsEl.textContent = totalRequests.toLocaleString();
         }
 
-        // Update GPU Hours
-        const gpuHoursEl = document.getElementById('gpu-hours');
-        if (gpuHoursEl) {
-            gpuHoursEl.textContent = `${totalGPUHours.toFixed(1)}h`;
-        }
 
         // Update Active Agents
         const activeAgentsEl = document.getElementById('active-agents');
