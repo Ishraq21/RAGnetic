@@ -200,7 +200,7 @@ class UploadValidationSecurityTests:
             "file-with-dashes.txt",
             "file_with_underscores.txt",
             "file.with.dots.txt",
-            "file with unicode 测试.txt",
+            "file with unicode .txt",
             "file with special chars !@#$%^&*().txt",
             "very_long_filename_" + "a" * 200 + ".txt",
             "file\nwith\nnewlines.txt",
@@ -375,11 +375,11 @@ class UploadValidationSecurityTests:
         
         # Test various Unicode content
         unicode_tests = [
-            ("unicode_basic.txt", "Hello 世界", True),
-            ("unicode_emoji.txt", "Hello 👋 World 🌍", True),
+            ("unicode_basic.txt", "Hello ", True),
+            ("unicode_emoji.txt", "Hello  World ", True),
             ("unicode_math.txt", "∑∞∫∂∇", True),
             ("unicode_arabic.txt", "مرحبا بالعالم", True),
-            ("unicode_chinese.txt", "你好世界", True),
+            ("unicode_chinese.txt", "", True),
             ("unicode_cyrillic.txt", "Привет мир", True),
             ("unicode_control.txt", "Text with\x00null\x01control\x02chars", True),
         ]

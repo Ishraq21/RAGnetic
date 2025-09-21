@@ -337,9 +337,10 @@ async def upload_training_dataset(
             detail="Only JSONL and JSON files are supported for training datasets"
         )
     
-    # Create user-specific uploads directory
-    user_upload_dir = Path("data/uploaded_temp") / f"user_{current_user.id}"
-    user_upload_dir.mkdir(parents=True, exist_ok=True)
+    # Create user-specific uploads directory using utility function
+    from app.core.user_paths import get_user_data_dir, ensure_user_directories
+    ensure_user_directories(current_user.id)
+    user_upload_dir = get_user_data_dir(current_user.id)
     
     # Generate unique filename with timestamp
     from datetime import datetime

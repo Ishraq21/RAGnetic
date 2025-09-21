@@ -71,7 +71,7 @@ class RAGneticTestRunner:
                 "error": "Timeout"
             }
         except Exception as e:
-            print(f"💥 {description} - ERROR: {e}")
+            print(f" {description} - ERROR: {e}")
             return {
                 "success": False,
                 "duration": 0,
@@ -295,12 +295,12 @@ class RAGneticTestRunner:
                 
                 f.write("\n")
         
-        print(f"\n📝 Detailed report saved to: {report_file}")
+        print(f"\n[RESPONSE] Detailed report saved to: {report_file}")
         
         # Print coverage info if available
         coverage_file = self.project_root / "htmlcov" / "index.html"
         if coverage_file.exists():
-            print(f"📈 Coverage report available at: {coverage_file}")
+            print(f" Coverage report available at: {coverage_file}")
 
 
 def main():

@@ -257,7 +257,7 @@ async def load_documents_from_source(source: DataSource, agent_config: AgentConf
     return loaded_docs
 
 
-async def embed_agent_data(config: AgentConfig, db: AsyncSession) -> bool:
+async def embed_agent_data(config: AgentConfig, db: AsyncSession, user_id: int = None) -> bool:
     """
     Main pipeline: load, chunk, filter metadata, build vector store, save BM25.
     """
@@ -330,7 +330,11 @@ async def embed_agent_data(config: AgentConfig, db: AsyncSession) -> bool:
         return True
 
     # 4) Build store
-    store_dir = os.path.join(_VECTORSTORE_DIR, config.name)
+    if user_id:
+        from app.core.user_paths import get_user_vectorstore_path
+        store_dir = get_user_vectorstore_path(user_id, config.name)
+    else:
+        store_dir = os.path.join(_VECTORSTORE_DIR, config.name)
     os.makedirs(store_dir, exist_ok=True)
     embeddings = get_embedding_model(config.embedding_model)
     vs = config.vector_store

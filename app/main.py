@@ -491,11 +491,14 @@ async def upload_temp_document(
         )
 
     try:
-        session_query = select(chat_sessions_table.c.agent_name).where(chat_sessions_table.c.thread_id == thread_id)
-        agent_name = (await db.execute(session_query)).scalar_one_or_none()
-        if not agent_name:
+        # Get agent name and user_id from the session
+        session_query = select(chat_sessions_table.c.agent_name, chat_sessions_table.c.user_id).where(chat_sessions_table.c.thread_id == thread_id)
+        session_result = (await db.execute(session_query)).first()
+        if not session_result:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent for this thread not found.")
-        agent_config = load_agent_config(agent_name) # Load the config
+        agent_name = session_result.agent_name
+        agent_user_id = session_result.user_id
+        agent_config = load_agent_config(agent_name, agent_user_id) # Load the config with user_id
 
         temp_doc_service = TemporaryDocumentService(agent_config=agent_config)
 
@@ -654,7 +657,7 @@ async def websocket_chat(ws: WebSocket,
 
         is_first_message_in_session = (session_topic is None)
 
-        agent_config = load_agent_config(agent_name)
+        agent_config = load_agent_config(agent_name, user_db_id)
         all_tools = []
         if "arxiv" in agent_config.tools: all_tools.extend(get_arxiv_tool())
         if "search_engine" in agent_config.tools: all_tools.append(SearchTool(agent_config=agent_config))
@@ -1215,7 +1218,7 @@ async def delete_session(
 
     try:
         # First, retrieve the agent config to initialize the TemporaryDocumentService
-        agent_config = load_agent_config(safe_agent_name)
+        agent_config = load_agent_config(safe_agent_name, user_id)
         temp_doc_service = TemporaryDocumentService(agent_config=agent_config)
 
         # Before deleting the session record, perform a comprehensive cleanup of temporary files

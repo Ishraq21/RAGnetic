@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert, update, delete
+from sqlalchemy import select, insert, update, delete, and_
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models import agents_table, agent_tools_table
@@ -70,6 +70,7 @@ class AgentSyncService:
                 "last_updated": datetime.utcnow(),
                 "total_cost": 0.0,
                 "gpu_instance_id": None,
+                "user_id": user_id,
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow()
             }
@@ -218,7 +219,8 @@ class AgentSyncService:
                 "total_cost": agent.total_cost,
                 "gpu_instance_id": agent.gpu_instance_id,
                 "created_at": agent.created_at,
-                "updated_at": agent.updated_at
+                "updated_at": agent.updated_at,
+                "user_id": agent.user_id
             }
             
         except Exception as e:
@@ -228,13 +230,23 @@ class AgentSyncService:
     async def delete_agent_from_db(
         self, 
         db: AsyncSession, 
-        agent_name: str
+        agent_name: str,
+        user_id: int = None
     ) -> bool:
         """Delete agent from database."""
         try:
-            result = await db.execute(
-                delete(agents_table).where(agents_table.c.name == agent_name)
-            )
+            if user_id is not None:
+                # Delete only the specific user's agent
+                result = await db.execute(
+                    delete(agents_table).where(
+                        and_(agents_table.c.name == agent_name, agents_table.c.user_id == user_id)
+                    )
+                )
+            else:
+                # Delete all agents with this name (backward compatibility)
+                result = await db.execute(
+                    delete(agents_table).where(agents_table.c.name == agent_name)
+                )
             
             if result.rowcount == 0:
                 return False

@@ -108,6 +108,12 @@ async def create_user(
         new_user_data = await db_dao.create_user(db, user_in)
         if not new_user_data:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create user.")
+        
+        # Create user-specific directories
+        from app.core.user_paths import ensure_user_directories
+        ensure_user_directories(new_user_data['id'])
+        logger.info(f"Created user directories for user {new_user_data['id']}")
+        
         logger.info(
             f"User '{current_user.username}' created new user '{new_user_data['username']}' (ID: {new_user_data['id']}).")
         return UserPublic(**new_user_data)
