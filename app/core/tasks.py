@@ -126,3 +126,23 @@ def cleanup_temporary_documents():
         task_logger.error(f"A critical error occurred during the overall cleanup task: {e}", exc_info=True)
     finally:
         db_session.close()
+
+
+@celery_app.task
+def sync_agents_from_filesystem():
+    """Sync agents from file system to database."""
+    try:
+        from app.services.agent_sync_scheduler import agent_sync_scheduler
+        
+        result = agent_sync_scheduler.sync_agents_from_filesystem()
+        
+        if result['success']:
+            task_logger.info(f"Agent sync completed: {result['synced_count']} new agents synced, {result['total_count']} total agents")
+            if result['errors']:
+                for error in result['errors']:
+                    task_logger.error(error)
+        else:
+            task_logger.error(f"Agent sync failed: {result.get('error', 'Unknown error')}")
+            
+    except Exception as e:
+        task_logger.error(f"Failed to sync agents: {e}", exc_info=True)

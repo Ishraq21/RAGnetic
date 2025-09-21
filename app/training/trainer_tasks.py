@@ -15,7 +15,6 @@ from app.db import get_sync_db_engine
 from app.schemas.fine_tuning import FineTuningJobConfig, FineTuningStatus
 from app.training.trainer import LLMFineTuner
 from app.db.models import fine_tuned_models_table
-from app.executors.gpu_training_executor import GPUTrainingExecutor
 from sqlalchemy import update, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
@@ -131,16 +130,12 @@ async def execute_gpu_training(job_config_dict: Dict[str, Any], user_id: int) ->
         async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         
         async with async_session() as db:
-            # Create GPU training executor
-            gpu_executor = GPUTrainingExecutor(db)
+            # Execute local training
+            logger.info(f"Executing local training for job")
+            fine_tuner = LLMFineTuner(engine)
+            fine_tuner.fine_tune_llm(job_config_dict, user_id)
             
-            # Execute the training job
-            success = await gpu_executor.execute_training_job(job_config_dict, user_id)
-            
-            if not success:
-                raise Exception("GPU training execution failed")
-            
-            logger.info(f"GPU training completed successfully for user {user_id}")
+            logger.info(f"Training completed successfully for user {user_id}")
             
     except Exception as e:
         logger.error(f"GPU training execution failed: {e}", exc_info=True)

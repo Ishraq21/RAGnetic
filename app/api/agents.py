@@ -606,7 +606,7 @@ async def get_all_agents_status(
 ):
     """Get deployment status for all agents with optional filtering."""
     try:
-        agents_status = await agent_manager.get_all_agents_status(db)
+        agents_status = await agent_manager.get_all_agents_status(db, current_user)
         
         # Apply filters
         if search:

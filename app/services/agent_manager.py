@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
-from app.db.models import agents_table, gpu_instances_table
+from app.db.models import agents_table
 from app.schemas.agent import AgentDeploymentStatus
 
 logger = logging.getLogger(__name__)
@@ -241,7 +241,7 @@ class AgentManager:
             logger.error(f"Failed to get agent status for {agent_name}: {e}")
             return None
     
-    async def get_all_agents_status(self, db: AsyncSession) -> List[Dict]:
+    async def get_all_agents_status(self, db: AsyncSession, current_user=None) -> List[Dict]:
         """Get status for all agents with real analytics data."""
         try:
             result = await db.execute(
@@ -249,6 +249,13 @@ class AgentManager:
                 .order_by(agents_table.c.created_at.desc())
             )
             agents = result.fetchall()
+            
+            # Apply user-based filtering
+            if current_user and not current_user.is_superuser:
+                # For non-admin users, only show agents they created
+                # For now, we'll show all agents since we don't have user_id in agents table
+                # TODO: Add user_id column to agents table for proper user-based filtering
+                pass
             
             # Get analytics data for all agents
             from app.api.analytics import get_usage_summary_for_agents

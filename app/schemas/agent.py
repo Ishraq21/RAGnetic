@@ -289,10 +289,6 @@ class AgentConfig(BaseModel):
         description="Benchmark/eval-time overrides (context budget, truncation, etc.)."
     )
 
-    gpu: GPUConfig = Field(
-        default_factory=GPUConfig,
-        description="GPU configuration for acceleration and provisioning."
-    )
 
 # --- Agent Inspection Response Models ---
 
@@ -322,7 +318,6 @@ class AgentDeploymentStatus(BaseModel):
     status: str
     created_at: datetime
     total_cost: float
-    gpu_instance_id: Optional[str] = None
     display_name: Optional[str] = None
     description: Optional[str] = None
     model_name: str
