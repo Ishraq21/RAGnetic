@@ -24,7 +24,6 @@
         // Prefer inline agent rendering on this page to avoid conflicts with external dashboard.js
         window.USE_INLINE_AGENT_RENDERER = true;
     </script>
-    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20250115" defer></script>
     <script src="{{ url_for('static', path='js/training.js') }}?v=20241228" defer></script>
     <script src="{{ url_for('static', path='js/evaluation.js') }}?v=20250113c" defer></script>
     <script src="{{ url_for('static', path='js/deployments.js') }}" defer></script>
@@ -696,7 +695,7 @@ async function getAgentActions(agent) {
     let status = agent.status || 'created';
     try {
         const response = await fetch(`/api/v1/agents/${agent.name}/status`, {
-            headers: { 'X-API-Key': getApiKey() }
+            headers: { 'X-API-Key': loggedInUserToken }
         });
         if (response.ok) {
             const statusData = await response.json();
@@ -988,7 +987,7 @@ async function loadAgentActions(agentName) {
     
     try {
         const response = await fetch(`/api/v1/agents/${agentName}/status`, {
-            headers: { 'X-API-Key': getApiKey() }
+            headers: { 'X-API-Key': loggedInUserToken }
         });
         
         if (response.ok) {
@@ -1015,7 +1014,7 @@ async function loadTableAgentActions(agentName) {
     
     try {
         const response = await fetch(`/api/v1/agents/${agentName}/status`, {
-            headers: { 'X-API-Key': getApiKey() }
+            headers: { 'X-API-Key': loggedInUserToken }
         });
         
         if (response.ok) {
@@ -1456,10 +1455,405 @@ function debounce(func, wait) {
     };
 }
 
+// Load Fine-tuned Models
+async function loadFineTunedModels() {
+    const modelsGrid = document.getElementById('models-grid');
+    if (!modelsGrid) return;
+    
+    // Show loading state
+    modelsGrid.innerHTML = `
+        <div class="list-header">Fine-tuned Models</div>
+        <div class="loading-state">
+            <div class="loading-spinner"></div>
+            <p>Loading fine-tuned models...</p>
+        </div>
+    `;
+    
+    try {
+        const response = await fetch('/api/v1/training/models', {
+            headers: { 'X-API-Key': loggedInUserToken }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const models = await response.json();
+        
+        // Render models
+        if (models.length === 0) {
+            modelsGrid.innerHTML = `
+                <div class="list-header">Fine-tuned Models</div>
+                <div class="empty-state">
+                    <div class="empty-state-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
+                            <path d="M2 17L12 22L22 17"></path>
+                            <path d="M2 12L12 17L22 12"></path>
+                        </svg>
+                    </div>
+                    <h3>No Fine-tuned Models</h3>
+                    <p>You haven't created any fine-tuned models yet. Train your first model to get started.</p>
+                    <button class="btn-primary" onclick="document.querySelector('[data-view=\\"training\\"]').click()">
+                        Go to Training
+                    </button>
+                </div>
+            `;
+            return;
+        }
+        
+        const modelsHtml = models.map(model => {
+            const statusClass = model.training_status || 'unknown';
+            const createdDate = new Date(model.created_at).toLocaleDateString();
+            const progress = model.training_progress || 0;
+            
+            return `
+                <div class="model-card">
+                    <div class="model-header">
+                        <h3>${escapeHtml(model.job_name)}</h3>
+                        <span class="status-badge ${statusClass.toLowerCase()}">${statusClass}</span>
+                    </div>
+                    <div class="model-details">
+                        <div class="detail-row">
+                            <span class="detail-label">Base Model:</span>
+                            <span class="detail-value">${escapeHtml(model.base_model_name)}</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Adapter ID:</span>
+                            <span class="detail-value"><code>${escapeHtml(model.adapter_id)}</code></span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Created:</span>
+                            <span class="detail-value">${createdDate}</span>
+                        </div>
+                        ${model.training_status === 'running' ? `
+                        <div class="detail-row">
+                            <span class="detail-label">Progress:</span>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${progress}%"></div>
+                                <span class="progress-text">${progress}%</span>
+                            </div>
+                        </div>
+                        ` : ''}
+                        ${model.model_card_url ? `
+                        <div class="detail-row">
+                            <span class="detail-label">Model Card:</span>
+                            <a href="${model.model_card_url}" target="_blank" class="btn-link">View</a>
+                        </div>
+                        ` : ''}
+                    </div>
+                    ${model.training_status === 'completed' ? `
+                    <div class="model-actions">
+                        <button class="btn-secondary btn-sm" onclick="useModel('${model.adapter_id}')">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="9" cy="7" r="4"></circle>
+                                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                            </svg>
+                            Use in Agent
+                        </button>
+                    </div>
+                    ` : ''}
+                </div>
+            `;
+        }).join('');
+        
+        modelsGrid.innerHTML = `
+            <div class="list-header">
+                Fine-tuned Models (${models.length})
+                <button class="btn-secondary btn-sm" onclick="loadFineTunedModels()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                    </svg>
+                    Refresh
+                </button>
+            </div>
+            <div class="models-list">
+                ${modelsHtml}
+            </div>
+        `;
+        
+    } catch (error) {
+        console.error('Error loading fine-tuned models:', error);
+        modelsGrid.innerHTML = `
+            <div class="list-header">Fine-tuned Models</div>
+            <div class="error-state">
+                <p>Failed to load models. Please try again.</p>
+                <button class="btn-secondary" onclick="loadFineTunedModels()">Retry</button>
+            </div>
+        `;
+    }
+}
+
+function useModel(adapterId) {
+    // Navigate to agents tab and show option to create agent with this model
+    const agentsTab = document.querySelector('[data-view="agents"]');
+    if (agentsTab) {
+        agentsTab.click();
+        // You can add logic here to pre-populate the model in agent creation
+        showToast(`Model ${adapterId} ready to use. Create a new agent to use this model.`, 'info');
+    }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Agent Modal Functions
+function showCreateAgentModal() {
+    const modal = document.getElementById('create-agent-modal');
+    if (modal) {
+        modal.classList.add('show');
+        // Reset form
+        const form = document.getElementById('create-agent-form');
+        if (form) {
+            form.reset();
+        }
+        // Focus on first input
+        const firstInput = modal.querySelector('input[type="text"]');
+        if (firstInput) {
+            setTimeout(() => firstInput.focus(), 100);
+        }
+    }
+}
+
+function hideCreateAgentModal() {
+    const modal = document.getElementById('create-agent-modal');
+    if (modal) {
+        modal.classList.remove('show');
+    }
+}
+
+// Initialize agent modal and form handling on DOM load
+function initializeAgentModal() {
+    // Close modal when clicking outside
+    document.addEventListener('click', function(event) {
+        const modal = document.getElementById('create-agent-modal');
+        if (modal && event.target === modal) {
+            hideCreateAgentModal();
+        }
+    });
+
+    // Handle agent form submission
+    const createAgentForm = document.getElementById('create-agent-form');
+    if (createAgentForm) {
+        createAgentForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            await createAgent();
+        });
+    }
+    
+    // Add animation styles
+    if (!document.getElementById('toast-animations')) {
+        const style = document.createElement('style');
+        style.id = 'toast-animations';
+        style.textContent = `
+            @keyframes slideIn {
+                from {
+                    transform: translateX(400px);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+            @keyframes slideOut {
+                from {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+                to {
+                    transform: translateX(400px);
+                    opacity: 0;
+                }
+            }
+            .spinner {
+                display: inline-block;
+                width: 14px;
+                height: 14px;
+                border: 2px solid rgba(255,255,255,0.3);
+                border-top-color: white;
+                border-radius: 50%;
+                animation: spin 0.6s linear infinite;
+            }
+            @keyframes spin {
+                to { transform: rotate(360deg); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+}
+
+async function createAgent() {
+    const form = document.getElementById('create-agent-form');
+    if (!form) return;
+    
+    const formData = new FormData(form);
+    const agentData = {};
+    
+    // Convert FormData to object
+    for (let [key, value] of formData.entries()) {
+        // Handle checkboxes and other special fields
+        if (key.endsWith('[]')) {
+            const arrayKey = key.slice(0, -2);
+            if (!agentData[arrayKey]) {
+                agentData[arrayKey] = [];
+            }
+            agentData[arrayKey].push(value);
+        } else {
+            agentData[key] = value;
+        }
+    }
+    
+    // Convert numeric fields
+    if (agentData.temperature) agentData.temperature = parseFloat(agentData.temperature);
+    if (agentData.max_tokens) agentData.max_tokens = parseInt(agentData.max_tokens);
+    if (agentData.top_k) agentData.top_k = parseInt(agentData.top_k);
+    if (agentData.chunk_size) agentData.chunk_size = parseInt(agentData.chunk_size);
+    if (agentData.chunk_overlap) agentData.chunk_overlap = parseInt(agentData.chunk_overlap);
+    
+    // Convert boolean fields
+    if (agentData.conversational !== undefined) {
+        agentData.conversational = agentData.conversational === 'true' || agentData.conversational === true;
+    }
+    
+    try {
+        // Show loading state on submit button
+        const submitBtn = form.querySelector('button[type="submit"]');
+        const originalText = submitBtn ? submitBtn.innerHTML : '';
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner"></span> Creating...';
+        }
+        
+        const response = await fetch('/api/v1/agents', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': loggedInUserToken
+            },
+            body: JSON.stringify(agentData)
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || `Failed to create agent: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        
+        // Show success message
+        showToast(`Agent "${result.name}" created successfully!`, 'success');
+        
+        // Close modal
+        hideCreateAgentModal();
+        
+        // Reload agents list
+        if (typeof loadAgentsInline === 'function') {
+            loadAgentsInline();
+        }
+        
+        // Reset submit button
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalText;
+        }
+        
+    } catch (error) {
+        console.error('Error creating agent:', error);
+        showToast(error.message || 'Failed to create agent', 'error');
+        
+        // Reset submit button
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Create Agent';
+        }
+    }
+}
+
+function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    const bgColor = type === 'error' ? '#ef4444' : type === 'success' ? '#10b981' : '#3b82f6';
+    toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: ${bgColor};
+        color: white;
+        padding: 12px 24px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        z-index: 10000;
+        animation: slideIn 0.3s ease-out;
+    `;
+    
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease-in';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+// Tab Navigation Setup
+function setupTabNavigation() {
+    const tabButtons = document.querySelectorAll('.tab-nav-item');
+    const viewContents = document.querySelectorAll('.view-content');
+    
+    tabButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const viewName = this.dataset.view;
+            
+            // Update active button
+            tabButtons.forEach(btn => btn.classList.remove('active'));
+            this.classList.add('active');
+            
+            // Show corresponding view
+            viewContents.forEach(view => {
+                view.classList.remove('active');
+                view.style.display = 'none';
+            });
+            
+            const targetView = document.getElementById(`${viewName}-view`);
+            if (targetView) {
+                targetView.classList.add('active');
+                targetView.style.display = 'block';
+            }
+            
+            // Trigger specific view initialization if needed
+            if (viewName === 'analytics' && window.analyticsDashboard) {
+                window.analyticsDashboard.loadAnalyticsData();
+            } else if (viewName === 'deployments' && window.deploymentsManager) {
+                window.deploymentsManager.loadDeployments();
+            } else if (viewName === 'training' && typeof loadTrainingJobs === 'function') {
+                loadTrainingJobs();
+            } else if (viewName === 'models') {
+                loadFineTunedModels();
+            }
+        });
+    });
+}
+
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
     console.log(' DOMContentLoaded event fired');
     console.log(' USE_INLINE_AGENT_RENDERER:', window.USE_INLINE_AGENT_RENDERER);
+    
+    // Setup main tab navigation
+    setupTabNavigation();
+    
+    // Initialize agent modal and form
+    initializeAgentModal();
+    
     // Only initialize if we're on the agents tab
     if (document.getElementById('agents-view')) {
         console.log(' Found agents-view, initializing agent tab');
