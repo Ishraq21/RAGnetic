@@ -22,6 +22,7 @@ venv/
 # specific to a local setup.
 /.ragnetic/
 /.ragnetic_temp_clones/
+research/
 
 # Build & Distribution Artifacts
 /build/
