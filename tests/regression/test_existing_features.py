@@ -524,9 +524,9 @@ class TestExistingUIFeatures:
     async def test_existing_static_assets(self, client: AsyncClient, test_user):
         """Test that existing static assets are accessible."""
         static_files = [
-            "/static/css/dashboard.css",
-            "/static/js/dashboard.js",
-            "/static/js/evaluation.js"
+            "/static/css/style.css",
+            "/static/js/chat_quick_upload.js",
+            "/static/js/citation_renderer.js"
         ]
         
         for static_file in static_files:

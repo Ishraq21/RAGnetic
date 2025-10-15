@@ -2,7 +2,7 @@
 <img width="20388" height="5692" alt="RAGnetic Logo" src="https://github.com/user-attachments/assets/92e1f139-9acb-43f3-9072-02d7f5336663" />
 
 
-RAGnetic is an open-source, production-ready AI framework for building and deploying intelligent multi-agent systems with advanced RAG capabilities. It provides a complete ecosystem for creating specialized AI agents that can collaborate, execute code, search the web, analyze documents, and interact with databases. RAGnetic offers real-time streaming, sandboxed code execution, comprehensive API access, and enterprise-grade security with YAML-based configuration and a web interface.
+RAGnetic is an open-source, production-ready AI framework for building and deploying intelligent multi-agent systems with advanced RAG capabilities. It provides a complete ecosystem for creating specialized AI agents that can collaborate, execute code, search the web, analyze documents, and interact with databases. RAGnetic offers real-time streaming, sandboxed code execution, comprehensive API access, and enterprise-grade security with YAML-based configuration and a streamlined chat interface.
 
 One of RAGnetic’s core philosophies is to give developers and organizations complete ownership of their on-premise AI while eliminating infrastructure overhead and reducing development time and cost. 
 
@@ -39,10 +39,10 @@ RAGnetic moves beyond simple RAG libraries by providing a full-stack platform th
 * **Multi-Agent Intelligence**: At its core, RAGnetic enables sophisticated multi-agent systems built on LangGraph. Agents can collaborate to reason, plan, and execute complex tasks across various tools and data sources, with each agent specialized for specific domains or capabilities.
 
 
-* **Custom Model Fine-Tuning**: RAGnetic empowers you to fine-tune open-source Hugging Face models on your private data, making them specialized for your specific domain and use cases. This is crucial for improving accuracy and controlling an agent's behavior.
+* **Simplified Model Fine-Tuning**: RAGnetic provides streamlined LoRA fine-tuning for open-source models on your private data, with sensible defaults that work out of the box.
 
 
-* **Production-Ready by Design:**  The framework is built with features crucial for enterprise deployment, including robust data ingestion, user and role management, performance benchmarking, and detailed analytics.
+* **Production-Ready by Design:**  The framework is built with features crucial for enterprise deployment, including robust data ingestion, user and role management, and core performance validation.
 
 
 * **Built-in Observability & Analytics:** Don't just deploy, understand. The platform provides detailed logging, metrics for LLM usage and costs, and a powerful CLI for auditing agent runs and performance in real-time.
@@ -59,9 +59,9 @@ An agent's intelligence is defined not just by its core LLM, but by the ecosyste
 - **Data Policies**: Enforce security/compliance during ingestion with built-in PII redaction and keyword filtering.
 - **Hybrid Retrieval**: Combine semantic vector search with keyword-based retrieval (BM25) for precise, comprehensive results.
 
-### 2. Adapt: The Agent’s Specialized Intelligence
+### 2. Adapt: The Agent's Specialized Intelligence
 - **Custom & Hosted Models**: Use hosted LLMs (OpenAI, Anthropic, Google Gemini) or local open-source models via Ollama or Hugging Face.
-- **Fine-Tuning**: Full fine-tuning pipeline for Hugging Face models using LoRA (PEFT) or full-model training, to control behavior, tone, and accuracy.
+- **Simplified Fine-Tuning**: Streamlined LoRA fine-tuning with sensible defaults for Hugging Face models, focusing on core training parameters.
 
 ### 3. Collaborate: Multi-Agent Intelligence
 - **Stateful Conversations**: Durable, conversation-level memory for iterative dialogue without repeating context.
@@ -78,9 +78,9 @@ An agent's intelligence is defined not just by its core LLM, but by the ecosyste
 - **Research Tools**: ArXiv integration for academic paper search and analysis.
 - **Specialized Parsers**: Code analysis, SQL parsing, YAML/JSON processing, Terraform analysis, and Jupyter notebook parsing.
 
-### 5. Evaluate: The Agent’s Feedback Loop
-- **Automated Benchmarking**: Generate test sets and run benchmarks to measure accuracy, faithfulness, and relevance.
-- **Detailed Analytics**: Track LLM usage, costs, and step-by-step metrics across agent runs and conversations.
+### 5. Evaluate: The Agent's Feedback Loop
+- **Core Performance Validation**: Simple benchmarking to measure retrieval accuracy and response quality with pass/fail indicators.
+- **Essential Analytics**: Track LLM usage, costs, and key metrics across agent runs and conversations.
 
 
 ## Multi-Agent Systems
@@ -93,23 +93,21 @@ RAGnetic's core power lies in its ability to create sophisticated multi-agent sy
 
 - **How to Use It**: Use the command <code>ragnetic deploy</code> to deploy agents with defined collaboration patterns, creating intelligent systems that can handle complex multi-step reasoning.
 
-## Custom Model Fine-Tuning
+## Simplified Model Fine-Tuning
 
-RAGnetic provides a full-featured fine-tuning pipeline, allowing you to train open-source Hugging Face models on your proprietary data to create highly specialized agents.
+RAGnetic provides streamlined LoRA fine-tuning with sensible defaults, making it easy to train open-source models on your data.
 
-**Parameter-Efficient Fine-Tuning (PEFT):** The system uses LoRA (Low-Rank Adaptation) to fine-tune models, drastically reducing the number of trainable parameters. This makes it possible to fine-tune large models on consumer-grade GPUs or even Apple Silicon (MPS).
+**Key Features:**
+- **LoRA Fine-Tuning**: Parameter-efficient training that works on consumer hardware
+- **Sensible Defaults**: Minimal configuration required - just specify your data and model
+- **Auto-Detection**: Automatic device detection and optimization
 
-**Supported Data Formats:**  
-
-- **jsonl-instruction:** For training models on Q&A or instruction-following tasks.  
-- **conversational-jsonl:** For training models on multi-turn chat dialogues.
-
-**How to Use It:**
+**Simple Workflow:**
 
 1. Prepare your data with the <code>ragnetic dataset prepare</code> command.  
-2. Define your training parameters in a YAML file.  
-3. Submit the job with ragnetic <code>training apply -f `your-training-config.yaml`.</code>  
-4. Use the <code>fine_tuned_model_id</code> in your agent’s configuration to deploy it. 
+2. Create a simple YAML config with just the essentials.  
+3. Run <code>ragnetic training apply -f your-config.yaml</code>  
+4. Use the trained model in your agent configuration. 
 
 ## RAGnetic API
 
@@ -186,7 +184,7 @@ ragnetic user create admin --superuser
 ragnetic start-server
 ```
 
-Visit `http://localhost:8000` to access the web interface!
+Visit `http://localhost:8000` to access the chat interface!
 
 ### Prerequisites
 
@@ -316,17 +314,17 @@ ragnetic deploy hello_world_agent
 | :--- | :--- | :--- |
 | `ragnetic dataset prepare` | Prepares a raw dataset for fine-tuning using a YAML configuration. | `ragnetic dataset prepare -f data_prep_configs/my_prep.yaml` |
 | `ragnetic generate-test` | Generates a test set from an agent’s data sources. | `ragnetic generate-test my_agent -o test_set.json` |
-| `ragnetic benchmark` | Runs a retrieval quality benchmark on an agent. | `ragnetic benchmark my_agent -t test_set.json` |
-| `ragnetic training apply` | Submits a fine-tuning job via a YAML config file. | `ragnetic training apply -f configs/my_ft_job.yaml` |
+| `ragnetic benchmark` | Runs core performance validation on an agent. | `ragnetic benchmark my_agent -t test_set.json` |
+| `ragnetic training apply` | Submits a simplified fine-tuning job. | `ragnetic training apply -f configs/my_ft_job.yaml` |
 | `ragnetic training status` | Checks the status of a fine-tuning job. | `ragnetic training status <adapter_id>` |
-| `ragnetic training list-models` | Lists all available fine-tuned models (completed jobs). | `ragnetic training list-models` |
+| `ragnetic training list-models` | Lists available fine-tuned models. | `ragnetic training list-models` |
 
 ### Analytics & Auditing
 
 | Command | Description | Example |
 | :--- | :--- | :--- |
 | `ragnetic analytics usage` | Displays aggregated LLM usage and cost metrics. | `ragnetic analytics usage --agent my_agent` |
-| `ragnetic analytics benchmarks` | Displays summaries of past benchmark runs. | `ragnetic analytics benchmarks --agent my_agent` |
+| `ragnetic analytics benchmarks` | Displays core performance validation results. | `ragnetic analytics benchmarks --agent my_agent` |
 | `ragnetic analytics agent-runs` | Displays aggregated agent run metrics. | `ragnetic analytics agent-runs --agent my_agent` |
 | `ragnetic analytics agent-steps` | Displays aggregated agent step metrics. | `ragnetic analytics agent-steps --agent my_agent` |
 | `ragnetic inspect-run` | Inspects a specific agent run and its steps. | `ragnetic inspect-run <run_id>` |
@@ -405,22 +403,21 @@ data_policies:
 
 
 ### 2. Fine-Tuning Job Configuration
-This example shows how to configure a fine-tuning job for a model.
+This example shows how to configure a simplified fine-tuning job.
 ```yaml
-# training_configs/policy_fine_tune.yaml
-job_name: policy_fine_tune
-base_model_name: microsoft/phi-2
-dataset_file: data_prepared/policy_qa_dataset.jsonl
-output_dir: fine_tuned_models/phi-2-policy
+# training_configs/my_agent_finetune.yaml
+job_name: my_agent_finetune
+base_model_name: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+dataset_path: data/prepared_datasets/my_training_data.jsonl
+output_base_dir: models/fine_tuned
 
 hyperparameters:
+  learning_rate: 0.0002
   epochs: 3
   batch_size: 4
-  learning_rate: 2e-4
-  lora_r: 16
-  lora_alpha: 32
-  lora_dropout: 0.05
-  device: "mps" # Use Apple Silicon GPU
+  lora_rank: 8
+  lora_alpha: 16
+  device: "auto"
 
 ```
 
@@ -671,3 +668,9 @@ Our community `CODE_OF_CONDUCT.md` is being finalized—check back soon for the 
 ## License
 
 This project is licensed under the Apache 2.0 License - see the LICENSE file for details.
+
+---
+
+## Created by Mirza
+
+**Twitter:** [@mirzaishraq](https://twitter.com/mirzaishraq)

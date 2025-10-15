@@ -103,7 +103,7 @@ def test_comprehensive_summary():
     print("   • static/js/gpu.js")
     print("   • static/js/gpu-config.js")
     print("   • static/js/projects.js")
-    print("   • templates/dashboard.html (GPU/Project sections)")
+    print("   • templates/agent_interface.html (Chat interface)")
     
     print("\n[TEST] TESTING FRAMEWORK")
     print("   • tests/test_user_specific_system.py - Core user isolation")

@@ -154,7 +154,7 @@ body.login-body {
     gap: 1.25rem;
     border-right: 1px solid var(--border-color);
     flex-shrink: 0; /* Prevents sidebar from shrinking */
-    width: 220px; /* Match dashboard sidebar width */
+    width: 220px;
     box-shadow: 2px 0 20px rgba(0, 0, 0, 0.3);
 }
 
@@ -165,9 +165,6 @@ body.login-body {
     gap: 0.75rem;
 }
 
-.sidebar-top .sidebar-dashboard-btn {
-    margin-bottom: 8px;
-}
 
 #new-chat-btn,
 #open-ingestion-modal-btn {
@@ -525,41 +522,18 @@ body.sidebar-collapsed #chat-history-sidebar {
 .cmd-item .cmd-title { flex: 1; }
 .cmd-item .cmd-desc { color: var(--muted-text); font-size: var(--font-size-sm); }
 
-.sidebar-dashboard-btn {
-    width: 100%;
-    margin: 0;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 0.75rem;
-    padding: 0.75rem 1rem;
-    background: transparent;
-    color: var(--text-color);
-    border: none;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    font-size: var(--font-size-sm);
-    font-weight: 500;
-    transition: all 0.2s ease;
-    margin-bottom: 0;
-}
 
-.sidebar-dashboard-btn:hover {
-    background: rgba(139, 92, 246, 0.1);
-    color: var(--text-color);
-}
-
-/* Dashboard-style logout button */
-.dashboard-logout-btn {
+/* Logout button */
+.logout-btn {
     display: flex;
     align-items: center;
     gap: 8px;
     width: 100%;
     padding: 8px 12px;
-    background: transparent !important;
-    border: 1px solid #1f1f1f;
+    background: var(--card-background);
+    border: 1px solid var(--border-color);
     border-radius: 0.75rem;
-    color: var(--text-secondary);
+    color: var(--text-primary);
     font-size: var(--font-size-sm);
     font-weight: 500;
     cursor: pointer;
@@ -572,22 +546,21 @@ body.sidebar-collapsed #chat-history-sidebar {
     box-shadow: none;
 }
 
-/* Hover effect removed */
-
-/* Ensure logout button styling takes precedence */
-#chat-history-sidebar .sidebar-footer .dashboard-logout-btn {
-    background: transparent !important;
-    background-color: transparent !important;
+.logout-btn:hover {
+    background: var(--card-hover);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
 }
 
-.dashboard-logout-btn svg {
+
+.logout-btn svg {
     width: 18px;
     height: 18px;
     flex-shrink: 0;
     transition: stroke 0.2s ease;
 }
 
-/* Sidebar footer to match dashboard */
+/* Sidebar footer */
 .sidebar-footer {
     padding: 16px;
     border-top: 1px solid var(--border-color);
@@ -1637,4 +1610,4 @@ a:visited {
 
 
 
-/* Duplicate #logout-btn rules removed - using .dashboard-logout-btn class instead */
+/* Logout button styling */

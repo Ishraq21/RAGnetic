@@ -55,10 +55,6 @@
                     <div class="cmd-title">New Chat</div>
                     <div class="cmd-desc">Start a new conversation</div>
                 </div>
-                <div class="cmd-item" role="option" data-action="go-dashboard">
-                    <div class="cmd-title">Open Dashboard</div>
-                    <div class="cmd-desc">View metrics and activity</div>
-                </div>
                 <div class="cmd-item" role="option" data-action="toggle-sidebar">
                     <div class="cmd-title">Toggle Sidebar</div>
                     <div class="cmd-desc">Show or hide history</div>
@@ -79,15 +75,6 @@
 
     <aside id="chat-history-sidebar">
         <div class="sidebar-top">
-            <button id="dashboard-btn" class="sidebar-dashboard-btn">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="7" height="7"></rect>
-                    <rect x="14" y="3" width="7" height="7"></rect>
-                    <rect x="14" y="14" width="7" height="7"></rect>
-                    <rect x="3" y="14" width="7" height="7"></rect>
-                </svg>
-                Overview
-            </button>
             <button id="new-chat-btn">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
                 <span>New Chat</span>
@@ -103,7 +90,7 @@
         
         <!-- Sidebar Footer -->
         <div class="sidebar-footer">
-            <button id="logout-btn" class="dashboard-logout-btn">
+            <button id="logout-btn" class="logout-btn">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M9 21H5a2 2 0 0 1 2-2h4"></path>
                     <polyline points="16,17 21,12 16,7"></polyline>
@@ -153,7 +140,6 @@
     const stopIcon = document.getElementById('stop-icon');
     const typingIndicator = document.getElementById('typing-indicator');
             const newChatButton = document.getElementById('new-chat-btn');
-        const dashboardButton = document.getElementById('dashboard-btn');
     const toastNotification = document.getElementById('toast-notification');
     const confirmationModal = document.getElementById('confirmation-modal');
     const modalText = document.getElementById('modal-text');
@@ -866,14 +852,10 @@ socket.onmessage = async (event) => {
         if (!item) return;
         const action = item.dataset.action;
         if (action === 'new-chat') { startNewSession(); }
-        if (action === 'go-dashboard') { window.location.href = '/dashboard'; }
         if (action === 'toggle-sidebar') { document.body.classList.toggle('sidebar-collapsed'); }
         closePalette();
     });
     newChatButton.addEventListener('click', () => startNewSession());
-    dashboardButton.addEventListener('click', () => {
-        window.location.href = '/dashboard';
-    });
     agentSelect.addEventListener('change', () => showConfirmationModal(() => {
         agent = agentSelect.value;
         localStorage.setItem('ragnetic_agent', agent);

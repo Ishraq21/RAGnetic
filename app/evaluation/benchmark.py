@@ -763,36 +763,18 @@ def run_benchmark(
                 if group_means:
                     bias_delta = float(max(group_means) - min(group_means))
 
+            # Simplified core metrics for production validation
             summary = {
                 "avg_total_cost_usd": float(df["costs"].apply(lambda c: c["total_usd"]).mean()),
                 "avg_retrieval_hit@5": float(df["retrieval"].apply(lambda r: r.get("hit@5", 0.0)).mean()),
-                "avg_mrr": float(df["retrieval"].apply(lambda r: r.get("mrr", 0.0)).mean()),
-                "avg_ndcg@10": float(df["retrieval"].apply(lambda r: r.get("ndcg@10", 0.0)).mean()),
-                "avg_generation_s": float(df["durations"].apply(lambda d: d["generation_s"]).mean()),
-                "avg_retrieval_s": float(df["durations"].apply(lambda d: d["retrieval_s"]).mean()),
                 "avg_faithfulness": _judgemean("faithfulness"),
                 "avg_relevance": _judgemean("relevance"),
-                "avg_conciseness": _judgemean("conciseness"),
-                "avg_coherence": _judgemean("coherence"),
-                "safety_pass_rate": safety_pass_rate,
-                "pii_leak_rate": pii_leak_rate,
-                "toxicity_rate": toxicity_rate,
-                "multi_turn_items": int(df.get("history_present", False).sum()) if "history_present" in df.columns else 0,
-                "bias_delta": bias_delta,
+                "avg_generation_s": float(df["durations"].apply(lambda d: d["generation_s"]).mean()),
+                "total_questions": len(df),
             }
-            if "context_uniqueness" in df.columns:
-                summary["avg_context_uniqueness"] = float(df["context_uniqueness"].mean())
-
-            if not df_mt.empty:
-                summary.update({
-                    "mt_avg_hit@5": float(df_mt["retrieval"].apply(lambda r: r.get("hit@5", 0.0)).mean()),
-                    "mt_avg_faithfulness": float(df_mt["judge"].apply(lambda j: (j or {}).get("faithfulness", 0.0)).mean()),
-                })
-            if not df_st.empty:
-                summary.update({
-                    "st_avg_hit@5": float(df_st["retrieval"].apply(lambda r: r.get("hit@5", 0.0)).mean()),
-                    "st_avg_faithfulness": float(df_st["judge"].apply(lambda j: (j or {}).get("faithfulness", 0.0)).mean()),
-                })
+            # Add pass/fail indicators for production validation
+            summary["pass_rate"] = float((df["judge"].apply(lambda j: (j or {}).get("faithfulness", 0.0)) >= 0.7).mean())
+            summary["retrieval_pass_rate"] = float((df["retrieval"].apply(lambda r: r.get("hit@5", 0.0)) >= 0.5).mean())
 
             # Deltas vs previous completed run for this agent
             try:

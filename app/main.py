@@ -91,13 +91,8 @@ from alembic.script import ScriptDirectory
 from app.api.agents import router as agents_api_router
 from app.api.audit import router as audit_api_router
 from app.api.query import router as query_api_router
-from app.api.analytics import router as analytics_api_router
-from app.api.evaluation import router as evaluation_api_router
-from app.api.metrics import router as metrics_api_router
-from app.api.training import router as training_api_router
 from app.api.citations import router as citations_api_router
 from app.api.documents import router as documents_api_router
-from app.api.monitoring import router as monitoring_api_router
 
 
 from app.services.temporary_document_service import TemporaryDocumentService, TemporaryDocumentUploadResult
@@ -404,15 +399,10 @@ async def shutdown_event():
 app.include_router(agents_api_router)
 app.include_router(audit_api_router)
 app.include_router(query_api_router)
-app.include_router(metrics_api_router)
-app.include_router(analytics_api_router)
 app.include_router(security_api_router)
-app.include_router(training_api_router)
 app.include_router(citations_api_router)
-app.include_router(evaluation_api_router)
 app.include_router(lambda_tool_router)
 app.include_router(documents_api_router)
-app.include_router(monitoring_api_router)
 
 
 
@@ -1023,11 +1013,6 @@ async def home(request: Request, db: AsyncSession = Depends(get_db)):
     return templates.TemplateResponse("agent_interface.html", {
         "request": request, "agents": agents_list, "agent": default_agent
     })
-
-
-@app.get("/dashboard", tags=["Application"])
-async def dashboard(request: Request):
-    return templates.TemplateResponse("dashboard.html", {"request": request})
 
 
 @app.get("/login", tags=["Application"])

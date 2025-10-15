@@ -414,16 +414,12 @@ class LLMFineTuner:
             else:
                 logger.info("Model prepared for gradient checkpointing (non-kbit).")
 
-            # Configure LoRA
-            lora_dropout = hyperparameters.get('lora_dropout', 0.05)
-            if lora_dropout is None:
-                lora_dropout = 0.05
-                
+            # Configure LoRA with simplified defaults
             lora_config = LoraConfig(
                 r=hyperparameters.get('lora_rank', 8),
                 lora_alpha=hyperparameters.get('lora_alpha', 16),
-                target_modules=hyperparameters.get('target_modules', None),
-                lora_dropout=lora_dropout,
+                target_modules=None,  # Auto-detect target modules
+                lora_dropout=0.05,  # Fixed sensible default
                 bias="none",
                 task_type="CAUSAL_LM",
             )
@@ -434,41 +430,31 @@ class LLMFineTuner:
             peft_model.print_trainable_parameters()
             log_to_file(training_logs_path, "LoRA adapter configured successfully", "INFO")
 
+            # Simplified precision handling - use fp16 for CUDA, bf16 for MPS, float32 for CPU
             use_fp16 = False
             use_bf16 = False
-            if hyperparameters.get('mixed_precision_dtype') == 'fp16' and actual_device == "cuda":
+            if actual_device == "cuda":
                 use_fp16 = True
-                logger.info("Enabling fp16 mixed precision for CUDA device as requested.")
-            elif hyperparameters.get('mixed_precision_dtype') == 'bf16':
-                if actual_device == "mps" and torch.backends.mps.is_built():
-                    use_bf16 = True
-                    logger.info("Enabling bf16 mixed precision for MPS device as requested.")
-                elif actual_device == "cuda" and hasattr(torch, 'bfloat16'):
-                    use_bf16 = True
-                    logger.info("Enabling bf16 mixed precision for CUDA device as requested.")
-                else:
-                    logger.warning(f"Requested bf16 mixed precision but device '{actual_device}' does not fully support it. Falling back to float32.")
-            elif hyperparameters.get('mixed_precision_dtype') != 'no':
-                logger.warning(f"Requested mixed precision '{hyperparameters.get('mixed_precision_dtype')}' not supported on device '{actual_device}'. Falling back to float32.")
+                logger.info("Using fp16 mixed precision for CUDA device.")
+            elif actual_device == "mps":
+                use_bf16 = True
+                logger.info("Using bf16 mixed precision for MPS device.")
+            else:
+                logger.info("Using float32 precision for CPU device.")
 
-            # Define TrainingArguments
+            # Define TrainingArguments with simplified configuration
             training_args = TrainingArguments(
                 output_dir=adapter_path,
                 per_device_train_batch_size=hyperparameters.get("batch_size", 4),
-                gradient_accumulation_steps=hyperparameters.get("gradient_accumulation_steps", 1),
                 num_train_epochs=hyperparameters.get("epochs", 3),
                 learning_rate=hyperparameters.get("learning_rate", 2e-4),
                 logging_dir=str(Path(training_logs_path).parent / "hf_logs"),
-                logging_steps=hyperparameters.get("logging_steps", 10),
-                save_steps=hyperparameters.get("save_steps", 500),
-                save_total_limit=hyperparameters.get("save_total_limit", 1),
-                report_to="tensorboard",
-                fp16=use_fp16,  # fp16 for CUDA
+                logging_steps=10,  # Fixed sensible default
+                save_steps=500,    # Fixed sensible default
+                save_total_limit=1, # Keep only best model
+                fp16=use_fp16,
                 bf16=use_bf16,
-                optim="paged_adamw_8bit" if actual_device == "cuda" and "quantization_config" in model_load_kwargs else "adamw_torch",
-                # Use paged_adamw_8bit only if bitsandbytes is active on CUDA
-                load_best_model_at_end=False,
-                dataloader_pin_memory=False,
+                optim="adamw_torch",  # Simplified optimizer
                 disable_tqdm=True,
                 log_level="info",
             )

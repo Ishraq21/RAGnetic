@@ -14,24 +14,16 @@ class FineTuningStatus(str, Enum):
 
 # Pydantic model for hyperparameters defined within the fine-tuning YAML configuration
 class HyperparametersConfig(BaseModel):
-    lora_rank: int = Field(8, ge=1, description="LoRA rank (dimension) for PEFT fine-tuning. Higher rank offers more capacity.")
+    # Core training parameters - simplified for ease of use
     learning_rate: float = Field(2e-4, gt=0, description="Learning rate for the optimizer during training.")
     epochs: int = Field(3, ge=1, description="Number of full passes over the training dataset.")
     batch_size: int = Field(4, ge=1, description="Training batch size per device.")
-    lora_alpha: Optional[int] = Field(None, ge=1, description="LoRA alpha parameter (scaling factor for LoRA weights).")
-    target_modules: Optional[List[str]] = Field(None, description="List of target modules (e.g., attention layers) for LoRA application.")
-    lora_dropout: Optional[float] = Field(None, ge=0, le=1, description="Dropout probability for LoRA layers to prevent overfitting.")
-    gradient_accumulation_steps: Optional[int] = Field(1, ge=1, description="Number of updates steps to accumulate before performing a backward/update pass.")
-    logging_steps: Optional[int] = Field(10, ge=1, description="How often to log training loss and metrics.")
-    save_steps: Optional[int] = Field(500, ge=1, description="How often to save a model checkpoint.")
-    save_total_limit: Optional[int] = Field(1, ge=1, description="Maximum number of checkpoints to keep.")
-    cost_per_gpu_hour: Optional[float] = Field(0.5, ge=0, description="Estimated cost in USD per GPU hour for metrics tracking.")
-
-
-    mixed_precision_dtype: Optional[Literal['no', 'fp16', 'bf16']] = Field(
-        'no', # Default to 'no' mixed precision for widest compatibility
-        description="Type of mixed precision to use ('no', 'fp16', or 'bf16'). 'fp16' is for most NVIDIA GPUs, 'bf16' for newer NVIDIA and some Apple Silicon. 'no' for full float32."
-    )
+    
+    # LoRA-specific parameters with sensible defaults
+    lora_rank: int = Field(8, ge=1, description="LoRA rank (dimension) for PEFT fine-tuning. Higher rank offers more capacity.")
+    lora_alpha: int = Field(16, ge=1, description="LoRA alpha parameter (scaling factor for LoRA weights).")
+    
+    # Device selection - simplified
     device: Optional[Literal['auto', 'cuda', 'mps', 'cpu']] = Field(
         'auto',
         description="Training device preference. 'auto' for automatic detection, 'cuda' for NVIDIA GPU, 'mps' for Apple Silicon, 'cpu' for CPU-only."
