@@ -2,7 +2,7 @@
 <img width="20388" height="5692" alt="RAGnetic Logo" src="https://github.com/user-attachments/assets/92e1f139-9acb-43f3-9072-02d7f5336663" />
 
 
-RAGnetic is an open-source, highly configurable, compliance-first AI framework for building and deploying production-ready RAG systems and intelligent agents. It offers full control at every layer, from data ingestion and vector embeddings to retrieval pipelines, benchmarking, and deployment with no infrastructure overhead. RAGnetic provides YAML configuration for developers and an intuitive GUI for users who need powerful AI capabilities without coding.
+RAGnetic is an open-source, production-ready AI framework for building and deploying intelligent multi-agent systems with advanced RAG capabilities. It provides a complete ecosystem for creating specialized AI agents that can collaborate, execute code, search the web, analyze documents, and interact with databases. RAGnetic offers real-time streaming, sandboxed code execution, comprehensive API access, and enterprise-grade security with YAML-based configuration and a web interface.
 
 One of RAGnetic’s core philosophies is to give developers and organizations complete ownership of their on-premise AI while eliminating infrastructure overhead and reducing development time and cost. 
 
@@ -69,9 +69,14 @@ An agent's intelligence is defined not just by its core LLM, but by the ecosyste
 - **Declarative YAML**: Configure agent behavior, tool access, and collaboration patterns in readable YAML format.
 - **Dynamic Interaction**: Trigger agents via API calls, chat interface, or programmatic integration.
 
-### 4. Interact: The Agent’s Toolkit
-- **Core Toolkit**: Pre-built tools for real-world tasks: SQL queries, HTTP requests, sandboxed Python scripts, email notifications.
-- **Specialized Parsers**: Structured analysis on SQL, YAML, Terraform, and more.
+### 4. Interact: The Agent's Toolkit
+- **Document Retrieval**: Advanced document retrieval with vector search, BM25 keyword matching, and hybrid retrieval strategies.
+- **Code Execution**: Sandboxed Python code execution with automatic file staging and path rewriting.
+- **Database Integration**: SQL toolkit for querying databases with natural language.
+- **Web Search**: Real-time web search via Brave Search API for up-to-date information.
+- **API Integration**: HTTP requests to external APIs with security controls and rate limiting.
+- **Research Tools**: ArXiv integration for academic paper search and analysis.
+- **Specialized Parsers**: Code analysis, SQL parsing, YAML/JSON processing, Terraform analysis, and Jupyter notebook parsing.
 
 ### 5. Evaluate: The Agent’s Feedback Loop
 - **Automated Benchmarking**: Generate test sets and run benchmarks to measure accuracy, faithfulness, and relevance.
@@ -110,10 +115,34 @@ RAGnetic provides a full-featured fine-tuning pipeline, allowing you to train op
 
 RAGnetic's entire functionality is exposed through a robust RESTful API, allowing you to programmatically interact with the framework from any application. This enables integration into larger enterprise ecosystems and custom application development.
 
-- **API-Driven Interactions:** Trigger agent conversations and tasks from external services via simple HTTP requests.  
-- **Programmatic Management:** Use API endpoints to manage agents, users, roles, and fine-tuning jobs.  
-- **Real-time Interaction:** A WebSocket-based chat interface allows for streaming, real-time interactions with your agents.  
-- **Data & Analytics Access:** Pull detailed performance metrics, cost data, and audit logs directly from the API for integration with dashboards and reporting tools.  
+### Core API Endpoints
+
+- **Agent Management** (`/api/v1/agents`): Create, configure, and manage AI agents
+- **Stateless Invocation** (`/api/v1/invoke/{deployment_id}`): Execute agents via API keys with rate limiting
+- **Lambda Execution** (`/api/v1/lambda`): Run sandboxed Python code with file staging
+- **Document Management** (`/api/v1/documents`): Upload and manage documents for agents
+- **Temporary Documents** (`/api/v1/chat/upload-temp-document`): Quick file uploads for chat sessions
+
+### Analytics & Monitoring
+
+- **Usage Analytics** (`/api/v1/analytics`): LLM usage, costs, and performance metrics
+- **System Monitoring** (`/api/v1/monitoring`): Resource usage, security metrics, and health checks
+- **Audit Trails** (`/api/v1/audit`): Complete audit logs of agent runs and user actions
+- **Metrics API** (`/api/v1/metrics`): Detailed performance and cost metrics
+
+### Advanced Features
+
+- **Fine-tuning Management** (`/api/v1/training`): Submit and monitor model fine-tuning jobs
+- **Citation Management** (`/api/v1/citations`): Track and manage document citations
+- **Deployment Management** (`/api/v1/deployments`): Manage API deployments and access keys
+- **User Security** (`/security/me`): User authentication and permission management
+
+### Real-time Features
+
+- **WebSocket Chat** (`/ws`): Streaming conversations with real-time token delivery
+- **File Upload Integration**: Seamless file handling in chat sessions
+- **Cancellation Support**: Interrupt long-running agent operations
+- **Citation Streaming**: Real-time citation tracking and display  
 
 ---
 
@@ -203,8 +232,14 @@ persona_prompt: >
 # (no external data needed)
 sources: []
 
-# no tools required
-tools: []
+# Available tools for the agent
+tools:
+  - retriever       # Document retrieval with vector search
+  - lambda_tool     # Sandboxed Python code execution
+  - sql_toolkit     # Database queries (requires db source)
+  - search_engine   # Web search via Brave Search API
+  - api_toolkit     # HTTP requests to external APIs
+  - arxiv           # ArXiv research paper search
 
 # disable chunking
 chunking:
@@ -212,12 +247,12 @@ chunking:
   chunk_size: 0
   chunk_overlap: 0
 
-# no vector store
+# Vector store configuration
 vector_store:
-  type: faiss
+  type: faiss  # Options: faiss, chroma, qdrant, pinecone, mongodb_atlas
   bm25_k: 0
   semantic_k: 0
-  retrieval_strategy: hybrid
+  retrieval_strategy: hybrid  # Options: hybrid, enhanced
 
 ```
 You can deploy your agent using:
@@ -244,6 +279,7 @@ ragnetic deploy hello_world_agent
 | `ragnetic makemigrations` | Autogenerates a new database migration script based on model changes. | `ragnetic makemigrations -m "Added new field"` |
 | `ragnetic migrate` | Applies database migrations to update the schema. | `ragnetic migrate head` |
 | `ragnetic sync` | Manually stamps the database with a migration revision without running any SQL. | `ragnetic sync head` |
+|| `ragnetic set-debug` | Enable or disable debug mode for detailed logging. | `ragnetic set-debug --enable` |
 
 ### User & Role Management
 
@@ -318,11 +354,29 @@ embedding_model: "text-embedding-3-small"
 llm_model:       "gpt-4o-mini"
 evaluation_llm_model: "ollama/llama3"
 
-# No external data ingestion—this agent only works on incoming webhook payloads
-sources: ./data/customers.csv
+# Data sources for the agent
+sources: 
+  - type: local
+    path: ./data/customers.csv
+  # Other supported source types: url, code_repository, db, gdoc, web_crawler, api, notebook, parquet, pdf, txt, docx
+  # Example configurations:
+  # - type: url
+  #   url: "https://example.com/api/data"
+  #   headers: {"Authorization": "Bearer token"}
+  # - type: db  
+  #   db_connection: "postgresql://user:pass@localhost/db"
+  # - type: code_repository
+  #   url: "https://github.com/user/repo"
+  #   max_depth: 3
 
-# No tools required—pure LLM reasoning on the provided JSON
-tools: []
+# Available tools for the agent
+tools:
+  - retriever       # Document retrieval with vector search
+  - lambda_tool     # Sandboxed Python code execution
+  - sql_toolkit     # Database queries (requires db source)
+  - search_engine   # Web search via Brave Search API
+  - api_toolkit     # HTTP requests to external APIs
+  - arxiv           # ArXiv research paper search
 
 # Disable chunking since payloads are small
 chunking:
@@ -330,12 +384,12 @@ chunking:
   chunk_size: 0
   chunk_overlap: 0
 
-# No vector store needed
+# Vector store configuration
 vector_store:
-  type: faiss
+  type: faiss  # Options: faiss, chroma, qdrant, pinecone, mongodb_atlas
   bm25_k: 0
   semantic_k: 0
-  retrieval_strategy: none
+  retrieval_strategy: none  # Options: hybrid, enhanced, none
 
 # (Optional) you can still enforce data policies on the incoming JSON
 data_policies:
@@ -380,9 +434,179 @@ input_file: data_raw/raw_qa_data.jsonl
 output_file: data_prepared/prepared_qa_data.jsonl
 ```
 
+## Lambda Tool: Sandboxed Code Execution
+
+RAGnetic includes a powerful Lambda Tool that allows agents to execute Python code in a secure, sandboxed environment. This enables dynamic computation, data analysis, and integration with external libraries.
+
+### Features
+
+- **Secure Sandbox**: Isolated Python execution environment with restricted access
+- **File Integration**: Automatic staging of uploaded documents for code processing
+- **Path Rewriting**: Intelligent file path resolution for uploaded documents
+- **Code Normalization**: Automatic markdown fence stripping and escape sequence handling
+- **Resource Management**: Configurable timeouts and resource limits
+
+### Example Usage
+
+```python
+# Lambda Tool automatically stages uploaded files
+import pandas as pd
+
+# Read uploaded CSV file (path automatically resolved)
+df = pd.read_csv('/work/uploaded_data.csv')
+result = df.describe()
+
+# Process and return results
+print(f"Dataset shape: {df.shape}")
+print(f"Columns: {list(df.columns)}")
+return result.to_dict()
+```
+
+### Configuration
+
+The Lambda Tool is enabled by adding `lambda_tool` to your agent's tools list:
+
+```yaml
+tools:
+  - lambda_tool
+```
+
+## Temporary Documents
+
+RAGnetic supports temporary document uploads for chat sessions, allowing users to quickly share files with agents without permanent storage.
+
+### Features
+
+- **Session-based Storage**: Documents are automatically cleaned up when sessions end
+- **Multiple Formats**: Support for PDF, CSV, TXT, DOCX, and more
+- **Automatic Processing**: Documents are immediately available for retrieval and Lambda Tool processing
+- **Security**: Documents are isolated per user and session
+
+### API Usage
+
+```bash
+# Upload a temporary document
+curl -X POST "http://localhost:8000/api/v1/chat/upload-temp-document" \
+  -H "X-API-Key: your-api-key" \
+  -F "file=@document.pdf" \
+  -F "thread_id=your-thread-id"
+```
+
+## WebSocket Real-time Communication
+
+RAGnetic provides a WebSocket interface for real-time, streaming interactions with agents. This enables responsive user experiences with live token streaming and interactive features.
+
+### Features
+
+- **Token Streaming**: Real-time delivery of agent responses as they are generated
+- **Cancellation Support**: Interrupt long-running operations with `interrupt` message type
+- **File Upload Integration**: Seamless file handling during conversations
+- **Citation Streaming**: Real-time citation tracking and display
+- **Session Management**: Persistent conversation state across WebSocket connections
+
+### WebSocket Protocol
+
+Connect to `/ws` endpoint with authentication:
+
+```javascript
+const ws = new WebSocket('ws://localhost:8000/ws', [], {
+  headers: {
+    'X-API-Key': 'your-api-key'
+  }
+});
+
+// Send query with files
+ws.send(JSON.stringify({
+  type: 'query',
+  payload: {
+    agent: 'my_agent',
+    thread_id: 'optional-thread-id',
+    query: 'Your question here',
+    files: [
+      {
+        file_name: 'document.pdf',
+        temp_doc_id: 'uploaded-file-id'
+      }
+    ]
+  }
+}));
+
+// Handle streaming responses
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  
+  if (data.token) {
+    // Stream token to UI
+    appendToken(data.token);
+  }
+  
+  if (data.done) {
+    // Response complete
+    finalizeResponse(data.citations);
+  }
+};
+
+// Cancel generation
+ws.send(JSON.stringify({ type: 'interrupt' }));
+```
+
+### Message Types
+
+- **Query**: `{ type: 'query', payload: { agent, thread_id?, query, files? } }`
+- **Interrupt**: `{ type: 'interrupt' }` - Cancel current generation
+- **Token**: `{ token: string }` - Streaming response token
+- **Done**: `{ done: true, citations: [...] }` - Response complete
+
+## Deployment API
+
+RAGnetic provides a stateless deployment API for programmatic agent invocation with API key authentication and rate limiting.
+
+### Features
+
+- **API Key Authentication**: Secure access with user-specific API keys
+- **Rate Limiting**: Configurable rate limits based on user scope and permissions
+- **Credit System**: Usage tracking and credit management for enterprise deployments
+- **Stateless Execution**: No session management required for simple queries
+
+### Usage
+
+```bash
+# Create a deployment
+curl -X POST "http://localhost:8000/api/v1/deployments" \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-deployment",
+    "agent_name": "research_agent",
+    "description": "Research assistant deployment"
+  }'
+
+# Invoke agent via deployment ID
+curl -X POST "http://localhost:8000/api/v1/invoke/1" \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What are the latest developments in AI?",
+    "files": [
+      {
+        "file_name": "research_paper.pdf",
+        "temp_doc_id": "uploaded-file-id"
+      }
+    ]
+  }'
+```
+
+### Rate Limiting
+
+Rate limits are applied based on API key scope:
+- **Viewer**: 10 requests/minute
+- **User**: 60 requests/minute  
+- **Admin**: 300 requests/minute
+- **Superuser**: 1000 requests/minute
+
 ## Citation Tracking & Explainable Reasoning
 
-RAGnetic’s agents are designed to produce traceable and auditable outputs, a key requirement for regulated industries.
+RAGnetic's agents are designed to produce traceable and auditable outputs, a key requirement for regulated industries.
 
 - **Inline Document Citation**  
   The agent generates inline citations (`[1]`, `[2]`) in its response, which link back to the specific chunk of a source document used.
