@@ -1015,6 +1015,11 @@ async def home(request: Request, db: AsyncSession = Depends(get_db)):
     })
 
 
+@app.get("/dashboard", tags=["Application"])
+async def dashboard(request: Request):
+    return templates.TemplateResponse("dashboard.html", {"request": request})
+
+
 @app.get("/login", tags=["Application"])
 async def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})

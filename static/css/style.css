@@ -165,6 +165,33 @@ body.login-body {
     gap: 0.75rem;
 }
 
+.sidebar-top .sidebar-dashboard-btn {
+    margin-bottom: 8px;
+}
+
+.sidebar-dashboard-btn {
+    width: 100%;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: transparent;
+    color: var(--text-color);
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    transition: all 0.2s ease;
+    margin-bottom: 0;
+}
+
+.sidebar-dashboard-btn:hover {
+    background: rgba(139, 92, 246, 0.1);
+    color: var(--text-color);
+}
 
 #new-chat-btn,
 #open-ingestion-modal-btn {
