@@ -122,8 +122,8 @@ async def get_resource_metrics(
         memory_total_mb = memory.total / (1024 * 1024)
         memory_percent = memory.percent
 
-        # CPU metrics
-        cpu_percent = psutil.cpu_percent(interval=1)
+        # CPU metrics (interval=0 is non-blocking; returns value since last call)
+        cpu_percent = psutil.cpu_percent(interval=0)
 
         # Disk metrics (for the app directory)
         disk_usage = psutil.disk_usage('/')

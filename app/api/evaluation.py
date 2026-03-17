@@ -25,7 +25,7 @@ import re
 
 logger = logging.getLogger("ragnetic")
 
-router = APIRouter(prefix="/api/v1/evaluate", tags=["Evaluation API"])
+router = APIRouter(prefix="/api/v1/evaluation", tags=["Evaluation API"])
 
 _APP_PATHS = get_path_settings()
 _slug = lambda s: re.sub(r'[^A-Za-z0-9_.-]+', '_', s).strip('._')

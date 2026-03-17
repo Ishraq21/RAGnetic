@@ -220,12 +220,12 @@ async def get_available_models_for_agents(
         {"value": "gpt-4o", "label": "GPT-4o", "type": "base"},
         {"value": "gpt-4o-mini", "label": "GPT-4o Mini", "type": "base"},
         {"value": "gpt-3.5-turbo", "label": "GPT-3.5 Turbo", "type": "base"},
-        {"value": "claude-3-5-sonnet-20241022", "label": "Claude 3.5 Sonnet", "type": "base"},
-        {"value": "claude-3-haiku-20240307", "label": "Claude 3 Haiku", "type": "base"},
-        {"value": "gemini-1.5-pro", "label": "Gemini 1.5 Pro", "type": "base"},
-        {"value": "gemini-1.5-flash", "label": "Gemini 1.5 Flash", "type": "base"},
+        {"value": "claude-opus-4-6", "label": "Claude Opus 4.6", "type": "base"},
+        {"value": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "type": "base"},
+        {"value": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5", "type": "base"},
+        {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "type": "base"},
+        {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "type": "base"},
         {"value": "ollama/llama3.1", "label": "Ollama Llama 3.1", "type": "base"},
-        {"value": "ollama/mistral", "label": "Ollama Mistral", "type": "base"},
     ]
     
     # Combine fine-tuned models first, then base models
@@ -283,6 +283,11 @@ async def save_training_config(
     if not filename.endswith('.yaml'):
         filename += '.yaml'
     
+    # Sanitize filename to prevent path traversal
+    filename = os.path.basename(filename)
+    if not filename or filename.startswith('.'):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    
     config_path = configs_dir / filename
     
     try:
@@ -307,6 +312,8 @@ async def get_training_config(
     from pathlib import Path
     
     configs_dir = Path("training_configs")
+    # Sanitize filename to prevent path traversal
+    filename = os.path.basename(filename)
     config_path = configs_dir / filename
     
     if not config_path.exists():
@@ -392,26 +399,59 @@ async def list_uploaded_datasets(
     current_user: User = Depends(PermissionChecker(["fine_tune:list_models"])),
 ):
     """
-    List all uploaded dataset files.
+    List all uploaded dataset files from user-specific directory and legacy shared directory.
     """
-    uploads_dir = Path("data/uploaded_temp")
+    from app.core.user_paths import get_user_data_dir
+    
     datasets = []
     
-    if uploads_dir.exists():
-        for file_path in uploads_dir.glob("*.jsonl"):
-            try:
-                stat = file_path.stat()
-                datasets.append({
-                    "file_path": str(file_path),
-                    "filename": file_path.name,
-                    "size": stat.st_size,
-                    "created_at": stat.st_mtime,
-                    "file_id": file_path.stem
-                })
-            except Exception as e:
-                logger.warning(f"Failed to read file info for {file_path}: {e}")
+    # Search user-specific upload directory (where upload_training_dataset stores files)
+    search_dirs = []
+    try:
+        user_dir = get_user_data_dir(current_user.id)
+        search_dirs.append(user_dir)
+    except Exception:
+        pass
+    # Also search legacy shared directory for backwards compatibility
+    search_dirs.append(Path("data/uploaded_temp"))
     
-    return sorted(datasets, key=lambda x: x["created_at"], reverse=True)
+    for uploads_dir in search_dirs:
+        if uploads_dir.exists():
+            for file_path in uploads_dir.glob("*.jsonl"):
+                try:
+                    stat = file_path.stat()
+                    datasets.append({
+                        "file_path": str(file_path),
+                        "filename": file_path.name,
+                        "size": stat.st_size,
+                        "created_at": stat.st_mtime,
+                        "file_id": file_path.stem
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to read file info for {file_path}: {e}")
+            # Also search for .json files
+            for file_path in uploads_dir.glob("*.json"):
+                try:
+                    stat = file_path.stat()
+                    datasets.append({
+                        "file_path": str(file_path),
+                        "filename": file_path.name,
+                        "size": stat.st_size,
+                        "created_at": stat.st_mtime,
+                        "file_id": file_path.stem
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to read file info for {file_path}: {e}")
+    
+    # Deduplicate by file_path
+    seen = set()
+    unique_datasets = []
+    for ds in datasets:
+        if ds["file_path"] not in seen:
+            seen.add(ds["file_path"])
+            unique_datasets.append(ds)
+    
+    return sorted(unique_datasets, key=lambda x: x["created_at"], reverse=True)
 
 
 @router.delete("/uploaded-datasets/{file_id}")
@@ -554,7 +594,11 @@ async def get_training_stats(
             "completed_jobs": status_counts.get("completed", 0),
             "running_jobs": status_counts.get("running", 0),
             "failed_jobs": status_counts.get("failed", 0),
-            "pending_jobs": status_counts.get("pending", 0)
+            "pending_jobs": status_counts.get("pending", 0),
+            # Fields expected by dashboard.js
+            "completed_models": status_counts.get("completed", 0),
+            "total_datasets": 0,  # Will be populated from uploaded-datasets endpoint
+            "total_configs": 0,   # Will be populated from configs endpoint
         }
         
     except Exception as e:
